@@ -1,9 +1,29 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist'
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import modernPdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import legacyPdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
-GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+const userAgent = navigator.userAgent || ''
+const isAppleTouchDevice = /iPad|iPhone|iPod/.test(userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+const isSafari = /Safari/.test(userAgent) && !/Chrome|Chromium|CriOS|Edg|OPR|Android/.test(userAgent)
+const supportsModernPdfJs = typeof Promise.withResolvers === 'function'
+  && typeof AbortSignal !== 'undefined'
+  && typeof AbortSignal.any === 'function'
+  && typeof structuredClone === 'function'
+const useLegacyPdfJs = isAppleTouchDevice || isSafari || !supportsModernPdfJs
+let pdfJsModulePromise = null
+
+async function loadPdfJs() {
+  if (!pdfJsModulePromise) {
+    pdfJsModulePromise = useLegacyPdfJs
+      ? import('pdfjs-dist/legacy/build/pdf.mjs')
+      : import('pdfjs-dist')
+  }
+  const pdfJs = await pdfJsModulePromise
+  pdfJs.GlobalWorkerOptions.workerSrc = useLegacyPdfJs ? legacyPdfWorkerUrl : modernPdfWorkerUrl
+  return pdfJs
+}
 
 const props = defineProps({
   src: { type: String, required: true },
@@ -27,6 +47,7 @@ const pdfSource = computed(() => {
 let pdfDocument = null
 let loadingTask = null
 let renderTask = null
+let fetchController = null
 let resizeObserver = null
 let intersectionObserver = null
 let renderFrame = 0
@@ -36,6 +57,8 @@ let observedWidth = 0
 
 async function clearDocument() {
   renderVersion += 1
+  fetchController?.abort()
+  fetchController = null
   renderTask?.cancel()
   renderTask = null
   if (loadingTask) {
@@ -56,7 +79,19 @@ async function renderPreview() {
 
   try {
     if (!pdfDocument) {
-      loadingTask = getDocument({ url: pdfSource.value })
+      const { getDocument } = await loadPdfJs()
+      if (version !== renderVersion) return
+      if (useLegacyPdfJs) {
+        fetchController = new AbortController()
+        const response = await fetch(pdfSource.value, { signal: fetchController.signal })
+        fetchController = null
+        if (!response.ok) throw new Error(`No se ha podido descargar el PDF (HTTP ${response.status}).`)
+        const data = new Uint8Array(await response.arrayBuffer())
+        if (version !== renderVersion) return
+        loadingTask = getDocument({ data })
+      } else {
+        loadingTask = getDocument({ url: pdfSource.value })
+      }
       pdfDocument = await loadingTask.promise
       loadingTask = null
     }
