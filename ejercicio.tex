@@ -1,0 +1,1042 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%                                                                  %%
+%% EJERCICIO STANDALONE - FORMATO TIPO CÉSAR LLORENTE              %%
+%%                                                                  %%
+%% Anchura: 9 cm                                                     %%
+%% Altura: automática + 0,5 cm (2,5 mm arriba y abajo)              %%
+%%                                                                  %%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% ESTILO Y MEDIDAS                                                  %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[border=0pt]{standalone}
+
+\setlength{\parindent}{0cm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PAQUETES                                                          %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\usepackage[utf8x]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage[fleqn]{amsmath}
+\usepackage{pxfonts}
+\usepackage{graphicx}
+\usepackage{lipsum}
+\usepackage{calc,fp}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{pgf}
+\usepackage{cancel}
+\usepackage{tikz}
+\usepackage{array,colortbl,multirow,multicol,booktabs,ctable,eurosym}
+\usepackage{pgfplots}
+\usetikzlibrary{3d,babel,positioning,arrows,shapes,calc}
+\usetikzlibrary{arrows.meta,shapes.geometric}
+\usepackage{apacite}
+\usepackage{fontawesome5}
+\usepackage{mathpazo}
+
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{fillbetween}
+
+\setlength{\mathindent}{0cm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% COLORES                                                           %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\definecolor{teoria}{cmyk}{0.98,0.5,0,0.35}
+\definecolor{tecuacion}{cmyk}{0.98,0.5,0,0.5}
+\definecolor{tadorno}{cmyk}{0.60,0.17,0,0.05}
+\definecolor{tfondo}{cmyk}{0.30,0.08,0,0.02}
+\definecolor{ejercicio}{gray}{0.2}
+\definecolor{eadorno}{gray}{0.8}
+\definecolor{efondo}{cmyk}{0.12,0,0.18,0}
+\definecolor{brickred}{HTML}{B6321C}
+\definecolor{info}{gray}{0.7}
+
+\def\te#1{\textcolor{teoria!20}{#1}}
+\def\ta#1{\textcolor{tadorno}{#1}}
+\def\tf#1{\textcolor{tfondo}{#1}}
+\def\ex#1{\textcolor{ejercicio}{#1}}
+\def\ea#1{\textcolor{eadorno}{#1}}
+\def\ef#1{\colorbox{efondo}{#1}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% COMANDOS                                                          %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\DeclareMathOperator{\Det}{det}
+\DeclareMathOperator{\rango}{rango}
+\DeclareMathOperator{\rg}{rg}
+\DeclareMathOperator{\Proy}{proy}
+\DeclareMathOperator{\cotan}{cotan}
+\DeclareMathOperator{\arccotan}{arc\,cotan}
+\DeclareMathOperator{\dist}{dist}
+\DeclareMathOperator{\dom}{dom}
+
+\def\d#1{\dom(#1)}
+\def\D#1{\dom\left(#1\right)}
+\def\R{\mathbb{R}}
+
+\newdimen\linea
+
+\newenvironment{definicion}[1]%
+	{\par
+	 \vspace{2mm}
+	 \large
+	 \ta{\rule{3mm}{3mm}}
+	 \textcolor{teoria}{\textbf{\textsf{#1}}}
+	 \settowidth{\linea}{\ \rule{3mm}{3mm}\textbf{\textsf{#1}}\ }
+	 \ta{\rule{\columnwidth-\linea}{3mm}}\par
+	 \normalsize
+	 \vspace{1mm}}
+	{\hfill
+	 \ta{\rule{2mm}{2mm}}\ \ta{\rule{2mm}{2mm}}
+	 \vspace{1mm}
+	 \par}
+
+\def\n#1{\textcolor{black}{#1}}
+\def\t#1{\textcolor{teoria}{#1}}
+
+\def\TT#1{
+	\textcolor{tadorno}{\rule{9cm}{0.3mm}}
+	\par
+	\vspace{-1mm}
+	\textcolor{tadorno}{\rule{1mm}{3.5mm}}
+	\textcolor{teoria}{\textbf{\noindent #1}}
+}
+
+\def\f#1{
+	\par
+	\vspace{1mm}
+	\hspace{1cm}
+	\textcolor{tecuacion}{#1}
+	\par
+	\vspace{1mm}
+}
+
+\def\ft#1{\hfil\textcolor{tecuacion}{#1}\hfil}
+
+\def\vs{\vspace{2mm}}
+
+\def\ecuacion#1#2{
+	\par
+	\vspace{2mm}
+	\fcolorbox{tadorno}{white}{
+		\hbox to 8.65cm{
+			\hspace{0.4cm}
+			\textcolor{tecuacion}{#1\hfill \textit{#2}}
+		}
+	}
+	\vspace{2mm}
+	\par
+}
+
+\def\ecuaciond#1#2{
+	\par
+	\vspace{2mm}
+	\fcolorbox{tadorno}{white}{
+		\hbox{
+			\vbox{
+				\hbox{
+					\hspace{0.7cm}
+					\textcolor{tecuacion}{#1}
+				}
+				\par
+				\hbox to 8.1cm{
+					\hfill
+					\textcolor{tecuacion}{\textit{#2}}
+				}
+			}
+		}
+	}
+	\vspace{2mm}
+	\par
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% COMANDOS GRÁFICOS                                                 %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ESTILOS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\tikzset{
+	trazo teoria/.style={
+		color=teoria!50,
+		thick
+	}
+}
+
+\tikzset{
+	cuadricula fina/.style={
+		color=black!30,
+		very thin
+	}
+}
+
+\tikzset{
+	cuadricula normal/.style={
+		color=black!30
+	}
+}
+
+\tikzset{
+	cuadricula gruesa/.style={
+		color=black!30,
+		thick
+	}
+}
+
+\tikzset{
+	normal/.style={
+		rectangle,
+		inner sep=0pt,
+		align=justify
+	}
+}
+
+\tikzset{
+	cuadro/.style={
+		rectangle,
+		draw=red,
+		inner sep=0pt,
+		align=justify
+	}
+}
+
+\def\cuadricula#1{
+	\draw[step=0.25cm,cuadricula fina]
+		(0,0) grid (9cm,#1);
+
+	\draw[step=0.5cm,cuadricula normal]
+		(0,0) grid (9cm,#1);
+
+	\draw[step=1cm,cuadricula gruesa]
+		(0,0) grid (9cm,#1);
+}
+
+\def\aclarat#1{
+	\textcolor{teoria}{\small #1}
+}
+
+\def\nt#1#2{
+	\tikz[remember picture]{
+		\node[
+			rounded corners=3pt,
+			draw=teoria!50,
+			fill=teoria!20,
+			thick
+		]
+		(#1)
+		{\textcolor{black}{\small #2}};
+	}
+}
+
+\newenvironment{Tabular}[2][1]
+	{\def\arraystretch{#1}\tabular{#2}}
+	{\endtabular}
+
+\def\T#1{
+	\hspace{-1.3mm}
+	\raisebox{-5mm}[0pt][0pt]{
+		\tikz{
+			\draw[very thick,tadorno]
+				(0.1,0.4) --
+				(0.1,0) --
+				(0,0) --
+				(0,0.4) --
+				(9cm,0.4);
+
+			\fill[tadorno]
+				(0,0) rectangle (0.1,0.4);
+		}
+	}
+	\\
+	\phantom{I}
+	\textcolor{teoria}{\textbf{#1}}
+}
+
+\def\seccion#1{
+	\par
+	\vspace{5mm}
+
+	\textcolor{tfondo}{
+		\rule{9cm}{8mm}
+	}
+
+	\par
+	\vspace{-4mm}
+
+	\textbf{
+		\Huge
+		\phantom{I}
+		\textcolor{teoria}{#1}
+	}
+
+	\par
+	\vspace{3mm}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% CONTADORES                                                        %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcounter{punto}
+\newcounter{ejercicio}[punto]
+\newcounter{apartado}[ejercicio]
+
+\def\theejercicio{\arabic{ejercicio}.}
+\def\theapartado{\theejercicio\alph{apartado}.}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% ENTORNO STANDALONE                                                %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% El PDF tendrá exactamente 9 cm de anchura.
+%
+% La altura se adapta automáticamente al contenido.
+%
+% Se añaden:
+%
+%     2,5 mm arriba
+%     2,5 mm abajo
+%
+% Es decir, 0,5 cm adicionales de altura total.
+
+\newenvironment{ejercicios}
+{
+	\noindent
+	\hspace*{2.5mm}
+	\begin{minipage}{8.5cm}
+
+	\vspace*{2.5mm}
+
+	\setcounter{ejercicio}{0}
+	\setcounter{apartado}{0}
+	\renewcommand{\ej}{\refstepcounter{ejercicio}}
+
+	% Conserva el mismo nivel de anidamiento que la plantilla original.
+	% La lista es invisible y no consume anchura, pero hace que los
+	% apartados usen los parámetros de una lista de segundo nivel.
+	\begin{list}{}{
+		\setlength{\leftmargin}{0pt}
+		\setlength{\rightmargin}{0pt}
+		\setlength{\labelwidth}{0pt}
+		\setlength{\labelsep}{0pt}
+		\setlength{\itemindent}{0pt}
+		\setlength{\listparindent}{0pt}
+		\setlength{\topsep}{0pt}
+		\setlength{\partopsep}{0pt}
+		\setlength{\parsep}{0pt}
+		\setlength{\itemsep}{0pt}
+	}
+	\item[]
+}
+{
+	\end{list}
+
+	\par
+	\vspace*{2.5mm}
+
+	\end{minipage}
+	\hspace*{2.5mm}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% APARTADOS                                                         %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newenvironment{apartados}
+{
+	\begin{list}{\ex{\textbf{\textsf{\alph{apartado}.\hspace{2mm}}}}}{}
+}
+{
+	\end{list}
+}
+
+\newenvironment{apartadosc}
+{
+	\begin{multicols}{2}
+
+	\begin{list}{\ex{\textbf{\textsf{\alph{apartado}.\hspace{2mm}}}}}{}
+}
+{
+	\end{list}
+
+	\end{multicols}
+}
+
+\newenvironment{apartadoscc}
+{
+	\begin{multicols}{3}
+
+	\begin{list}{\ex{\textbf{\textsf{\alph{apartado}.\hspace{2mm}}}}}{}
+}
+{
+	\end{list}
+
+	\end{multicols}
+}
+
+\newenvironment{apartadosccc}
+{
+	\begin{multicols}{4}
+
+	\begin{list}{\ex{\textbf{\textsf{\alph{apartado}.\hspace{2mm}}}}}{}
+}
+{
+	\end{list}
+
+	\end{multicols}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% COMANDOS DE EJERCICIOS                                            %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\ej{\refstepcounter{ejercicio}\item}
+
+\def\ejs{
+	$\stackrel{H}{\text{\refstepcounter{ejercicio}}}$
+	\item
+}
+
+\def\ejss{
+	\refstepcounter{ejercicio}
+	\item
+	\hspace{-14.6mm}
+	$\bigstar\bigstar$
+	\hspace{7.4mm}
+}
+
+\def\ap{\refstepcounter{apartado}\item}
+
+\def\apv{
+	\vspace{1mm}
+	\refstepcounter{apartado}
+	\item
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TÍTULOS                                                           %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\titulos#1{
+	\hspace{-2.3mm}
+
+	\raisebox{-5mm}[0pt][0pt]{
+		\tikz{
+			\draw[very thick,eadorno]
+				(0.1,0.4) --
+				(0.1,0) --
+				(0,0) --
+				(0,0.4) --
+				(9cm,0.4);
+
+			\fill[eadorno]
+				(0,0) rectangle (0.1,0.4);
+		}
+	}
+
+	\\
+	\phantom{I}
+	\textcolor{ejercicio}{
+		\textbf{#1}
+	}
+	\par
+}
+
+\def\tipo#1{
+	\item[]
+
+	\hspace{-8mm}
+	\vspace{2mm}
+
+	\tikz{
+		\draw[very thick,eadorno]
+			(0.1,0.4) --
+			(0.1,0) --
+			(0,0) --
+			(0,0.4) --
+			(9cm,0.4);
+
+		\fill[eadorno]
+			(0,0) rectangle (0.1,0.4);
+
+		\node at (0.1,0.13)
+			[right]
+			{\textsf{\small #1}};
+	}
+
+	\par
+	\vspace{-2mm}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% SOLUCIONES                                                        %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\thesol{
+	\ifnum\value{apartado}=0
+
+		\noexpand\medskip
+
+		\noexpand\textit{
+			\noexpand\textsf{
+				\arabic{ejercicio}.
+			}
+		}
+
+	\else
+
+		\ifnum\arabic{apartado}=1
+			\noexpand\medskip
+		\else
+		\fi
+
+		\noexpand\textit{
+			\noexpand\textsf{
+				\arabic{ejercicio}
+				\alph{apartado}.
+			}
+		}
+
+	\fi
+}
+
+\def\thelsol{
+	\par
+
+	\ifnum\value{apartado}=0
+
+		\noexpand\medskip
+
+		\noexpand\textit{
+			\noexpand\textsf{
+				\arabic{ejercicio}.
+			}
+		}
+
+	\else
+
+		\ifnum\arabic{apartado}=1
+			\noexpand\medskip
+		\else
+		\fi
+
+		\noexpand\textit{
+			\noexpand\textsf{
+				\arabic{ejercicio}
+				\alph{apartado}.
+			}
+		}
+
+	\fi
+}
+
+\def\theesol{
+	\par
+
+	\ifnum\value{apartado}=0
+
+		\noexpand\medskip
+
+		\noexpand\textit{
+			\noexpand\textsf{
+				\arabic{ejercicio}.
+			}
+		}
+
+	\else
+
+		\ifnum\arabic{apartado}=1
+			\noexpand\medskip
+		\else
+		\fi
+
+		\noexpand\textit{
+			\noexpand\textsf{
+				\arabic{ejercicio}.
+			}
+		}
+
+	\fi
+}
+
+\def\soluciones{
+	\par
+	\bigskip
+	\bigskip
+	\noindent
+
+	\tikz{
+		\draw[very thick,eadorno]
+			(0.1,0.4) --
+			(0.1,0) --
+			(0,0) --
+			(0,0.4) --
+			(9cm,0.4);
+
+		\fill[eadorno]
+			(0,0) rectangle (0.1,0.4);
+
+		\node[below right]
+			at (0.1,0.4)
+			{\textbf{Soluciones}};
+	}
+
+	\par
+	\parindent=3mm
+	\hangindent=3mm
+	\small
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% ICONOS                                                            %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\d{
+	\small
+	\faPepperHot
+	\hspace{1mm}
+}
+
+\def\dd{
+	\small
+	\faPepperHot
+
+	\small
+	\faPepperHot
+
+	\hspace{1mm}
+}
+
+\def\cg{
+	\small
+	\faCalculator
+	\hspace{1mm}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% INFORMACIÓN Y PUNTUACIONES                                        %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\M#1{\vspace{3mm}{\small\sffamily\textbf{[Puntuación total: #1]}}\hfill}
+
+\def\m#1{
+	\hfill
+	\textit{[#1]}
+}
+
+\def\y{
+	\hspace{3mm}
+	\text{y}
+	\hspace{3mm}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% ACUMULACIÓN DE SOLUCIONES                                         %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\makeatletter
+
+\def\sol#1{
+	\begingroup
+
+	\edef\@num{\thesol}
+
+	\expandafter\g@addto@macro
+		\expandafter\soluciones
+		\expandafter{
+			\@num
+			\ 
+			\small #1
+			\hspace{3mm}
+		}
+
+	\endgroup
+}
+
+\def\lsol#1{
+	\begingroup
+
+	\edef\@num{\thelsol}
+
+	\expandafter\g@addto@macro
+		\expandafter\soluciones
+		\expandafter{
+			\@num
+			\ 
+			\small #1
+			\hspace{3mm}
+		}
+
+	\endgroup
+}
+
+\def\csol#1{
+	\begingroup
+
+	\edef\@num{\thelsol}
+
+	\expandafter\g@addto@macro
+		\expandafter\soluciones
+		\expandafter{
+			\vspace{1mm}
+			\\
+			\phantom{
+				\thelsol
+			\hspace{3mm}
+			}
+			\small #1
+			\hspace{3mm}
+		}
+
+	\endgroup
+}
+
+\makeatother
+
+\makeatletter
+
+\def\esol#1{
+	\addtocounter{apartado}{1}
+
+	\begingroup
+
+	\edef\@num{\theesol}
+
+	\expandafter\g@addto@macro
+		\expandafter\soluciones
+		\expandafter{
+			\@num
+			\ 
+			\small #1
+			\hspace{3mm}
+		}
+
+	\endgroup
+}
+
+\makeatother
+
+\makeatletter
+
+\def\solpg#1{
+	\addtocounter{apartado}{1}
+
+	\begingroup
+
+	\edef\@num{\thesol}
+
+	\expandafter\g@addto@macro
+		\expandafter\soluciones
+		\expandafter{
+			\edef\@num{\thesol}
+
+			\tikz{
+				\node{
+					\expandafter\noexpand\@num
+				};
+			}
+		}
+
+	\endgroup
+}
+
+\makeatother
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% MATRICES Y VECTORES                                               %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\talque{\ |\ }
+
+\newenvironment{matrizp}
+	{\left(\begin{smallmatrix}}
+	{\end{smallmatrix}\right)}
+
+\newenvironment{detp}
+	{\left|\begin{smallmatrix}}
+	{\end{smallmatrix}\right|}
+
+\newenvironment{sistemap}
+	{\left\{\begin{smallmatrix}}
+	{\end{smallmatrix}\right.}
+
+\def\Vec#1{
+	\overrightarrow{#1}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% COMANDOS TIKZ                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\punto#1#2#3#4{
+	\coordinate (#1) at (#2);
+
+	\draw[fill]
+		(#1) circle (0.05);
+
+	\node at (#1)
+		[#4]
+		{#3};
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PUNTUACIONES                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\p#1{\if#11\textsf{\small(1 punto)}\else\textsf{\small(#1 puntos)}\fi}
+
+\def\P#1{
+	\textbf{
+		\p{#1}
+	}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% INFORMACIÓN                                                       %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\info#1{
+	\par
+	\vspace{-2mm}
+	\noindent
+	\makebox[\linewidth][r]{
+		\textcolor{gray}{
+			\tiny{
+				\textsf{
+					\uppercase{#1}
+				}
+			}
+		}
+	}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% OTROS COMANDOS                                                    %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\c#1#2{
+	\left(
+		\begin{smallmatrix}
+			#1\\
+			#2
+		\end{smallmatrix}
+	\right)
+}
+
+\def\completar#1{
+	\vspace{#1}
+	\phantom{.}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% MINI GRÁFICAS                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\miniplot}[6]{
+	\tikz[scale=#1]{
+		\begin{axis}[
+			domain=#2:#3,
+			samples=25,
+			axis lines=middle,
+			xmin=#2,
+			xmax=#3,
+			ymin=#4,
+			ymax=#5,
+		]
+
+			\addplot[
+				thick,
+				black,
+				name path=curve
+			]
+			{#6};
+
+		\end{axis}
+	}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% SOLUCIONES DESARROLLADAS                                          %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\definecolor{solcolor}{RGB}{113,109,130}
+
+\newenvironment{solucion}
+{
+	\vspace{2mm}
+	\leavevmode
+	\color{solcolor}
+}
+{
+	\renewcommand{\arraystretch}{1}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% IGUALDADES COMENTADAS                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\beq}[1]{
+	\ensuremath{
+		\underset{
+			\sffamily{
+				\text{
+					\textbf{
+						\tiny #1
+					}
+				}
+			}
+		}{=}
+	}
+}
+
+\newcommand{\aeq}[1]{
+	\ensuremath{
+		\overset{
+			\sffamily{
+				\text{
+					\textbf{
+						\tiny #1
+					}
+				}
+			}
+		}{=}
+	}
+}
+
+\newcommand{\lheq}{
+	\ensuremath{
+		\underset{
+			\sffamily{
+				\text{
+					\textbf{
+						\tiny L'H
+					}
+				}
+			}
+		}{=}
+	}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% FLECHAS DE CAMBIO DE COLUMNA                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\ccu}[2]{
+	\begin{tikzpicture}[
+		baseline=(termino.base)
+	]
+
+		\node[
+			inner sep=0pt
+		]
+		(termino)
+		{\ensuremath{#2}};
+
+		\pgfresetboundingbox
+
+		\useasboundingbox
+			(termino.south east)
+			rectangle
+			(termino.north west);
+
+		\coordinate (A)
+			at (
+				[shift={(1pt,-1pt)}]
+				termino.south east
+			);
+
+		\coordinate (B)
+			at (
+				[shift={(-2pt,2pt)}]
+				termino.north west
+			);
+
+		\draw[
+			-{Stealth},
+			opacity=0.8
+		]
+			(A) -- (B);
+
+		\node[
+			anchor=center,
+			font=\tiny,
+			scale=0.8
+		]
+			at ($(A)!1.2!(B)$)
+			{\ensuremath{#1}};
+
+	\end{tikzpicture}
+}
+
+\newcommand{\ccd}[2]{
+	\begin{tikzpicture}[
+		baseline=(termino.base)
+	]
+
+		\node[
+			inner sep=0pt
+		]
+		(termino)
+		{\ensuremath{#2}};
+
+		\pgfresetboundingbox
+
+		\useasboundingbox
+			(termino.north west)
+			rectangle
+			(termino.south east);
+
+		\coordinate (A)
+			at (
+				[shift={(-1pt,1pt)}]
+				termino.north west
+			);
+
+		\coordinate (B)
+			at (
+				[shift={(2pt,-2pt)}]
+				termino.south east
+			);
+
+		\draw[
+			-{Stealth},
+			opacity=0.8
+		]
+			(A) -- (B);
+
+		\node[
+			anchor=center,
+			font=\tiny,
+			scale=0.8
+		]
+			at ($(A)!1.2!(B)$)
+			{\ensuremath{#1}};
+
+	\end{tikzpicture}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% COMENTARIOS PEQUEÑOS                                              %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\fcomment}[1]{
+	\makebox[0pt][l]{
+		\scalebox{0.6}{
+			\ensuremath{#1}
+		}
+	}
+}
+
+\def\si{
+	\text{si}
+}

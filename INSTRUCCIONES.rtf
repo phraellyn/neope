@@ -1,0 +1,256 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2639
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;\f1\froman\fcharset0 Times-Bold;\f2\froman\fcharset0 Times-Roman;
+\f3\fmodern\fcharset0 Courier;\f4\fnil\fcharset0 LucidaGrande;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;}
+{\*\listtable{\list\listtemplateid1\listhybrid{\listlevel\levelnfc23\levelnfcn23\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{disc\}}{\leveltext\leveltemplateid1\'01\uc0\u8226 ;}{\levelnumbers;}\fi-360\li720\lin720 }{\listname ;}\listid1}
+{\list\listtemplateid2\listhybrid{\listlevel\levelnfc23\levelnfcn23\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{disc\}}{\leveltext\leveltemplateid101\'01\uc0\u8226 ;}{\levelnumbers;}\fi-360\li720\lin720 }{\listlevel\levelnfc23\levelnfcn23\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{circle\}}{\leveltext\leveltemplateid102\'01\uc0\u9702 ;}{\levelnumbers;}\fi-360\li1440\lin1440 }{\listname ;}\listid2}
+{\list\listtemplateid3\listhybrid{\listlevel\levelnfc23\levelnfcn23\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{disc\}}{\leveltext\leveltemplateid201\'01\uc0\u8226 ;}{\levelnumbers;}\fi-360\li720\lin720 }{\listname ;}\listid3}
+{\list\listtemplateid4\listhybrid{\listlevel\levelnfc23\levelnfcn23\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{disc\}}{\leveltext\leveltemplateid301\'01\uc0\u8226 ;}{\levelnumbers;}\fi-360\li720\lin720 }{\listname ;}\listid4}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}{\listoverride\listid2\listoverridecount0\ls2}{\listoverride\listid3\listoverridecount0\ls3}{\listoverride\listid4\listoverridecount0\ls4}}
+\paperw11900\paperh16840\margl1440\margr1440\vieww14360\viewh12680\viewkind0
+\pard\tx566\tx1133\tx1700\tx2267\tx2834\tx3401\tx3968\tx4535\tx5102\tx5669\tx6236\tx6803\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 DESCRIPCI\'d3N GENERAL DEL PROYECTO\
+\
+Neope (acr\'f3nimo de \'93No Es Otra Plataforma Educativa\'94) debe ser una herramienta centrada en facilitar la generaci\'f3n de colecciones de ejercicios y ex\'e1menes al profesor y tambi\'e9n en proponer ejercicios y simuladores de ex\'e1menes a los alumnos de tal forma que estos obtengan feedback inmediato tras resolverlos (utilizando modelos de IA por API). \
+\
+La aplicaci\'f3n estar\'e1 implementada en Vue3, utilizar\'e1 vuetify para el interface de usuario y los servicios de firebase (hosting, auth, firestore, storage, \'85 y posiblemente functions), tambi\'e9n llamara por API a un Docker ya implementado que compilar\'e1 los archivos LaTeX.\
+\
+La aplicaci\'f3n ser\'e1 plenamente funcional en ordenador y tablet y tendr\'e1 algunas funcionalidades elegidas en movil.\
+\
+El logo estar\'e1 inspirado en una mariposa que tambi\'e9n se llama Neope.\
+\
+El Layout tendr\'e1 una app-bar en la parte superior y un navigation-drawer a la izquierda (fijo en la versi\'f3n de escritorio y en tablet modo horizontal y toggleable en la versi\'f3n tablet modo vertical).\
+\
+A continuaci\'f3n se describen los pasos de implementaci\'f3n que se ir\'e1n acometiendo de uno en uno, si un paso est\'e1 completo se indicar\'e1 con la palabra completo junto al nombre del paso. Ser\'e9 yo quien decida cuando est\'e1 completo.\
+\
+PASO 1 (IMPLEMENTADO) - Elecci\'f3n de una paleta de colores en modo claro y de un logo apropiado para la aplicaci\'f3n. Dise\'f1o e implementaci\'f3n del layout.\
+\
+\
+PASO 2 (IMPLEMENTADO) - Herramienta calendario\
+\
+PASO 3 (IMPLEMENTADO) - Esta parte es una de las m\'e1s delicadas, se trata de la herramienta \'93Ejercicios\'94. Al selecciona esta herramienta debe aparecer una vista que permita filtrar sus ejercicios en funci\'f3n de las etiquetas seleccionadas. Deber\'e1 mostrar una lista con las coincidencias y una vista previa del ejercicio que se seleccione y un bot\'f3n \'93editar ejercicio\'94. Tambi\'e9n debe haber un bot\'f3n \'93A\'f1adir ejercicio\'94. Al hacer click sobre este bot\'f3n o al darle a editar el ejercicio se mostrara en el panel central el editor que deber\'e1 mostrar un \'e1rea de c\'f3digo d\'f3nde editar LaTeX y un cuadro donde a\'f1adir etiquetas. Te pongo el formato de cada ejercicio que deber\'e1 guardarse en la colecci\'f3n \'93ejercicios\'94\
+\
+Ejercicio: \{\
+	id: auto,\
+	enunciado: texto\
+	tags: objeto\
+\}\
+\
+Te pongo un ejemplo:\
+\
+\{\
+	id: 23xTa\'85.,\
+	enunciado: ```\
+		\\ej\\p\{2,5\} Este es el enunciado del ejercicio:\
+		\\centerline\{\
+			\
+		\}\
+		\\begin\{apartados\}\
+			\\ap\\p\{1\} Primer apartado\
+				\\sol\{Soluci\'f3n al primer apartado\}\
+			\\ap\\p\{1,5\} Segundo apartado\
+				\\sol\{Soluci\'f3n al segundo apartado\}\
+		\\end\{apartados\}\
+	```,\
+	tags: \{\
+		geometr\'eda,\
+		geometr\'eda.determinaci\'f3n,\
+		geometria.determinaci\'f3n.determinaci\'f3n del plano,\
+		geometria.determinaci\'f3n.determinaci\'f3n de la recta,\
+		geometria.posiciones relativas.posici\'f3n relativa recta-plano,\
+		2\'baBTO,\
+		Matem\'e1ticas II\
+	\}\
+\}\
+\
+Esta es una primera aproximaci\'f3n, m\'e1s adelante se a\'f1adir\'e1n m\'e1s cosas.  Esta vista tambi\'e9n deber\'e1 mostrar a la derecha el resultado de la compilaci\'f3n LaTeX del ejercicio (de momento reserva el espacio, luego te dire como utilizar el api del docker que he preparado para compilar latex).\
+\
+PASO 4 (IMPLEMENTADO) - Herramienta plantillas.\
+Esta herramienta subir\'e1 archivos al compilador latex para que act\'faen como pre\'e1mbulo y permitir\'e1 crear / editar / eliminar plantillas. \
+Mostrar\'e1 una lista de plantillas disponibles y al hacer click sobre ellas (o sobre el bot\'f3n \'93nueva plantilla\'94), permitir\'e1 elegir su nombre y descripci\'f3n y escribir su c\'f3digo LaTeX en una ventana.\
+\
+PASO 5 (POR IMPLEMENTAR) - Compilador LaTeX remoto\
+Te dejo un peque\'f1o manual de instrucciones con la API del compilador y sus funciones. Si crees que se deber\'eda a\'f1adir alg\'fan tipo de cambio a la API h\'e1zmelo saber:\
+\
+\pard\pardeftab720\sa321\partightenfactor0
+
+\f1\b\fs48 \cf0 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Manual de Integraci\'f3n: API de Renderizado LaTeX (Neope)\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f2\b0\fs24 \cf0 Este documento describe la interfaz REST para la compilaci\'f3n remota de documentos LaTeX y la gesti\'f3n de configuraciones (pre\'e1mbulos).\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 1. Punto de Entrada (Base URL)\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f2\b0\fs24 \cf0 Todas las peticiones deben dirigirse al servidor donde reside el contenedor Docker:\
+\pard\tx220\tx720\pardeftab720\li720\fi-720\sa240\partightenfactor0
+\ls1\ilvl0
+\f1\b \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 URL Base:
+\f2\b0  
+\f3\fs26 [http://51.170.57.25:5000/v1](http://51.170.57.25:5000/v1)
+\f2\fs24 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 2. Gesti\'f3n de Pre\'e1mbulos (CRUD)\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f2\b0\fs24 \cf0 Los pre\'e1mbulos son archivos 
+\f3\fs26 .tex
+\f2\fs24  almacenados en 
+\f3\fs26 /app/preambles
+\f2\fs24  que definen la estructura y librer\'edas de los documentos.\
+\pard\tx220\tx720\pardeftab720\li720\fi-720\sa240\partightenfactor0
+\ls2\ilvl0
+\f1\b \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Listar pre\'e1mbulos:
+\f2\b0  
+\f3\fs26 GET /preambles
+\f2\fs24 \
+\pard\tx940\tx1440\pardeftab720\li1440\fi-1440\sa240\partightenfactor0
+\ls2\ilvl1\cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	
+\f4 \uc0\u9702 
+\f2 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Devuelve: 
+\f3\fs26 \{"preambles": ["file1.tex", "file2.tex"]\}
+\f2\fs24 \
+\pard\tx220\tx720\pardeftab720\li720\fi-720\sa240\partightenfactor0
+\ls2\ilvl0
+\f1\b \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Obtener contenido:
+\f2\b0  
+\f3\fs26 GET /preambles/<name>
+\f2\fs24 \
+\pard\tx940\tx1440\pardeftab720\li1440\fi-1440\sa240\partightenfactor0
+\ls2\ilvl1\cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	
+\f4 \uc0\u9702 
+\f2 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Devuelve: 
+\f3\fs26 \{"name": "file.tex", "content": "..."\}
+\f2\fs24 \
+\pard\tx220\tx720\pardeftab720\li720\fi-720\sa240\partightenfactor0
+\ls2\ilvl0
+\f1\b \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Guardar/Actualizar:
+\f2\b0  
+\f3\fs26 POST /preambles
+\f2\fs24 \
+\pard\tx940\tx1440\pardeftab720\li1440\fi-1440\sa240\partightenfactor0
+\ls2\ilvl1\cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	
+\f4 \uc0\u9702 
+\f2 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 JSON Body: 
+\f3\fs26 \{"name": "string", "content": "string"\}
+\f2\fs24 \
+\pard\tx220\tx720\pardeftab720\li720\fi-720\sa240\partightenfactor0
+\ls2\ilvl0
+\f1\b \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Eliminar:
+\f2\b0  
+\f3\fs26 DELETE /preambles/<name>
+\f2\fs24 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 3. Motor de Compilaci\'f3n\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f2\b0\fs24 \cf0 El endpoint principal para generar documentos educativos.\
+\pard\tx220\tx720\pardeftab720\li720\fi-720\sa240\partightenfactor0
+\ls3\ilvl0
+\f1\b \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Endpoint:
+\f2\b0  
+\f3\fs26 POST /compile
+\f2\fs24 \
+\ls3\ilvl0
+\f1\b \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Headers:
+\f2\b0  
+\f3\fs26 Content-Type: application/json
+\f2\fs24 \
+\ls3\ilvl0
+\f1\b \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 JSON Body:
+\f2\b0 \uc0\u8232 JSON\u8232 \u8232 
+\f3\fs26 \{\
+\pard\tx220\tx720\pardeftab720\li720\fi-720\partightenfactor0
+\ls3\ilvl0\cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2   "code": "string",          // C\'f3digo LaTeX del ejercicio/documento\
+\ls3\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2   "preamble_name": "string" // Nombre del archivo .tex de configuraci\'f3n\
+\ls3\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 \}\
+\ls3\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 \uc0\u8232 
+\f2\fs24 \uc0\u8232 \u8232 \
+\pard\tx220\tx720\pardeftab720\li720\fi-720\sa240\partightenfactor0
+\ls3\ilvl0
+\f1\b \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Respuesta Exitosa (200 OK):
+\f2\b0  Archivo binario (MIME type 
+\f3\fs26 application/pdf
+\f2\fs24 ).\
+\ls3\ilvl0
+\f1\b \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Respuesta de Error (400):
+\f2\b0 \uc0\u8232 JSON\u8232 \u8232 
+\f3\fs26 \{\
+\pard\tx220\tx720\pardeftab720\li720\fi-720\partightenfactor0
+\ls3\ilvl0\cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2   "status": "error",\
+\ls3\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2   "message": "Compilation failed",\
+\ls3\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2   "log": "string" // \'daltimas l\'edneas del log de pdflatex\
+\ls3\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 \}\
+\ls3\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 \uc0\u8232 
+\f2\fs24 \uc0\u8232 \u8232 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 4. Notas T\'e9cnicas para el Consumidor\
+\pard\tx220\tx720\pardeftab720\li720\fi-720\sa240\partightenfactor0
+\ls4\ilvl0
+\fs24 \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Vol\'famenes:
+\f2\b0  El contenedor utiliza 
+\f3\fs26 tmpfs
+\f2\fs24  para 
+\f3\fs26 /app/output
+\f2\fs24  y 
+\f3\fs26 /app/assets
+\f2\fs24 , por lo que los archivos temporales no persisten entre peticiones.\
+\ls4\ilvl0
+\f1\b \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Persistencia:
+\f2\b0  Solo los archivos en 
+\f3\fs26 /app/preambles
+\f2\fs24  son persistentes.\
+\ls4\ilvl0
+\f1\b \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Formato:
+\f2\b0  Todo c\'f3digo enviado en 
+\f3\fs26 code
+\f2\fs24  ser\'e1 envuelto autom\'e1ticamente por el sistema con 
+\f3\fs26 \\begin\{document\}
+\f2\fs24  y 
+\f3\fs26 \\end\{document\}
+\f2\fs24  usando el pre\'e1mbulo seleccionado.\
+\ls4\ilvl0
+\f1\b \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 CORS:
+\f2\b0  La API tiene habilitado 
+\f3\fs26 flask-cors
+\f2\fs24  para permitir peticiones desde dominios externos.\
+\pard\tx566\tx1133\tx1700\tx2267\tx2834\tx3401\tx3968\tx4535\tx5102\tx5669\tx6236\tx6803\pardirnatural\partightenfactor0
+
+\f0 \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 \
+PASO 6 (POR DEFINIR)\
+\
+\
+}
