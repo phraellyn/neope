@@ -16,6 +16,7 @@ const props = defineProps({
   exerciseCounts: { type: Object, default: () => ({}) },
   centerTitle: { type: String, default: '' },
   showCurriculum: { type: Boolean, default: true },
+  showHint: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['add-node', 'rename-node', 'delete-node', 'reorder-nodes', 'group-nodes', 'select-subject', 'update-subject-node-ids', 'update-selected-node-ids'])
@@ -149,6 +150,11 @@ function lighten(hex, amount) {
   const value = hex.replace('#', '')
   const channels = [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16))
   return `rgb(${channels.map((channel) => Math.round(channel + (255 - channel) * amount)).join(',')})`
+}
+
+function darken(color, amount = 0.36) {
+  const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number) || [25, 55, 95]
+  return `rgb(${channels.map((channel) => Math.round(channel * (1 - amount))).join(',')})`
 }
 
 function topBranch(node) {
@@ -353,13 +359,37 @@ function segmentActionCorners(segment) {
 
 const editingSegment = computed(() => segments.value.find((segment) => segment.node.data.id === editingId.value) || null)
 
-const countEntries = computed(() => segments.value
-  .map((segment) => ({
-    segment,
-    count: Number(props.exerciseCounts[segment.node.data.id]) || 0,
-    point: pointOnCircle((segment.startAngle + segment.endAngle) / 2, segment.outerRadius - 18),
-  }))
-  .filter((entry) => entry.count > 0))
+function plainCountTransform(entry) {
+  const { segment, lines, angular, fontSize } = entry
+  const lastLine = lines.at(-1) || ''
+  if (angular) {
+    const { angle, radius, angularLength } = segmentMetrics(segment)
+    const lineRadius = radius + ((lines.length - 1) / 2) * fontSize * 1.15
+    const reverse = angle > Math.PI / 2 && angle < 3 * Math.PI / 2
+    const estimatedWidth = Math.min(Math.max(12, lastLine.length * fontSize * 0.53), Math.max(12, angularLength - 42))
+    const badgeAngle = angle + (reverse ? -1 : 1) * ((estimatedWidth / 2 + 18) / lineRadius)
+    const point = pointOnCircle(badgeAngle, lineRadius)
+    return `translate(${point.x}, ${point.y})`
+  }
+  const { radialLength } = segmentMetrics(segment)
+  const estimatedWidth = Math.min(Math.max(12, lastLine.length * fontSize * 0.53), Math.max(12, radialLength - 40))
+  const lastLineY = ((lines.length - 1) * fontSize * 1.08) / 2
+  return `${radialLabelTransform(segment)} translate(${estimatedWidth / 2 + 18}, ${lastLineY})`
+}
+
+function mathCountTransform(entry) {
+  const box = mathLabelBox(entry)
+  return `${box.transform} translate(${box.width / 2 + 16}, 0)`
+}
+
+const countEntries = computed(() => [
+  ...labelEntries.value.map((entry) => ({ ...entry, transform: plainCountTransform(entry) })),
+  ...mathLabelEntries.value.map((entry) => ({ ...entry, transform: mathCountTransform(entry) })),
+].map((entry) => ({
+  ...entry,
+  count: Number(props.exerciseCounts[entry.segment.node.data.id]) || 0,
+  color: darken(segmentColor(entry.segment)),
+})).filter((entry) => entry.count > 0))
 
 function toggleExerciseNode(nodeId) {
   if (!conceptSelectionMode.value) return
@@ -718,13 +748,6 @@ defineExpose({ fitView })
             ><title>{{ segment.node.data.title }}</title></path>
           </g>
 
-          <g class="sunburst-counts" aria-hidden="true">
-            <g v-for="entry in countEntries" :key="`count-${entry.segment.node.data.id}`" :transform="`translate(${entry.point.x}, ${entry.point.y})`" class="sunburst-count">
-              <circle r="16" />
-              <text y="1">{{ entry.count }}</text>
-            </g>
-          </g>
-
           <g class="sunburst-labels" :class="{ 'sunburst-labels-editable': configurationMode }">
             <text
               v-for="entry in curvedLabelPaths"
@@ -776,6 +799,13 @@ defineExpose({ fitView })
                 v-html="entry.html"
               />
             </foreignObject>
+          </g>
+
+          <g class="sunburst-counts" aria-hidden="true">
+            <g v-for="entry in countEntries" :key="`count-${entry.segment.node.data.id}`" :transform="entry.transform" class="sunburst-count">
+              <circle r="13" :fill="entry.color" />
+              <text y="1">{{ entry.count }}</text>
+            </g>
           </g>
 
           <foreignObject
@@ -867,10 +897,12 @@ defineExpose({ fitView })
             @dblclick.stop.prevent="handleRootDoubleClick"
           >
             <circle class="sunburst-center" :r="centerRadius" />
-            <foreignObject :x="-112" :y="-55" width="224" height="110" class="sunburst-center-label">
+            <foreignObject :x="-122" :y="-55" width="244" height="110" class="sunburst-center-label">
               <div xmlns="http://www.w3.org/1999/xhtml" class="sunburst-center-label-inner">
-                <div class="sunburst-center-title">{{ centerDisplayTitle }}</div>
-                <div v-if="centerExerciseCount" class="sunburst-center-count">{{ centerExerciseCount }} {{ centerExerciseCount === 1 ? 'ejercicio' : 'ejercicios' }}</div>
+                <div class="sunburst-center-title-row">
+                  <span class="sunburst-center-title">{{ centerDisplayTitle }}</span>
+                  <span v-if="centerExerciseCount" class="sunburst-center-count">{{ centerExerciseCount }}</span>
+                </div>
               </div>
             </foreignObject>
           </g>
@@ -884,7 +916,7 @@ defineExpose({ fitView })
       </g>
     </svg>
 
-    <div class="math-concept-map-hint">
+    <div v-if="showHint" class="math-concept-map-hint">
       <v-icon icon="mdi-cursor-default-click-outline" size="16" />
       <span v-if="conceptSelectionMode">Clic para seleccionar uno o varios conceptos · doble clic para ampliar</span>
       <span v-else-if="assignmentMode">Clic para incluir o excluir contenidos de la asignatura · los ascendientes se incluyen automáticamente</span>
@@ -945,13 +977,14 @@ svg:active { cursor: grabbing; }
 .math-concept-map-assigning .sunburst-root-subject-excluded { opacity: .5; }
 .math-concept-map-assigning .sunburst-root-subject-selected .sunburst-center { fill: #eef5ff; stroke: #4d86ca; stroke-width: 8; }
 .sunburst-center-label { overflow: visible; }
-.sunburst-center-label-inner { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 7px; color: #19375f; text-align: center; }
-.sunburst-center-title { max-width: 100%; padding: 3px 5px; font-size: 1.5rem; font-weight: 760; line-height: 1.08; overflow-wrap: anywhere; }
-.sunburst-center-count { color: #66809f; font-size: .72rem; font-weight: 700; }
+.sunburst-center-label-inner { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; color: #19375f; text-align: center; }
+.sunburst-center-title-row { display: inline-flex; max-width: 100%; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px; }
+.sunburst-center-title { max-width: 100%; padding: 3px 0; font-size: 1.5rem; font-weight: 760; line-height: 1.08; overflow-wrap: anywhere; }
+.sunburst-center-count { display: inline-grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border-radius: 50%; background: #19375f; color: #fff; font-size: .7rem; font-weight: 800; }
 .sunburst-root-exercise-selected .sunburst-center { fill: #e8f2ff; stroke: #4d86ca; stroke-width: 8; }
 .sunburst-counts { pointer-events: none; }
-.sunburst-count circle { fill: rgba(255,255,255,.94); stroke: rgba(25,55,95,.28); stroke-width: 2; }
-.sunburst-count text { fill: #19375f; text-anchor: middle; dominant-baseline: central; font-size: 12px; font-weight: 800; }
+.sunburst-count circle { stroke: rgba(255,255,255,.72); stroke-width: 1.5; }
+.sunburst-count text { fill: #fff; text-anchor: middle; dominant-baseline: central; font-size: 10px; font-weight: 850; }
 .sunburst-control { cursor: pointer; outline: none; }
 .sunburst-control:focus { outline: none; }
 .sunburst-control circle { fill: #fff; stroke: #86afe8; stroke-width: 2.5; transition: fill .16s ease, stroke .16s ease; }

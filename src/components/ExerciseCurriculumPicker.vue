@@ -1,12 +1,12 @@
 <script setup>
 import { computed } from 'vue'
 import MathConceptMap from './MathConceptMap.vue'
-import { mathCurriculum, mathSubjects } from '../data/mathCurriculum'
+import { mathSubjects } from '../data/mathCurriculum'
 
 const props = defineProps({
   modelValue: {
     type: Object,
-    default: () => ({ course: null, subjectId: null, conceptIds: [] }),
+    default: () => ({ course: null, subjectId: null, conceptIds: [], competencial: false }),
   },
   nodes: { type: Array, required: true },
   subjectSelections: { type: Object, default: () => ({}) },
@@ -15,22 +15,16 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue'])
 
-const courseItems = computed(() => mathCurriculum.map((row) => row.course))
-const subjectItems = computed(() => mathSubjects.filter((subject) => subject.course === props.modelValue.course))
 const selectedSubject = computed(() => mathSubjects.find((subject) => subject.id === props.modelValue.subjectId) || null)
 const allowedNodeIds = computed(() => props.subjectSelections[props.modelValue.subjectId] || [])
-
-function updateCourse(course) {
-  if (course === props.modelValue.course) return
-  emit('update:modelValue', { course: course || null, subjectId: null, conceptIds: [] })
-}
 
 function updateSubject(subjectId) {
   const subject = mathSubjects.find((item) => item.id === subjectId)
   emit('update:modelValue', {
-    course: subject?.course || props.modelValue.course || null,
+    course: subject?.course || null,
     subjectId: subject?.id || null,
     conceptIds: [],
+    competencial: Boolean(props.modelValue.competencial),
   })
 }
 
@@ -40,60 +34,52 @@ function updateConcepts(conceptIds) {
     course: props.modelValue.course || null,
     subjectId: props.modelValue.subjectId || null,
     conceptIds: [...new Set(conceptIds.filter((id) => allowed.has(id) && id !== 'matematicas'))],
+    competencial: Boolean(props.modelValue.competencial),
+  })
+}
+
+function updateCompetencial(competencial) {
+  emit('update:modelValue', {
+    course: props.modelValue.course || null,
+    subjectId: props.modelValue.subjectId || null,
+    conceptIds: [...(props.modelValue.conceptIds || [])],
+    competencial: Boolean(competencial),
   })
 }
 </script>
 
 <template>
   <div class="exercise-curriculum-picker">
-    <div class="exercise-curriculum-fields">
-      <v-select
-        :model-value="modelValue.course"
-        :items="courseItems"
-        label="Curso"
-        variant="outlined"
-        density="compact"
-        hide-details
-        clearable
-        @update:model-value="updateCourse"
-      />
-      <v-select
-        :model-value="modelValue.subjectId"
-        :items="subjectItems"
-        item-title="title"
-        item-value="id"
-        label="Asignatura"
-        variant="outlined"
-        density="compact"
-        hide-details
-        clearable
-        :disabled="!modelValue.course"
-        @update:model-value="updateSubject"
-      />
-    </div>
-
     <MathConceptMap
-      v-if="selectedSubject"
       class="exercise-curriculum-map"
       :nodes="nodes"
-      :active-subject-id="selectedSubject.id"
+      :active-subject-id="selectedSubject?.id || null"
       :subject-node-ids="allowedNodeIds"
       selection-mode
       :selected-node-ids="modelValue.conceptIds || []"
       :exercise-counts="exerciseCounts"
-      :center-title="selectedSubject.title"
-      :show-curriculum="false"
+      :center-title="selectedSubject?.title || 'Matemáticas'"
+      :show-hint="false"
+      @select-subject="updateSubject"
       @update-selected-node-ids="updateConcepts"
     />
-    <div v-else class="exercise-curriculum-empty">
-      <v-icon icon="mdi-chart-donut-variant" size="44" color="primary" />
-      <p>Selecciona un curso y una asignatura para mostrar su mapa de contenidos.</p>
+    <div class="exercise-competency-control">
+      <span>Competencial</span>
+      <v-switch
+        :model-value="Boolean(modelValue.competencial)"
+        color="secondary"
+        density="compact"
+        hide-details
+        aria-label="Ejercicio competencial"
+        @update:model-value="updateCompetencial"
+      />
     </div>
   </div>
 </template>
 
 <style scoped>
 .exercise-curriculum-picker {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -102,36 +88,36 @@ function updateConcepts(conceptIds) {
   background: #f7f9fd;
 }
 
-.exercise-curriculum-fields {
-  display: grid;
-  grid-template-columns: minmax(120px, .7fr) minmax(190px, 1.3fr);
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid #dce5f1;
-  background: #fff;
-}
-
 .exercise-curriculum-map {
   flex: 1;
   min-height: 0;
 }
 
-.exercise-curriculum-empty {
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  flex: 1;
-  padding: 28px;
-  color: #61728b;
-  text-align: center;
+.exercise-competency-control {
+  position: absolute;
+  z-index: 5;
+  right: 16px;
+  bottom: 14px;
+  display: flex;
+  height: 36px;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 5px 3px 13px;
+  border: 1px solid #d8e2f0;
+  border-radius: 999px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 5px 16px rgba(25,55,95,.12);
+  color: #526783;
+  font-size: .72rem;
+  font-weight: 700;
+  backdrop-filter: blur(8px);
 }
 
-.exercise-curriculum-empty p {
-  max-width: 360px;
-  margin: 12px 0 0;
+.exercise-competency-control :deep(.v-switch) {
+  flex: 0 0 auto;
 }
 
-@media (max-width: 620px) {
-  .exercise-curriculum-fields { grid-template-columns: 1fr; }
+.exercise-competency-control :deep(.v-selection-control) {
+  min-height: 28px;
 }
 </style>

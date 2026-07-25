@@ -51,7 +51,7 @@ const selectedExerciseId = ref(null)
 const exerciseEditor = ref(emptyExercise())
 const exerciseView = ref('search')
 const exerciseSearchQuery = ref('')
-const exerciseSearchCurriculum = ref({ course: null, subjectId: null, conceptIds: [] })
+const exerciseSearchCurriculum = ref(emptyCurriculum())
 const exerciseSearchCurriculumDialog = ref(false)
 const isLoadingExercises = ref(false)
 const isSavingExercise = ref(false)
@@ -144,6 +144,7 @@ const filteredExercises = computed(() => {
     if (!matchesSearch) return false
     if (filters.course && exercise.curriculum.course !== filters.course) return false
     if (filters.subjectId && exercise.curriculum.subjectId !== filters.subjectId) return false
+    if (filters.competencial && !exercise.curriculum.competencial) return false
     if (filters.conceptIds.length) {
       const closure = exerciseConceptClosure(exercise.curriculum.conceptIds)
       if (!filters.conceptIds.some((id) => closure.has(id))) return false
@@ -165,7 +166,8 @@ const activeMathSubjectTitle = computed(() => mathSubjectsById.get(activeMathSub
 const exerciseEditorCurriculumLabel = computed(() => exerciseCurriculumLabel(exerciseEditor.value))
 const exerciseSearchFilterCount = computed(() => Number(Boolean(exerciseSearchCurriculum.value.course))
   + Number(Boolean(exerciseSearchCurriculum.value.subjectId))
-  + exerciseSearchCurriculum.value.conceptIds.length)
+  + exerciseSearchCurriculum.value.conceptIds.length
+  + Number(Boolean(exerciseSearchCurriculum.value.competencial)))
 const selectedExercise = computed(() => exercises.value.find((exercise) => exercise.id === selectedExerciseId.value) || null)
 const activeExerciseVersion = computed(() => selectedExerciseVersion.value === 0
   ? exerciseEditor.value
@@ -235,7 +237,7 @@ function emptyExercise() {
 }
 
 function emptyCurriculum() {
-  return { course: null, subjectId: null, conceptIds: [] }
+  return { course: null, subjectId: null, conceptIds: [], competencial: false }
 }
 
 function normalizeCurriculum(curriculum = {}) {
@@ -247,6 +249,7 @@ function normalizeCurriculum(curriculum = {}) {
     conceptIds: [...new Set(Array.isArray(curriculum.conceptIds)
       ? curriculum.conceptIds.filter((id) => typeof id === 'string')
       : [])],
+    competencial: Boolean(curriculum.competencial),
   }
 }
 
@@ -355,6 +358,17 @@ function exerciseCurriculumLabel(exercise) {
   if (!curriculum.course || !subject) return 'Sin clasificar'
   const concepts = conceptSelectionLabel(curriculum.conceptIds)
   return `${curriculum.course} - ${subject.title}${concepts ? ` \\ ${concepts}` : ''}`
+}
+
+function exerciseSubjectLabel(exercise) {
+  const curriculum = normalizeCurriculum(exercise?.curriculum)
+  const subject = mathSubjectsById.get(curriculum.subjectId)
+  return curriculum.course && subject ? `${curriculum.course} · ${subject.title}` : 'Sin asignatura'
+}
+
+function exerciseConceptLabel(exercise) {
+  const concepts = conceptSelectionLabel(normalizeCurriculum(exercise?.curriculum).conceptIds)
+  return concepts || 'Sin conceptos'
 }
 
 async function syncExerciseConceptIndex(exerciseId, previousConceptIds = [], nextConceptIds = [], existingBatch = null) {
@@ -1872,6 +1886,18 @@ onBeforeUnmount(() => {
             <MasonryGrid v-else-if="filteredExercises.length" :items="filteredExercises" :item-key="(exercise) => exercise.id" class="exercise-results-grid">
               <template #default="{ item: exercise }">
                 <v-card class="exercise-result-card" elevation="1">
+                  <header class="exercise-result-toolbar">
+                    <span class="exercise-result-variations" :title="`${exercise.variaciones.length} variantes IA`">
+                      <v-icon icon="mdi-dice-multiple-outline" size="14" />
+                      {{ exercise.variaciones.length }} {{ exercise.variaciones.length === 1 ? 'variante' : 'variantes' }}
+                    </span>
+                    <span class="exercise-result-subject" :title="exerciseSubjectLabel(exercise)">{{ exerciseSubjectLabel(exercise) }}</span>
+                    <span class="exercise-result-toolbar-spacer" />
+                    <span class="exercise-result-solution" :class="`exercise-result-solution-${exerciseSolutionBadge(exercise).color || 'pending'}`">
+                      <v-icon :icon="exerciseSolutionBadge(exercise).icon" size="14" />
+                      {{ exerciseSolutionBadge(exercise).label }}
+                    </span>
+                  </header>
                   <div class="exercise-result-pdf">
                     <ExercisePdfPreview v-if="exercise.pdf?.enunciado" :src="exercise.pdf.enunciado" :title="`PDF del ejercicio ${exercise.id}`" />
                     <div v-else class="exercise-result-no-pdf"><v-icon icon="mdi-file-pdf-box" size="38" /><span>PDF pendiente</span></div>
@@ -1879,24 +1905,11 @@ onBeforeUnmount(() => {
                       <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-pencil-outline" size="small" color="primary" class="exercise-card-edit" aria-label="Editar ejercicio" @click="editExercise(exercise)" /></template>
                     </v-tooltip>
                   </div>
-                  <v-divider />
-                  <v-card-text class="exercise-result-details">
-                    <div class="exercise-result-meta">
-                      <v-chip size="x-small" variant="tonal" color="primary" prepend-icon="mdi-dice-multiple-outline" :title="`${exercise.variaciones.length} variantes IA`">
-                        {{ exercise.variaciones.length }} {{ exercise.variaciones.length === 1 ? 'variante' : 'variantes' }}
-                      </v-chip>
-                      <v-chip
-                        size="x-small"
-                        variant="tonal"
-                        :color="exerciseSolutionBadge(exercise).color"
-                        :prepend-icon="exerciseSolutionBadge(exercise).icon"
-                      >{{ exerciseSolutionBadge(exercise).label }}</v-chip>
-                    </div>
-                    <div class="exercise-result-curriculum" :title="exerciseCurriculumLabel(exercise)">
-                      <v-icon icon="mdi-chart-donut-variant" size="15" />
-                      <span>{{ exerciseCurriculumLabel(exercise) }}</span>
-                    </div>
-                  </v-card-text>
+                  <footer class="exercise-result-concepts" :title="exerciseConceptLabel(exercise)">
+                    <v-icon icon="mdi-chart-donut-variant" size="15" />
+                    <span>{{ exerciseConceptLabel(exercise) }}</span>
+                    <v-icon v-if="exercise.curriculum.competencial" icon="mdi-lightbulb-on-outline" size="14" class="exercise-result-competency" title="Ejercicio competencial" />
+                  </footer>
                 </v-card>
               </template>
             </MasonryGrid>
@@ -1990,6 +2003,7 @@ onBeforeUnmount(() => {
                 <footer class="exercise-preview-footer" :title="exerciseEditorCurriculumLabel">
                   <v-icon icon="mdi-chart-donut-variant" size="15" />
                   <span>{{ exerciseEditorCurriculumLabel }}</span>
+                  <v-icon v-if="exerciseEditor.curriculum.competencial" icon="mdi-lightbulb-on-outline" size="15" class="exercise-preview-competency" title="Ejercicio competencial" />
                 </footer>
               </section>
             </div>
