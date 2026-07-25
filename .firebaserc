@@ -1,5 +1,14 @@
 {
   "projects": {
     "default": "neope-9e229"
+  },
+  "targets": {
+    "neope-9e229": {
+      "hosting": {
+        "production": [
+          "neope"
+        ]
+      }
+    }
   }
 }
