@@ -1,0 +1,20 @@
+[
+  {
+    "origin": [
+      "https://neope.web.app",
+      "https://neope-9e229.web.app"
+    ],
+    "method": [
+      "GET",
+      "HEAD"
+    ],
+    "responseHeader": [
+      "Accept-Ranges",
+      "Content-Length",
+      "Content-Range",
+      "Content-Type",
+      "ETag"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

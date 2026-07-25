@@ -3,7 +3,6 @@ import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https'
 
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
 const compilerOrigin = 'http://51.170.57.25:5000'
-const storageOrigin = 'https://firebasestorage.googleapis.com'
 
 const proxyResponseHeaders = Object.freeze([
   'accept-ranges',
@@ -39,6 +38,7 @@ export const compilerProxy = onRequest({
   region: 'europe-west1',
   timeoutSeconds: 120,
   memory: '512MiB',
+  maxInstances: 2,
   cors: false,
 }, async (request, response) => {
   const path = proxyPath(request, '/compiler-api')
@@ -78,45 +78,6 @@ export const compilerProxy = onRequest({
         ? 'El compilador LaTeX ha tardado demasiado en responder.'
         : 'No se ha podido contactar con el compilador LaTeX.',
     })
-  }
-})
-
-export const storageProxy = onRequest({
-  region: 'europe-west1',
-  timeoutSeconds: 60,
-  memory: '512MiB',
-  cors: false,
-}, async (request, response) => {
-  const path = proxyPath(request, '/firebase-storage')
-  if (!['GET', 'HEAD'].includes(request.method)) {
-    response.setHeader('Allow', 'GET, HEAD')
-    response.status(405).send('Método no permitido')
-    return
-  }
-  if (!/^\/v0\/b\/neope-9e229\.(?:firebasestorage\.app|appspot\.com)\/o\//.test(path)) {
-    response.status(404).send('Recurso no encontrado')
-    return
-  }
-
-  try {
-    const headers = {}
-    for (const name of ['accept', 'if-modified-since', 'if-none-match', 'range']) {
-      const value = request.get(name)
-      if (value) headers[name] = value
-    }
-    const upstream = await fetch(`${storageOrigin}${path}`, {
-      method: request.method,
-      headers,
-      signal: AbortSignal.timeout(55_000),
-    })
-    await relayResponse(upstream, response)
-  } catch (error) {
-    console.error('Storage proxy failed', { path: path.split('?')[0], error })
-    response.status(error?.name === 'TimeoutError' ? 504 : 502).send(
-      error?.name === 'TimeoutError'
-        ? 'El PDF ha tardado demasiado en responder.'
-        : 'No se ha podido descargar el PDF.',
-    )
   }
 })
 
