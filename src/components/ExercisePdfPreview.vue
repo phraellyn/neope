@@ -15,7 +15,6 @@ const canvas = ref(null)
 const isLoading = ref(true)
 const errorMessage = ref('')
 const pdfSource = computed(() => {
-  if (!import.meta.env.DEV) return props.src
   try {
     const url = new URL(props.src)
     if (url.hostname !== 'firebasestorage.googleapis.com') return props.src

@@ -1,7 +1,124 @@
 import { defineSecret } from 'firebase-functions/params'
-import { HttpsError, onCall } from 'firebase-functions/v2/https'
+import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https'
 
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
+const compilerOrigin = 'http://51.170.57.25:5000'
+const storageOrigin = 'https://firebasestorage.googleapis.com'
+
+const proxyResponseHeaders = Object.freeze([
+  'accept-ranges',
+  'cache-control',
+  'content-disposition',
+  'content-length',
+  'content-range',
+  'content-type',
+  'etag',
+  'last-modified',
+])
+
+async function relayResponse(upstream, response) {
+  response.status(upstream.status)
+  for (const header of proxyResponseHeaders) {
+    const value = upstream.headers.get(header)
+    if (value) response.setHeader(header, value)
+  }
+  if (upstream.status === 204) {
+    response.end()
+    return
+  }
+  response.send(Buffer.from(await upstream.arrayBuffer()))
+}
+
+function proxyPath(request, prefix) {
+  const originalUrl = request.originalUrl || request.url || ''
+  const path = originalUrl.replace(new RegExp(`^${prefix}`), '')
+  return path.startsWith('/') ? path : `/${path}`
+}
+
+export const compilerProxy = onRequest({
+  region: 'europe-west1',
+  timeoutSeconds: 120,
+  memory: '512MiB',
+  cors: false,
+}, async (request, response) => {
+  const path = proxyPath(request, '/compiler-api')
+  const allowedMethod = ['GET', 'POST', 'PUT', 'DELETE'].includes(request.method)
+  if (!allowedMethod) {
+    response.setHeader('Allow', 'GET, POST, PUT, DELETE')
+    response.status(405).send('Método no permitido')
+    return
+  }
+  if (!path.startsWith('/v1/')) {
+    response.status(404).send('Ruta no encontrada')
+    return
+  }
+
+  try {
+    const headers = {}
+    for (const name of ['accept', 'content-type']) {
+      const value = request.get(name)
+      if (value) headers[name] = value
+    }
+    const hasBody = !['GET', 'HEAD'].includes(request.method)
+    const body = hasBody
+      ? (request.rawBody?.length ? request.rawBody : Buffer.from(JSON.stringify(request.body ?? {})))
+      : undefined
+    const upstream = await fetch(`${compilerOrigin}${path}`, {
+      method: request.method,
+      headers,
+      body,
+      signal: AbortSignal.timeout(115_000),
+    })
+    await relayResponse(upstream, response)
+  } catch (error) {
+    console.error('Compiler proxy failed', { path, error })
+    response.status(error?.name === 'TimeoutError' ? 504 : 502).json({
+      status: 'error',
+      message: error?.name === 'TimeoutError'
+        ? 'El compilador LaTeX ha tardado demasiado en responder.'
+        : 'No se ha podido contactar con el compilador LaTeX.',
+    })
+  }
+})
+
+export const storageProxy = onRequest({
+  region: 'europe-west1',
+  timeoutSeconds: 60,
+  memory: '512MiB',
+  cors: false,
+}, async (request, response) => {
+  const path = proxyPath(request, '/firebase-storage')
+  if (!['GET', 'HEAD'].includes(request.method)) {
+    response.setHeader('Allow', 'GET, HEAD')
+    response.status(405).send('Método no permitido')
+    return
+  }
+  if (!/^\/v0\/b\/neope-9e229\.(?:firebasestorage\.app|appspot\.com)\/o\//.test(path)) {
+    response.status(404).send('Recurso no encontrado')
+    return
+  }
+
+  try {
+    const headers = {}
+    for (const name of ['accept', 'if-modified-since', 'if-none-match', 'range']) {
+      const value = request.get(name)
+      if (value) headers[name] = value
+    }
+    const upstream = await fetch(`${storageOrigin}${path}`, {
+      method: request.method,
+      headers,
+      signal: AbortSignal.timeout(55_000),
+    })
+    await relayResponse(upstream, response)
+  } catch (error) {
+    console.error('Storage proxy failed', { path: path.split('?')[0], error })
+    response.status(error?.name === 'TimeoutError' ? 504 : 502).send(
+      error?.name === 'TimeoutError'
+        ? 'El PDF ha tardado demasiado en responder.'
+        : 'No se ha podido descargar el PDF.',
+    )
+  }
+})
 
 const aiModels = Object.freeze({
   'openai/gpt-5-mini': { reasoningEffort: 'minimal', label: 'GPT-5 Mini' },

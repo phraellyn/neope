@@ -22,6 +22,20 @@
     ],
     "rewrites": [
       {
+        "source": "/compiler-api/**",
+        "function": {
+          "functionId": "compilerProxy",
+          "region": "europe-west1"
+        }
+      },
+      {
+        "source": "/firebase-storage/**",
+        "function": {
+          "functionId": "storageProxy",
+          "region": "europe-west1"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

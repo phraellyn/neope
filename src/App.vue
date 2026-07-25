@@ -78,7 +78,7 @@ const isSavingTemplate = ref(false)
 const templatesError = ref('')
 const templateEditorHost = ref(null)
 let templateCodeEditor
-const compilerBaseUrl = import.meta.env.DEV ? '/compiler-api/v1' : 'http://51.170.57.25:5000/v1'
+const compilerBaseUrl = '/compiler-api/v1'
 const selectedPreamble = ref('')
 const exercisePreviewTab = ref('statement')
 const compilerError = ref('')
