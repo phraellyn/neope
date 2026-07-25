@@ -1887,11 +1887,10 @@ onBeforeUnmount(() => {
               <template #default="{ item: exercise }">
                 <v-card class="exercise-result-card" elevation="1">
                   <header class="exercise-result-toolbar">
-                    <span class="exercise-result-variations" :title="`${exercise.variaciones.length} variantes IA`">
-                      <v-icon icon="mdi-dice-multiple-outline" size="14" />
+                    <span v-if="exercise.variaciones.length" class="exercise-result-variations" :title="`${exercise.variaciones.length} variantes IA`">
                       {{ exercise.variaciones.length }} {{ exercise.variaciones.length === 1 ? 'variante' : 'variantes' }}
                     </span>
-                    <span class="exercise-result-subject" :title="exerciseSubjectLabel(exercise)">{{ exerciseSubjectLabel(exercise) }}</span>
+                    <span class="exercise-result-subject" :class="{ 'exercise-result-subject-divided': exercise.variaciones.length }" :title="exerciseSubjectLabel(exercise)">{{ exerciseSubjectLabel(exercise) }}</span>
                     <span class="exercise-result-toolbar-spacer" />
                     <span class="exercise-result-solution" :class="`exercise-result-solution-${exerciseSolutionBadge(exercise).color || 'pending'}`">
                       <v-icon :icon="exerciseSolutionBadge(exercise).icon" size="14" />
@@ -1906,7 +1905,6 @@ onBeforeUnmount(() => {
                     </v-tooltip>
                   </div>
                   <footer class="exercise-result-concepts" :title="exerciseConceptLabel(exercise)">
-                    <v-icon icon="mdi-chart-donut-variant" size="15" />
                     <span>{{ exerciseConceptLabel(exercise) }}</span>
                     <v-icon v-if="exercise.curriculum.competencial" icon="mdi-lightbulb-on-outline" size="14" class="exercise-result-competency" title="Ejercicio competencial" />
                   </footer>

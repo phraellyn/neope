@@ -359,36 +359,28 @@ function segmentActionCorners(segment) {
 
 const editingSegment = computed(() => segments.value.find((segment) => segment.node.data.id === editingId.value) || null)
 
-function plainCountTransform(entry) {
-  const { segment, lines, angular, fontSize } = entry
-  const lastLine = lines.at(-1) || ''
+function countTransform(entry) {
+  const { segment, angular, fontSize } = entry
+  const { angle, radius } = segmentMetrics(segment)
   if (angular) {
-    const { angle, radius, angularLength } = segmentMetrics(segment)
-    const lineRadius = radius + ((lines.length - 1) / 2) * fontSize * 1.15
-    const reverse = angle > Math.PI / 2 && angle < 3 * Math.PI / 2
-    const estimatedWidth = Math.min(Math.max(12, lastLine.length * fontSize * 0.53), Math.max(12, angularLength - 42))
-    const badgeAngle = angle + (reverse ? -1 : 1) * ((estimatedWidth / 2 + 18) / lineRadius)
-    const point = pointOnCircle(badgeAngle, lineRadius)
+    const lineCount = entry.lines?.length || 1
+    const lastLineRadius = radius + ((lineCount - 1) / 2) * fontSize * 1.15
+    const badgeRadius = Math.min(segment.outerRadius - 14, lastLineRadius + fontSize * 1.08 + 5)
+    const point = pointOnCircle(angle, badgeRadius)
     return `translate(${point.x}, ${point.y})`
   }
-  const { radialLength } = segmentMetrics(segment)
-  const estimatedWidth = Math.min(Math.max(12, lastLine.length * fontSize * 0.53), Math.max(12, radialLength - 40))
-  const lastLineY = ((lines.length - 1) * fontSize * 1.08) / 2
-  return `${radialLabelTransform(segment)} translate(${estimatedWidth / 2 + 18}, ${lastLineY})`
-}
-
-function mathCountTransform(entry) {
-  const box = mathLabelBox(entry)
-  return `${box.transform} translate(${box.width / 2 + 16}, 0)`
+  const point = pointOnCircle(angle, Math.max(segment.innerRadius + 14, segment.outerRadius - 18))
+  return `translate(${point.x}, ${point.y})`
 }
 
 const countEntries = computed(() => [
-  ...labelEntries.value.map((entry) => ({ ...entry, transform: plainCountTransform(entry) })),
-  ...mathLabelEntries.value.map((entry) => ({ ...entry, transform: mathCountTransform(entry) })),
+  ...labelEntries.value.map((entry) => ({ ...entry, transform: countTransform(entry) })),
+  ...mathLabelEntries.value.map((entry) => ({ ...entry, transform: countTransform(entry) })),
 ].map((entry) => ({
   ...entry,
   count: Number(props.exerciseCounts[entry.segment.node.data.id]) || 0,
-  color: darken(segmentColor(entry.segment)),
+  color: darken(segmentColor(entry.segment), 0.18),
+  strokeColor: darken(segmentColor(entry.segment), 0.3),
 })).filter((entry) => entry.count > 0))
 
 function toggleExerciseNode(nodeId) {
@@ -803,7 +795,7 @@ defineExpose({ fitView })
 
           <g class="sunburst-counts" aria-hidden="true">
             <g v-for="entry in countEntries" :key="`count-${entry.segment.node.data.id}`" :transform="entry.transform" class="sunburst-count">
-              <circle r="13" :fill="entry.color" />
+              <circle r="12" :fill="entry.color" :stroke="entry.strokeColor" />
               <text y="1">{{ entry.count }}</text>
             </g>
           </g>
@@ -983,7 +975,8 @@ svg:active { cursor: grabbing; }
 .sunburst-center-count { display: inline-grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border-radius: 50%; background: #19375f; color: #fff; font-size: .7rem; font-weight: 800; }
 .sunburst-root-exercise-selected .sunburst-center { fill: #e8f2ff; stroke: #4d86ca; stroke-width: 8; }
 .sunburst-counts { pointer-events: none; }
-.sunburst-count circle { stroke: rgba(255,255,255,.72); stroke-width: 1.5; }
+.sunburst-count { filter: drop-shadow(0 1px 2px rgba(25,55,95,.14)); }
+.sunburst-count circle { stroke-width: 1; }
 .sunburst-count text { fill: #fff; text-anchor: middle; dominant-baseline: central; font-size: 10px; font-weight: 850; }
 .sunburst-control { cursor: pointer; outline: none; }
 .sunburst-control:focus { outline: none; }
