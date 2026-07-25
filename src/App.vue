@@ -1,6 +1,6 @@
 <script setup>
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { basicSetup } from 'codemirror'
@@ -13,6 +13,7 @@ import { tags } from '@lezer/highlight'
 import { latex } from 'codemirror-lang-latex'
 import { db, functions, isAppCheckConfigured, storage } from './services/firebase'
 import MasonryGrid from './components/MasonryGrid.vue'
+import ExerciseCurriculumPicker from './components/ExerciseCurriculumPicker.vue'
 import MathConceptMap from './components/MathConceptMap.vue'
 import { mathSubjects, normalizeHierarchySelection } from './data/mathCurriculum'
 
@@ -50,6 +51,8 @@ const selectedExerciseId = ref(null)
 const exerciseEditor = ref(emptyExercise())
 const exerciseView = ref('search')
 const exerciseSearchQuery = ref('')
+const exerciseSearchCurriculum = ref({ course: null, subjectId: null, conceptIds: [] })
+const exerciseSearchCurriculumDialog = ref(false)
 const isLoadingExercises = ref(false)
 const isSavingExercise = ref(false)
 const isGeneratingVariation = ref(false)
@@ -57,6 +60,11 @@ const isGeneratingSolution = ref(false)
 const isDeletingSolution = ref(false)
 const variationProgressText = ref('')
 const selectedExerciseVersion = ref(0)
+const exerciseEditorTab = ref('code')
+const exerciseAttachmentInput = ref(null)
+const isUploadingExerciseFiles = ref(false)
+const sessionUploadedAttachmentPaths = new Set()
+const pendingDeletedAttachments = []
 const aiModelOptions = Object.freeze([
   { title: 'Gemini 3 Flash', value: 'google/gemini-3-flash-preview', subtitle: 'Predeterminado · rápido y fiable' },
   { title: 'GPT-5 Mini', value: 'openai/gpt-5-mini', subtitle: 'Equilibrio entre coste y calidad' },
@@ -83,6 +91,7 @@ const selectedPreamble = ref('')
 const exercisePreviewTab = ref('statement')
 const compilerError = ref('')
 const isCompiling = ref(false)
+const mathSubjectsById = new Map(mathSubjects.map((subject) => [subject.id, subject]))
 
 const monthLabel = computed(() => new Intl.DateTimeFormat('es-ES', { month: 'long', year: 'numeric' }).format(shownMonth.value))
 const activeMathSubjectNodeIds = computed(() => (
@@ -125,16 +134,38 @@ const academicMonths = computed(() => {
   return Array.from({ length: 10 }, (_, index) => new Date(startYear, 8 + index, 1))
 })
 
-const availableExerciseTags = computed(() => [...new Set(exercises.value.flatMap((exercise) => exercise.tags))].sort((a, b) => a.localeCompare(b, 'es')))
 const filteredExercises = computed(() => {
   const search = exerciseSearchQuery.value.trim().toLocaleLowerCase('es')
+  const filters = exerciseSearchCurriculum.value
   return exercises.value.filter((exercise) => {
     const matchesSearch = !search
       || exercise.enunciado.toLocaleLowerCase('es').includes(search)
-      || exercise.tags.some((tag) => tag.toLocaleLowerCase('es').includes(search))
-    return matchesSearch
+      || exerciseCurriculumLabel(exercise).toLocaleLowerCase('es').includes(search)
+    if (!matchesSearch) return false
+    if (filters.course && exercise.curriculum.course !== filters.course) return false
+    if (filters.subjectId && exercise.curriculum.subjectId !== filters.subjectId) return false
+    if (filters.conceptIds.length) {
+      const closure = exerciseConceptClosure(exercise.curriculum.conceptIds)
+      if (!filters.conceptIds.some((id) => closure.has(id))) return false
+    }
+    return true
   })
 })
+const activeMathExerciseCountByConcept = computed(() => countExercisesByConcept(activeMathSubjectId.value
+  ? exercises.value.filter((exercise) => exercise.curriculum.subjectId === activeMathSubjectId.value)
+  : exercises.value))
+const editorExerciseCountByConcept = computed(() => countExercisesByConcept(exercises.value.filter((exercise) => (
+  !exerciseEditor.value.curriculum.subjectId || exercise.curriculum.subjectId === exerciseEditor.value.curriculum.subjectId
+))))
+const searchExerciseCountByConcept = computed(() => countExercisesByConcept(exercises.value.filter((exercise) => (
+  (!exerciseSearchCurriculum.value.course || exercise.curriculum.course === exerciseSearchCurriculum.value.course)
+  && (!exerciseSearchCurriculum.value.subjectId || exercise.curriculum.subjectId === exerciseSearchCurriculum.value.subjectId)
+))))
+const activeMathSubjectTitle = computed(() => mathSubjectsById.get(activeMathSubjectId.value)?.title || 'Matemáticas')
+const exerciseEditorCurriculumLabel = computed(() => exerciseCurriculumLabel(exerciseEditor.value))
+const exerciseSearchFilterCount = computed(() => Number(Boolean(exerciseSearchCurriculum.value.course))
+  + Number(Boolean(exerciseSearchCurriculum.value.subjectId))
+  + exerciseSearchCurriculum.value.conceptIds.length)
 const selectedExercise = computed(() => exercises.value.find((exercise) => exercise.id === selectedExerciseId.value) || null)
 const activeExerciseVersion = computed(() => selectedExerciseVersion.value === 0
   ? exerciseEditor.value
@@ -193,12 +224,43 @@ function emptyExercise() {
     id: null,
     enunciado: '',
     tags: [],
+    curriculum: emptyCurriculum(),
+    archivos: [],
     pdf: emptyPdfPair(),
     solucionIA: false,
     variaciones: [],
     previewPdf: null,
     renderedLatex: '',
   }
+}
+
+function emptyCurriculum() {
+  return { course: null, subjectId: null, conceptIds: [] }
+}
+
+function normalizeCurriculum(curriculum = {}) {
+  const subject = mathSubjectsById.get(curriculum.subjectId)
+  const course = subject?.course || (typeof curriculum.course === 'string' ? curriculum.course : null)
+  return {
+    course,
+    subjectId: subject?.id || null,
+    conceptIds: [...new Set(Array.isArray(curriculum.conceptIds)
+      ? curriculum.conceptIds.filter((id) => typeof id === 'string')
+      : [])],
+  }
+}
+
+function normalizeExerciseFiles(files) {
+  return (Array.isArray(files) ? files : [])
+    .filter((file) => file && typeof file.path === 'string' && typeof file.url === 'string')
+    .map((file) => ({
+      id: file.id || file.path,
+      nombre: file.nombre || file.name || file.path.split('/').at(-1),
+      path: file.path,
+      url: file.url,
+      type: file.type || 'application/octet-stream',
+      size: Number(file.size) || 0,
+    }))
 }
 
 function emptyPdfPair() {
@@ -227,12 +289,91 @@ function normalizeExercise(exercise) {
     ...exercise,
     enunciado: exercise.enunciado || '',
     tags: normalizeTags(exercise.tags),
+    curriculum: normalizeCurriculum(exercise.curriculum),
+    archivos: normalizeExerciseFiles(exercise.archivos),
     pdf,
     solucionIA: Boolean(exercise.solucionIA),
     variaciones: Array.isArray(exercise.variaciones) ? exercise.variaciones.map(normalizeVariation) : [],
     previewPdf: null,
     renderedLatex: pdf.enunciado ? exercise.enunciado || '' : '',
   }
+}
+
+function conceptAncestors(conceptId) {
+  const nodesById = new Map(mathConceptNodes.value.map((node) => [node.id, node]))
+  const ids = []
+  let current = nodesById.get(conceptId)
+  while (current) {
+    ids.push(current.id)
+    current = current.parentId ? nodesById.get(current.parentId) : null
+  }
+  return ids
+}
+
+function exerciseConceptClosure(conceptIds = []) {
+  const closure = new Set()
+  conceptIds.forEach((conceptId) => conceptAncestors(conceptId).forEach((id) => closure.add(id)))
+  return closure
+}
+
+function countExercisesByConcept(sourceExercises) {
+  const exerciseIdsByConcept = new Map()
+  sourceExercises.forEach((exercise) => {
+    exerciseConceptClosure(exercise.curriculum.conceptIds).forEach((conceptId) => {
+      if (!exerciseIdsByConcept.has(conceptId)) exerciseIdsByConcept.set(conceptId, new Set())
+      exerciseIdsByConcept.get(conceptId).add(exercise.id)
+    })
+  })
+  return Object.fromEntries([...exerciseIdsByConcept].map(([conceptId, ids]) => [conceptId, ids.size]))
+}
+
+function conceptTitlePath(conceptId) {
+  const nodesById = new Map(mathConceptNodes.value.map((node) => [node.id, node]))
+  const titles = []
+  let current = nodesById.get(conceptId)
+  while (current && current.id !== 'matematicas') {
+    titles.unshift(current.title)
+    current = current.parentId ? nodesById.get(current.parentId) : null
+  }
+  return titles
+}
+
+function conceptSelectionLabel(conceptIds = []) {
+  const paths = conceptIds.map(conceptTitlePath).filter((path) => path.length)
+  if (!paths.length) return ''
+  if (paths.length === 1) return paths[0].join(' · ')
+  let commonLength = 0
+  while (paths.every((path) => path[commonLength] && path[commonLength] === paths[0][commonLength])) commonLength += 1
+  const prefix = paths[0].slice(0, commonLength)
+  const alternatives = paths.map((path) => path.slice(commonLength).join(' › ') || path.at(-1))
+  return [...prefix, `(${alternatives.join(' · ')})`].join(' · ')
+}
+
+function exerciseCurriculumLabel(exercise) {
+  const curriculum = normalizeCurriculum(exercise?.curriculum)
+  const subject = mathSubjectsById.get(curriculum.subjectId)
+  if (!curriculum.course || !subject) return 'Sin clasificar'
+  const concepts = conceptSelectionLabel(curriculum.conceptIds)
+  return `${curriculum.course} - ${subject.title}${concepts ? ` \\ ${concepts}` : ''}`
+}
+
+async function syncExerciseConceptIndex(exerciseId, previousConceptIds = [], nextConceptIds = [], existingBatch = null) {
+  const previousClosure = exerciseConceptClosure(previousConceptIds)
+  const nextClosure = exerciseConceptClosure(nextConceptIds)
+  const additions = [...nextClosure].filter((id) => !previousClosure.has(id))
+  const removals = [...previousClosure].filter((id) => !nextClosure.has(id))
+  if (!additions.length && !removals.length) return
+  const batch = existingBatch || writeBatch(db)
+  additions.forEach((conceptId) => {
+    const conceptReference = doc(db, 'especialidades', 'Matemáticas', 'conceptos', conceptId)
+    batch.set(conceptReference, { conceptId }, { merge: true })
+    batch.set(doc(conceptReference, 'ejercicios', exerciseId), { exerciseId, conceptId })
+  })
+  removals.forEach((conceptId) => {
+    const conceptReference = doc(db, 'especialidades', 'Matemáticas', 'conceptos', conceptId)
+    batch.delete(doc(conceptReference, 'ejercicios', exerciseId))
+  })
+  if (!existingBatch) await batch.commit()
 }
 
 function exerciseSolutionBadge(exercise) {
@@ -816,6 +957,9 @@ async function removeTemplate() {
 function openNewExercise() {
   selectedExerciseId.value = null
   exerciseEditor.value = emptyExercise()
+  exerciseEditorTab.value = 'code'
+  sessionUploadedAttachmentPaths.clear()
+  pendingDeletedAttachments.splice(0)
   selectedExerciseVersion.value = 0
   compilerError.value = ''
   exercisePreviewTab.value = 'statement'
@@ -825,13 +969,10 @@ function openNewExercise() {
 
 function editExercise(exercise = selectedExercise.value) {
   if (!exercise) return
-  exerciseEditor.value = normalizeExercise({
-    id: exercise.id,
-    enunciado: exercise.enunciado,
-    tags: [...exercise.tags],
-    pdf: exercise.pdf,
-    variaciones: exercise.variaciones,
-  })
+  exerciseEditor.value = normalizeExercise(exercise)
+  exerciseEditorTab.value = 'code'
+  sessionUploadedAttachmentPaths.clear()
+  pendingDeletedAttachments.splice(0)
   selectedExerciseVersion.value = 0
   compilerError.value = ''
   exercisePreviewTab.value = 'statement'
@@ -839,12 +980,97 @@ function editExercise(exercise = selectedExercise.value) {
   mountLatexEditor()
 }
 
-function cancelExerciseEdit() {
+async function cancelExerciseEdit() {
   destroyLatexEditor()
   clearExercisePreviews()
+  await cleanupSessionExerciseFiles()
+  pendingDeletedAttachments.splice(0)
   exerciseView.value = 'search'
   exerciseEditor.value = emptyExercise()
   selectedExerciseVersion.value = 0
+}
+
+function selectExerciseEditorTab(tab) {
+  exerciseEditorTab.value = tab
+  if (tab === 'code') nextTick(() => latexCodeEditor?.requestMeasure())
+}
+
+function ensureExerciseId() {
+  if (!exerciseEditor.value.id) exerciseEditor.value.id = doc(collection(db, 'ejercicios')).id
+  return exerciseEditor.value.id
+}
+
+function safeAttachmentName(name) {
+  return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'archivo'
+}
+
+function openExerciseFilePicker() {
+  exerciseAttachmentInput.value?.click()
+}
+
+async function uploadExerciseFiles(event) {
+  const files = [...(event?.target?.files || [])]
+  if (!files.length || isUploadingExerciseFiles.value) return
+  isUploadingExerciseFiles.value = true
+  exercisesError.value = ''
+  try {
+    const exerciseId = ensureExerciseId()
+    for (const file of files) {
+      const fileId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const path = `ejercicios/${exerciseId}/archivos/${fileId}-${safeAttachmentName(file.name)}`
+      const reference = storageRef(storage, path)
+      await uploadBytes(reference, file, {
+        contentType: file.type || 'application/octet-stream',
+        customMetadata: { exerciseId, originalName: file.name },
+      })
+      const url = await getDownloadURL(reference)
+      exerciseEditor.value.archivos.push({
+        id: fileId,
+        nombre: file.name,
+        path,
+        url,
+        type: file.type || 'application/octet-stream',
+        size: file.size,
+      })
+      sessionUploadedAttachmentPaths.add(path)
+    }
+  } catch (error) {
+    exercisesError.value = error.message || 'No se han podido subir los archivos.'
+    console.error('Error al subir archivos del ejercicio:', error)
+  } finally {
+    if (event?.target) event.target.value = ''
+    isUploadingExerciseFiles.value = false
+  }
+}
+
+async function removeExerciseFile(file) {
+  exerciseEditor.value.archivos = exerciseEditor.value.archivos.filter((item) => item.path !== file.path)
+  if (sessionUploadedAttachmentPaths.has(file.path)) {
+    sessionUploadedAttachmentPaths.delete(file.path)
+    try { await deleteObject(storageRef(storage, file.path)) } catch (error) { console.warn('No se ha podido retirar el archivo recién subido:', error) }
+    return
+  }
+  pendingDeletedAttachments.push(file)
+}
+
+async function cleanupSessionExerciseFiles() {
+  const paths = [...sessionUploadedAttachmentPaths]
+  sessionUploadedAttachmentPaths.clear()
+  await Promise.all(paths.map(async (path) => {
+    try { await deleteObject(storageRef(storage, path)) } catch (error) { console.warn('No se ha podido limpiar un archivo temporal:', error) }
+  }))
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return '0 KB'
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function clearExerciseCurriculumFilters() {
+  exerciseSearchCurriculum.value = emptyCurriculum()
 }
 
 function selectExerciseVersion(version) {
@@ -1095,6 +1321,7 @@ async function saveExercise() {
       : doc(collection(db, 'ejercicios'))
     const previousSnapshot = await getDoc(reference)
     const previousData = previousSnapshot.exists() ? previousSnapshot.data() : {}
+    const previousCurriculum = normalizeCurriculum(previousData.curriculum)
     const code = exerciseEditor.value.enunciado
     const pdf = await compileAndUploadExerciseVersion(reference.id, code)
     const variaciones = []
@@ -1106,12 +1333,21 @@ async function saveExercise() {
     const data = {
       id: reference.id,
       enunciado: code,
-      tags: tagsToObject(exerciseEditor.value.tags),
+      curriculum: normalizeCurriculum(exerciseEditor.value.curriculum),
+      archivos: normalizeExerciseFiles(exerciseEditor.value.archivos),
       pdf,
       solucionIA: Boolean(exerciseEditor.value.solucionIA),
       variaciones,
     }
-    await setDoc(reference, data, { merge: true })
+    const batch = writeBatch(db)
+    batch.set(reference, data, { merge: true })
+    await syncExerciseConceptIndex(reference.id, previousCurriculum.conceptIds, data.curriculum.conceptIds, batch)
+    await batch.commit()
+    const filesToDelete = pendingDeletedAttachments.splice(0)
+    await Promise.all(filesToDelete.map(async (file) => {
+      try { await deleteObject(storageRef(storage, file.path)) } catch (error) { console.warn('No se ha podido eliminar un archivo retirado:', error) }
+    }))
+    sessionUploadedAttachmentPaths.clear()
     const savedExercise = normalizeExercise({ ...previousData, ...data })
     const index = exercises.value.findIndex((exercise) => exercise.id === reference.id)
     if (index === -1) exercises.value.push(savedExercise)
@@ -1575,8 +1811,8 @@ onBeforeUnmount(() => {
         <v-text-field
           v-if="active === 'Ejercicios'"
           v-model="exerciseSearchQuery"
-          aria-label="Buscar ejercicios por texto o etiquetas"
-          placeholder="Buscar por texto o etiquetas"
+          aria-label="Buscar ejercicios por texto o contenidos"
+          placeholder="Buscar por texto o contenidos"
           prepend-inner-icon="mdi-magnify"
           variant="outlined"
           density="compact"
@@ -1585,6 +1821,13 @@ onBeforeUnmount(() => {
           hide-details
           class="app-toolbar-search"
         />
+        <v-tooltip v-if="active === 'Ejercicios'" text="Filtrar por curso, asignatura y contenidos" location="bottom">
+          <template #activator="{ props }">
+            <v-badge :content="exerciseSearchFilterCount" :model-value="exerciseSearchFilterCount > 0" color="secondary" offset-x="5" offset-y="5">
+              <v-btn v-bind="props" icon="mdi-filter-variant" variant="text" aria-label="Filtrar ejercicios por contenidos" @click="exerciseSearchCurriculumDialog = true" />
+            </v-badge>
+          </template>
+        </v-tooltip>
         <v-spacer v-if="active === 'Ejercicios'" />
         <v-btn v-if="active === 'Ejercicios'" color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action app-toolbar-new-exercise mr-2" @click="openNewExercise">Nuevo ejercicio</v-btn>
         <v-spacer v-if="active === 'Ejercicios'" />
@@ -1610,6 +1853,8 @@ onBeforeUnmount(() => {
             :configuration-mode="mathConceptConfigurationMode"
             :active-subject-id="activeMathSubjectId"
             :subject-node-ids="activeMathSubjectNodeIds"
+            :exercise-counts="activeMathExerciseCountByConcept"
+            :center-title="activeMathSubjectTitle"
             :disabled="isSavingMathConcepts"
             @add-node="addMathConcept"
             @rename-node="renameMathConcept"
@@ -1647,9 +1892,9 @@ onBeforeUnmount(() => {
                         :prepend-icon="exerciseSolutionBadge(exercise).icon"
                       >{{ exerciseSolutionBadge(exercise).label }}</v-chip>
                     </div>
-                    <div class="exercise-result-tags">
-                      <v-chip v-for="tag in exercise.tags" :key="tag" :title="tag" size="x-small" color="primary" variant="tonal">{{ displayTag(tag) }}</v-chip>
-                      <span v-if="!exercise.tags.length" class="exercise-no-tags">Sin etiquetas</span>
+                    <div class="exercise-result-curriculum" :title="exerciseCurriculumLabel(exercise)">
+                      <v-icon icon="mdi-chart-donut-variant" size="15" />
+                      <span>{{ exerciseCurriculumLabel(exercise) }}</span>
                     </div>
                   </v-card-text>
                 </v-card>
@@ -1660,11 +1905,48 @@ onBeforeUnmount(() => {
 
           <template v-else>
             <div class="exercise-edit-workspace">
-              <section class="exercise-editor-pane" aria-label="Editor LaTeX del ejercicio">
+              <section class="exercise-editor-pane" aria-label="Contenido del ejercicio">
                 <v-alert v-if="exercisesError" type="error" variant="tonal" density="compact" class="exercise-edit-error">{{ exercisesError }}</v-alert>
-                <div ref="latexEditorHost" class="latex-editor-shell exercise-editor-shell" />
-                <div class="exercise-editor-tags">
-                  <v-combobox v-model="exerciseEditor.tags" :items="availableExerciseTags" label="Etiquetas" placeholder="Añadir etiqueta" multiple chips closable-chips density="compact" variant="outlined" hide-details />
+                <div class="exercise-editor-toolbar">
+                  <v-tabs :model-value="exerciseEditorTab" density="compact" @update:model-value="selectExerciseEditorTab">
+                    <v-tab value="code">Código</v-tab>
+                    <v-tab value="contents">Contenidos</v-tab>
+                    <v-tab value="files">Archivos</v-tab>
+                  </v-tabs>
+                </div>
+                <div v-show="exerciseEditorTab === 'code'" ref="latexEditorHost" class="latex-editor-shell exercise-editor-shell" />
+                <div v-show="exerciseEditorTab === 'contents'" class="exercise-editor-curriculum">
+                  <ExerciseCurriculumPicker
+                    v-model="exerciseEditor.curriculum"
+                    :nodes="mathConceptNodes"
+                    :subject-selections="mathConceptSubjectSelections"
+                    :exercise-counts="editorExerciseCountByConcept"
+                  />
+                </div>
+                <div v-show="exerciseEditorTab === 'files'" class="exercise-editor-files">
+                  <input ref="exerciseAttachmentInput" type="file" multiple hidden @change="uploadExerciseFiles" />
+                  <div class="exercise-files-actions">
+                    <div>
+                      <strong>Archivos del ejercicio</strong>
+                      <span>Imágenes y otros recursos que podrá utilizar el código LaTeX.</span>
+                    </div>
+                    <v-btn color="primary" variant="tonal" prepend-icon="mdi-paperclip-plus" :loading="isUploadingExerciseFiles" @click="openExerciseFilePicker">Añadir archivos</v-btn>
+                  </div>
+                  <div v-if="exerciseEditor.archivos.length" class="exercise-files-list">
+                    <v-card v-for="file in exerciseEditor.archivos" :key="file.path" variant="outlined" class="exercise-file-card">
+                      <v-icon :icon="file.type.startsWith('image/') ? 'mdi-file-image-outline' : 'mdi-file-outline'" color="primary" size="28" />
+                      <div class="exercise-file-info">
+                        <strong :title="file.nombre">{{ file.nombre }}</strong>
+                        <span>{{ formatFileSize(file.size) }}</span>
+                      </div>
+                      <v-btn :href="file.url" target="_blank" icon="mdi-open-in-new" size="small" variant="text" aria-label="Abrir archivo" />
+                      <v-btn icon="mdi-delete-outline" size="small" variant="text" color="error" aria-label="Eliminar archivo" @click="removeExerciseFile(file)" />
+                    </v-card>
+                  </div>
+                  <div v-else class="exercise-files-empty">
+                    <v-icon icon="mdi-image-multiple-outline" size="46" color="primary" />
+                    <p>Este ejercicio todavía no tiene archivos asociados.</p>
+                  </div>
                 </div>
               </section>
               <section class="exercise-preview-pane" aria-label="PDF compilado del ejercicio">
@@ -1705,6 +1987,10 @@ onBeforeUnmount(() => {
                     <v-btn v-if="exercisePreviewTab === 'statement'" color="primary" variant="tonal" prepend-icon="mdi-refresh" :disabled="!activeExerciseCode.trim()" :loading="isCompiling" @click="refreshLatexRender">Compilar</v-btn>
                   </div>
                 </div>
+                <footer class="exercise-preview-footer" :title="exerciseEditorCurriculumLabel">
+                  <v-icon icon="mdi-chart-donut-variant" size="15" />
+                  <span>{{ exerciseEditorCurriculumLabel }}</span>
+                </footer>
               </section>
             </div>
           </template>
@@ -1783,6 +2069,30 @@ onBeforeUnmount(() => {
         </section>
       </div>
     </v-main>
+
+    <v-dialog v-model="exerciseSearchCurriculumDialog" max-width="1120" height="min(820px, 88vh)">
+      <v-card class="exercise-filter-dialog">
+        <v-card-title class="exercise-filter-dialog-title">
+          <span>Filtrar por contenidos</span>
+          <v-btn icon="mdi-close" variant="text" aria-label="Cerrar filtros" @click="exerciseSearchCurriculumDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="exercise-filter-dialog-content">
+          <ExerciseCurriculumPicker
+            v-model="exerciseSearchCurriculum"
+            :nodes="mathConceptNodes"
+            :subject-selections="mathConceptSubjectSelections"
+            :exercise-counts="searchExerciseCountByConcept"
+          />
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="px-5 py-3">
+          <v-btn variant="text" prepend-icon="mdi-filter-off-outline" :disabled="!exerciseSearchFilterCount" @click="clearExerciseCurriculumFilters">Limpiar</v-btn>
+          <v-spacer />
+          <v-btn color="primary" variant="flat" @click="exerciseSearchCurriculumDialog = false">Aplicar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <v-dialog v-model="mathConceptDeleteDialog" max-width="620">
       <v-card>

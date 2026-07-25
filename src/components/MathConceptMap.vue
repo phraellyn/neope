@@ -11,9 +11,14 @@ const props = defineProps({
   configurationMode: { type: Boolean, default: false },
   activeSubjectId: { type: String, default: null },
   subjectNodeIds: { type: Array, default: () => [] },
+  selectionMode: { type: Boolean, default: false },
+  selectedNodeIds: { type: Array, default: () => [] },
+  exerciseCounts: { type: Object, default: () => ({}) },
+  centerTitle: { type: String, default: '' },
+  showCurriculum: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['add-node', 'rename-node', 'delete-node', 'reorder-nodes', 'group-nodes', 'select-subject', 'update-subject-node-ids'])
+const emit = defineEmits(['add-node', 'rename-node', 'delete-node', 'reorder-nodes', 'group-nodes', 'select-subject', 'update-subject-node-ids', 'update-selected-node-ids'])
 
 const width = 1800
 const height = 1300
@@ -39,7 +44,9 @@ let lastTouch = { id: null, time: 0 }
 let zoomBehavior
 
 const assignmentMode = computed(() => props.configurationMode && Boolean(props.activeSubjectId))
+const conceptSelectionMode = computed(() => props.selectionMode && Boolean(props.activeSubjectId))
 const subjectIdSet = computed(() => new Set(props.subjectNodeIds))
+const exerciseSelectedIdSet = computed(() => new Set(props.selectedNodeIds))
 const visibleNodes = computed(() => {
   if (!props.activeSubjectId || props.configurationMode) return props.nodes
   const allowedIds = new Set([...props.subjectNodeIds, rootId])
@@ -80,6 +87,8 @@ const segments = computed(() => hierarchyRoot.value.descendants()
   })))
 
 const selectedIdSet = computed(() => new Set(selectedIds.value))
+const centerDisplayTitle = computed(() => props.centerTitle || hierarchyRoot.value.data.title)
+const centerExerciseCount = computed(() => Number(props.exerciseCounts[rootId]) || 0)
 const selectedSegments = computed(() => segments.value.filter((segment) => selectedIdSet.value.has(segment.node.data.id)))
 const selectedSiblingContext = computed(() => {
   if (selectedSegments.value.length < 2) return null
@@ -344,7 +353,28 @@ function segmentActionCorners(segment) {
 
 const editingSegment = computed(() => segments.value.find((segment) => segment.node.data.id === editingId.value) || null)
 
+const countEntries = computed(() => segments.value
+  .map((segment) => ({
+    segment,
+    count: Number(props.exerciseCounts[segment.node.data.id]) || 0,
+    point: pointOnCircle((segment.startAngle + segment.endAngle) / 2, segment.outerRadius - 18),
+  }))
+  .filter((entry) => entry.count > 0))
+
+function toggleExerciseNode(nodeId) {
+  if (!conceptSelectionMode.value) return
+  const next = new Set(props.selectedNodeIds)
+  if (next.has(nodeId)) next.delete(nodeId)
+  else next.add(nodeId)
+  emit('update-selected-node-ids', [...next])
+}
+
 function toggleSegmentSelection(segment, event) {
+  if (conceptSelectionMode.value) {
+    if (event?.detail > 1) return
+    toggleExerciseNode(segment.node.data.id)
+    return
+  }
   if (assignmentMode.value) {
     if (event?.detail > 1) return
     toggleSubjectNode(segment.node.data.id)
@@ -367,7 +397,12 @@ function toggleSegmentSelection(segment, event) {
 }
 
 function toggleRootSelection(event) {
-  if (!props.configurationMode || event?.detail > 1) return
+  if (event?.detail > 1) return
+  if (conceptSelectionMode.value) {
+    toggleExerciseNode(rootId)
+    return
+  }
+  if (!props.configurationMode) return
   if (assignmentMode.value) {
     toggleSubjectNode(rootId)
     return
@@ -434,6 +469,10 @@ function beginEdit(segment) {
 }
 
 function handleLabelClick(segment) {
+  if (conceptSelectionMode.value) {
+    toggleExerciseNode(segment.node.data.id)
+    return
+  }
   if (assignmentMode.value) {
     toggleSubjectNode(segment.node.data.id)
     return
@@ -506,7 +545,7 @@ function swapWithSibling(control) {
 }
 
 function handleSegmentKey(segment, event) {
-  if (props.configurationMode) toggleSegmentSelection(segment, { detail: 1 })
+  if (props.configurationMode || conceptSelectionMode.value) toggleSegmentSelection(segment, { detail: 1 })
   else zoomToSegment(segment)
   event.currentTarget.blur?.()
 }
@@ -591,9 +630,11 @@ defineExpose({ fitView })
       'math-concept-map-disabled': disabled,
       'math-concept-map-configuring': configurationMode,
       'math-concept-map-assigning': assignmentMode,
+      'math-concept-map-selecting': conceptSelectionMode,
     }"
   >
     <div
+      v-if="showCurriculum"
       class="curriculum-map"
       aria-label="Asignaturas de Matemáticas por curso"
       @pointerdown.stop
@@ -658,13 +699,14 @@ defineExpose({ fitView })
                 'sunburst-segment-selected': selectedIdSet.has(segment.node.data.id),
                 'sunburst-segment-subject-selected': assignmentMode && subjectIdSet.has(segment.node.data.id),
                 'sunburst-segment-subject-excluded': assignmentMode && !subjectIdSet.has(segment.node.data.id),
+                'sunburst-segment-exercise-selected': conceptSelectionMode && exerciseSelectedIdSet.has(segment.node.data.id),
               }"
               :data-node-id="segment.node.data.id"
               :d="segmentPath(segment)"
               :fill="segmentColor(segment)"
               role="button"
               tabindex="0"
-              :aria-label="configurationMode ? `Seleccionar ${segment.node.data.title}` : (segment.node.children?.length ? `Ampliar ${segment.node.data.title}` : segment.node.data.title)"
+              :aria-label="(configurationMode || conceptSelectionMode) ? `Seleccionar ${segment.node.data.title}` : (segment.node.children?.length ? `Ampliar ${segment.node.data.title}` : segment.node.data.title)"
               @click.stop="toggleSegmentSelection(segment, $event)"
               @dblclick.stop.prevent="zoomToSegment(segment)"
               @pointerdown="beginSegmentPointer(segment, $event)"
@@ -674,6 +716,13 @@ defineExpose({ fitView })
               @keydown.enter.prevent="handleSegmentKey(segment, $event)"
               @keydown.space.prevent="handleSegmentKey(segment, $event)"
             ><title>{{ segment.node.data.title }}</title></path>
+          </g>
+
+          <g class="sunburst-counts" aria-hidden="true">
+            <g v-for="entry in countEntries" :key="`count-${entry.segment.node.data.id}`" :transform="`translate(${entry.point.x}, ${entry.point.y})`" class="sunburst-count">
+              <circle r="16" />
+              <text y="1">{{ entry.count }}</text>
+            </g>
           </g>
 
           <g class="sunburst-labels" :class="{ 'sunburst-labels-editable': configurationMode }">
@@ -809,6 +858,7 @@ defineExpose({ fitView })
               'sunburst-root-selected': selectedIdSet.has(rootId),
               'sunburst-root-subject-selected': assignmentMode && subjectIdSet.has(rootId),
               'sunburst-root-subject-excluded': assignmentMode && !subjectIdSet.has(rootId),
+              'sunburst-root-exercise-selected': conceptSelectionMode && exerciseSelectedIdSet.has(rootId),
             }"
             role="button"
             tabindex="0"
@@ -819,7 +869,8 @@ defineExpose({ fitView })
             <circle class="sunburst-center" :r="centerRadius" />
             <foreignObject :x="-112" :y="-55" width="224" height="110" class="sunburst-center-label">
               <div xmlns="http://www.w3.org/1999/xhtml" class="sunburst-center-label-inner">
-                <div class="sunburst-center-title">{{ hierarchyRoot.data.title }}</div>
+                <div class="sunburst-center-title">{{ centerDisplayTitle }}</div>
+                <div v-if="centerExerciseCount" class="sunburst-center-count">{{ centerExerciseCount }} {{ centerExerciseCount === 1 ? 'ejercicio' : 'ejercicios' }}</div>
               </div>
             </foreignObject>
           </g>
@@ -835,7 +886,8 @@ defineExpose({ fitView })
 
     <div class="math-concept-map-hint">
       <v-icon icon="mdi-cursor-default-click-outline" size="16" />
-      <span v-if="assignmentMode">Clic para incluir o excluir contenidos de la asignatura · los ascendientes se incluyen automáticamente</span>
+      <span v-if="conceptSelectionMode">Clic para seleccionar uno o varios conceptos · doble clic para ampliar</span>
+      <span v-else-if="assignmentMode">Clic para incluir o excluir contenidos de la asignatura · los ascendientes se incluyen automáticamente</span>
       <span v-else-if="configurationMode">Clic para seleccionar · doble clic para ampliar · usa los controles laterales para reordenar</span>
       <span v-else>Doble clic sobre un sector con subniveles para ampliarlo · arrastra para desplazar</span>
     </div>
@@ -866,10 +918,12 @@ svg:active { cursor: grabbing; }
 .sunburst-segment-leaf { cursor: default; }
 .sunburst-segment:hover { opacity: .84; filter: brightness(1.04); }
 .math-concept-map-configuring .sunburst-segment { cursor: pointer; }
+.math-concept-map-selecting .sunburst-segment { cursor: pointer; }
 .math-concept-map-assigning .sunburst-segment-subject-excluded { opacity: .2; filter: saturate(.35) brightness(1.16); }
 .math-concept-map-assigning .sunburst-segment-subject-excluded:hover { opacity: .38; filter: saturate(.55) brightness(1.1); }
 .math-concept-map-assigning .sunburst-segment-subject-selected { opacity: 1; stroke: rgba(255,255,255,.92); stroke-width: 3; filter: brightness(1.08) drop-shadow(0 4px 5px rgba(24,55,92,.18)); }
 .sunburst-segment-selected { opacity: 1 !important; stroke: #173b66; stroke-width: 5; filter: brightness(1.24) drop-shadow(0 6px 8px rgba(24,55,92,.34)) !important; }
+.sunburst-segment-exercise-selected { opacity: 1 !important; stroke: #fff; stroke-width: 5; filter: brightness(1.18) drop-shadow(0 5px 7px rgba(24,55,92,.3)) !important; }
 .sunburst-label { fill: #fff; text-anchor: middle; dominant-baseline: central; font-weight: 720; letter-spacing: .01em; pointer-events: none; }
 .math-concept-map-assigning .sunburst-label-subject-excluded { opacity: .22; }
 .sunburst-labels-editable .sunburst-label { cursor: text; pointer-events: auto; }
@@ -891,8 +945,13 @@ svg:active { cursor: grabbing; }
 .math-concept-map-assigning .sunburst-root-subject-excluded { opacity: .5; }
 .math-concept-map-assigning .sunburst-root-subject-selected .sunburst-center { fill: #eef5ff; stroke: #4d86ca; stroke-width: 8; }
 .sunburst-center-label { overflow: visible; }
-.sunburst-center-label-inner { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; color: #19375f; text-align: center; }
+.sunburst-center-label-inner { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 7px; color: #19375f; text-align: center; }
 .sunburst-center-title { max-width: 100%; padding: 3px 5px; font-size: 1.5rem; font-weight: 760; line-height: 1.08; overflow-wrap: anywhere; }
+.sunburst-center-count { color: #66809f; font-size: .72rem; font-weight: 700; }
+.sunburst-root-exercise-selected .sunburst-center { fill: #e8f2ff; stroke: #4d86ca; stroke-width: 8; }
+.sunburst-counts { pointer-events: none; }
+.sunburst-count circle { fill: rgba(255,255,255,.94); stroke: rgba(25,55,95,.28); stroke-width: 2; }
+.sunburst-count text { fill: #19375f; text-anchor: middle; dominant-baseline: central; font-size: 12px; font-weight: 800; }
 .sunburst-control { cursor: pointer; outline: none; }
 .sunburst-control:focus { outline: none; }
 .sunburst-control circle { fill: #fff; stroke: #86afe8; stroke-width: 2.5; transition: fill .16s ease, stroke .16s ease; }
