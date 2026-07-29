@@ -1,0 +1,245 @@
+% neope:document {"name":"Examen","command":"logo","optionalCommand":"optativos"}
+% neope:field {"key":"subject","label":"Asignatura","argument":1,"type":"subject","placeholder":"Matemáticas II"}
+% neope:field {"key":"title","label":"Título","argument":2,"type":"text","placeholder":"Recuperación -- 2ª Evaluación"}
+% neope:field {"key":"date","label":"Fecha","argument":3,"type":"text","placeholder":"09 / 03 / 26"}
+% neope:field {"key":"course","label":"Curso y grupo","argument":4,"type":"course","placeholder":"2ºBTO VA"}
+
+\documentclass[a4paper,11pt,fleqn,oneside]{book}
+\usepackage[spanish,activeacute,es-noquoting]{babel}
+\usepackage[utf8]{inputenc}
+%\usepackage[dvipdfm]{color}
+\usepackage{amsmath}
+\usepackage{graphicx,capt-of,fancyhdr,titlesec,multicol,amsfonts,amssymb}
+\usepackage{latexsym}
+\usepackage{tabularx,array,multirow,hhline}
+\usepackage{makeidx}
+\usepackage{pxfonts}
+\usepackage{asymptote}
+\usepackage{tikz}
+\usetikzlibrary{ calc, arrows,shapes,backgrounds}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.15}
+\usepackage{eurosym}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{mathpazo}
+%\usepackage{mathtools}
+\DeclareGraphicsRule{*}{eps}{*}{}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% MEDIDAS DE PAGINA %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\pagestyle{empty}
+
+\hoffset=-2.6cm %
+\voffset=-2.6cm %
+
+\oddsidemargin=1.5cm %
+\topmargin=1cm %
+\headheight=0cm %
+\headsep=0cm %
+
+\textwidth=17.5cm %
+\textheight=28cm %
+
+\mathindent=1.5cm %
+
+\DeclareMathOperator{\si}{si}
+\DeclareMathOperator{\cotan}{cotan}
+\DeclareMathOperator{\dist}{dist}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% DEFINICION DE COLORES %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\definecolor{gris}{gray}{0.6}
+\definecolor{blanco}{gray}{1}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% COMANDOS Y ENTORNOS  %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\punto}{\hfill\mbox{\emph{(1 punto)}}}
+\newcommand{\puntos}[1]{\hfill\emph{(#1 puntos)}}
+\newcommand{\Punto}{\hfill\mbox{\emph{\textbf{(1 punto)}}}}
+\newcommand{\Puntos}[1]{\hfill\emph{\textbf{(#1 puntos)}}}
+\newcommand{\puntosp}[1]{\par\vspace{-2mm}\hfill(#1 puntos)\vspace{-3mm}}
+\newcommand{\pbi}[1]{\hfill\emph{[#1]}}
+\newcommand{\Pbi}[1]{\hfill\textbf{\emph{[#1]}}}
+\newcommand{\esp}[1]{\vspace{#1}}
+\newcommand{\marca}{\hspace{-1cm}$\ast$\hspace{0.8cm}}
+
+\newcommand{\logo}[4]{
+    \hspace{-6mm}
+    \tikz{
+        \node at (1.4,1.6)  
+            {\IfFileExists{./logo.png}
+                {\includegraphics[width=2.8cm]{./logo.png}}
+                {\fbox{\parbox[c][1.7cm][c]{2.35cm}{\centering\scriptsize LOGO}}}};
+        \draw(2.8,0.2) rectangle (7,1);
+        \draw(2.8,1) rectangle (15.8,1.8);
+        \draw (2.8,1.8) rectangle (10.5,2.4);
+        \draw (2.8,2.4) rectangle (10.5,3);
+        \draw (10.5,1.8) rectangle (15.8,2.4);
+        \draw (10.5,2.4) rectangle (15.8,3);
+        \draw (10.5,1.8) rectangle (12.2,2.4);
+        \draw (10.5,2.4) rectangle (12.2,3);
+        \draw[thick] (15.8,1) rectangle (18,3);
+        \draw[very thick] (0,0.2) rectangle (18,3);
+        \node at (6.75,2.7) {\textsf{DEPARTAMENTO DE MATEMATICAS}};
+        \node at (11.35,2.7) {\textsf{Curso:}};
+        \node at (11.35,2.1) {\textsf{Fecha:}};
+        \node at (16.9,2.75) {\textsf{\small Calificación}};
+        \node at (2.8,0.55) [right=2mm]
+            {\textsf{Nombre y apellidos:}};
+        \node at (6.75,2.1) {\textsf{#1}};
+        \node at (9.4,1.4) {\textsf{\large{#2}}};
+        \node at (14,2.1) {\textsf{#3}};
+        \node at (14,2.7) {\textsf{#4}};
+    }
+    \vspace{-5mm}
+}
+ 
+\newcounter{ejercicio}
+\def\theejercicio{\textsf{\textcolor{gris}{\large\bfseries\arabic{ejercicio}.}}}
+
+\newenvironment{ejercicios}
+        {\begin{list}{\theejercicio}{}}
+        {\end{list}}
+
+\def\ej{\refstepcounter{ejercicio}\item}
+
+\newcounter{apartado}[ejercicio]
+\def\theapartado{\textsf{\textcolor{gris}{\normalsize\bfseries\alph{apartado}.}}}
+
+\def\app#1{\item[\textsf{\textcolor{gris}{\normalsize\bfseries{#1}.}}]}
+
+\newenvironment{apartados}
+        {\begin{list}{\theapartado}{}}
+        {\end{list}}
+
+\newenvironment{apartadosc}[1]
+        {\begin{multicols}{2}{#1}\begin{list}{\theapartado}{}}
+        {\end{list}\end{multicols}}
+
+\def\ap{\refstepcounter{apartado}\item}
+
+
+\def\lin{\par\rule{20cm}{0.1mm}}
+
+\newcommand{\sol}[1]{\hfill\textit{\textbf{Solución: }#1}}
+
+\newcommand{\answer}[1]{
+    \vspace{5mm}
+    \hspace{-11mm}
+    \fbox{\hspace{5mm}
+        \vbox{
+        \vspace{8mm}\\
+        \tikz{
+            \foreach \x in {0.25,0.5,...,17} {
+                \foreach \y in {1,2,...,#1} {
+                    \fill (\x,0.8*\y) circle (0.5pt);
+                }
+            }
+        }
+        \vspace{3mm}
+        }
+    }
+}
+
+\newcommand{\logoB}[2]{
+ \vspace{-16mm}\hspace{-8mm}\tikz[scale=0.5,every node/.style={scale=0.6}]{
+    \fill[black!10] (2,1) arc (180:450:1) -- (3,1) -- cycle;
+    \draw (4,3) arc (0:270:1) arc (90:-180:1) arc (0:-270:1) arc (-90:-270:1) -- (1,4) -- (1,1) -- (3,1) -- (3,3) -- (4,3) -- cycle;
+    \node[color=black!50] at (0,2) [rotate=-90,below] {\large \textsf{DEPARTAMENTO}};
+    \node[color=black!60,scale=0.75] at (-0.7,0.10) [below right, end] {\huge \textsf{\bold{MATEMÁTICAS}}};
+    \node[color=black!50,scale=0.75] at (-0.2,0.38) [below right, end] { \bold{de}};
+    \node at (0.95,0.30) [scale=0.15] {\includegraphics{gatodepie}};
+    \node at (0.7,4.1) [scale=0.15] {\includegraphics{gatosentadoarriba}};
+    \node at (3,0.17) [scale=0.15] {\includegraphics{gatosentado}};
+    \node at (3,4.31) [scale=0.15] {\includegraphics{gatodepie}};
+    \draw[very thin,color=black!50, dashed] (1.1,0.65) -- (1.7,0.65);
+    \draw[very thin,color=black!50, dashed] (0.8,4.35) -- (1.7,4.35);
+    \draw[<->,>=latex,color=black!50,very thin] (1.5,0.65) -- (1.5,4.35) node [midway,sloped,fill=white,inner sep=1mm] {$7\,cm$};
+    \draw[very thin,color=black!50, dashed] (3,0.4) -- (3.8,0.4);
+    \draw[very thin,color=black!50, dashed] (3,4.65) -- (3.8,4.65);
+    \draw[<->,>=latex,color=black!50,very thin] (3.55,0.4) -- (3.55,4.65) node [midway,sloped,fill=white,inner sep=0.4mm] {$9\,cm$};
+    \draw[thick] (2,1) -- (3,1) node[midway,above] {$r=?$};
+    \node[color=black!50] at (0,2) [rotate=-90,below] {\large \textsf{DEPARTAMENTO}};
+    \node[color=black!60,scale=0.75] at (-0.7,0.10) [below right, end] {\huge \textsf{\bold{MATEMÁTICAS}}};
+    \node[color=black!50,scale=0.75] at (-0.2,0.38) [below right, end] { \bold{de}};
+    \draw[rounded corners, thick] (4.5,-0.7) rectangle (36,4);
+    \draw[rounded corners] (30,-0.3) rectangle (35.6,3.6);
+    \node at (30.9,3.2) [right] {CALIFICACIÓN};
+    \node at (4.8,3.2) [right,scale=1.2] {\Huge \textbf{\scshape Matemáticas II}};
+    \node at (4.8,2.05) [right,scale=1.3] {\textsf{\Large #1}};
+    \node at (4.8,1.2) [right,scale=1.2] {\textsf{\textit{\Large #2}}};
+    \node at (4.8,-0.2) [right,scale=1.2] {\textbf\textsf{\Large Nombre:\hspace{10cm}Grupo:\hspace{1.5cm}Nº:}};
+}\vspace{5mm}}
+
+\def\y{\hspace{3mm}\text{y}\hspace{3mm}}
+\def\para{\hspace{5mm}\text{para}\hspace{5mm}}
+\def\si{\text{si}}
+
+\newcommand{\answerbox}[1]{
+    \par
+    \vspace{3mm}
+    \hspace{-1cm}
+    \tikz{
+        \draw[step=0.4,thin,lightgray] (0,0) grid (16.8,#1*0.4);
+        \draw (0,0) rectangle (16.8,#1*0.4)
+    }
+    \par
+    \vspace{3mm}
+}
+\newcommand{\ejanswerbox}[1]{
+    \par
+    \vspace{3mm}
+    \hspace{-1cm}
+    \tikz{
+        \draw[step=0.4,thin,lightgray] (0,0) grid (18,#1*0.4);
+        \draw (0,0) rectangle (18,#1*0.4)
+    }
+    \par
+    \vspace{3mm}
+}
+
+\def\M#1{
+    \vspace{6mm}
+    {\small \sffamily\textbf{[Puntuación total: #1]}}
+}
+
+\def\p#1{
+    \if#11
+        \textsf{\small(1 punto)}
+    \else
+        \textsf{\small(#1 puntos)}
+    \fi
+}
+\def\P#1{\textbf{\p{#1}}}
+\def\info#1{
+    \par\vspace{-2mm}\hfill\textcolor{gray}{\tiny{\textsf{\uppercase{#1}}}}
+}
+
+\def\instrucciones#1{
+    \definecolor{grisClaro}{rgb}{0.9, 0.9, 0.9}
+    \hspace{-5.75mm}
+    \colorbox{grisClaro}{
+        \begin{minipage}[t]{17.6cm}
+            \vspace{1mm}
+            \sffamily{
+                \textbf{Instrucciones}
+                #1
+            }\vspace{0mm}
+        \end{minipage}
+    }
+}
+
+\def\Vec#1{\overrightarrow{#1}}
+
+\def\normal{
+    \vspace*{-2.35cm}
+    \hspace{-3.15cm}
+    \includegraphics[width=22.5cm]{./normal}
+}

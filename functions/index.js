@@ -160,6 +160,7 @@ Contrato obligatorio de salida:
 - Si el ejercicio pide razonar a partir de una gráfica o figura, trata la gráfica como la única fuente de información: no uses ni menciones la expresión analítica, parámetros, coordenadas de control o comandos internos de TikZ/pgfplots, salvo que estén mostrados explícitamente al alumno. Toda afirmación de la solución debe poder inferirse visualmente de la gráfica proporcionada.
 - Conserva todas las barras invertidas, equilibra llaves y entornos, y usa & únicamente dentro de pmatrix, matrizp, matrix, array, aligned, align o tabular.
 - Si hay un entorno solucion, reescribe una solución completa y correcta para los nuevos datos; si no lo hay, no inventes soluciones.
+- Si el ejercicio usa el entorno \begin{apartadosc}...\end{apartadosc}, cuando conserves o generes soluciones sustitúyelo en la salida completa por \begin{apartados}...\end{apartados}: las soluciones necesitan el ancho completo de la columna y no deben quedar repartidas en dos columnas estrechas.
 - Las reglas de diseño de 8 cm se aplican SOLO dentro de \begin{solucion}...\end{solucion}; no alteres el enunciado para adaptarte a ellas. En cada solución deja una línea en blanco antes de \begin{solucion}, usa matrizp, detp y sistemap en lugar de matrices estándar, compón las cadenas largas con aligned solo cuando lo necesiten y no pongas dos matrices compactas en una misma fila de aligned. Si la solución incluye una figura, sigue las mismas reglas de composición con TikZ. No uses nunca \begin{center} ni \end{center} dentro de una solución: para centrar un tikzpicture usa \noindent\hfill antes y \hfill\mbox{}\par después. Todo símbolo o comando matemático debe estar dentro de $...$ o de $$...$$; en particular, no escribas \text, \mathrm, \frac, \sqrt, ^, _ ni variables matemáticas en texto normal. Comprueba que cada $ tiene su pareja antes de responder. En problemas de geometría o modelización espacial que describan una construcción, transformación o relación entre figuras, el TikZ explicativo es obligatorio.
 - Evita copiar literalmente el enunciado original y las variaciones anteriores.`
 
@@ -169,6 +170,8 @@ Contrato obligatorio de salida:
 - Devuelve exclusivamente el EJERCICIO COMPLETO como fragmento LaTeX compilable: sin Markdown, sin explicaciones externas, sin preámbulo y sin \begin{document} ni \end{document}. Conserva el enunciado, comandos, apartados y puntuaciones; añade solamente las soluciones y coloca \info al final según la regla indicada por el usuario.
 - Ignora por completo \sol, \lsol y \soluciones: no los copies ni los generes.
 - Si el ejercicio tiene apartados (\ap), añade exactamente un entorno \begin{solucion} ... \end{solucion} completo después del contenido de CADA apartado y antes del siguiente \ap o de \end{apartados}. Si no hay \ap, añade un único entorno \begin{solucion} ... \end{solucion} al final del ejercicio, antes de \info.
+- Si el enunciado usa \begin{apartadosc}...\end{apartadosc}, cambia ambos delimitadores a \begin{apartados}...\end{apartados} en el ejercicio resuelto completo. Nunca redactes las soluciones dentro de dos columnas estrechas.
+- Aunque haya muchos apartados o cada uno incluya un dibujo TikZ largo, no agrupes las soluciones al final ni omitas ninguna: cuenta los comandos \ap del enunciado y coloca exactamente una solución inmediatamente después de cada uno.
 - Deja siempre una línea en blanco real entre el final del enunciado o apartado y cada \begin{solucion}. Es decir, debe haber dos saltos de línea antes de iniciar ese entorno; no basta con una nueva línea sangrada.
 - Resuelve todos los apartados con cálculos, justificaciones y resultados correctos. No dejes marcadores pendientes ni afirmaciones sin justificar.
 - En geometría vectorial, no hagas álgebra con puntos: nunca escribas B=A+\Vec{AB}. Formula las relaciones con vectores posición respecto de un origen, por ejemplo \Vec{OB}=\Vec{OA}+\Vec{AB}, y distingue con precisión puntos, vectores y coordenadas.
@@ -218,6 +221,12 @@ function stripLegacySolutionCommands(text) {
   }
 
   return `${result}${text.slice(cursor)}`.replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function forceSingleColumnSolvedSections(text) {
+  return text
+    .replace(/\\begin\s*\{apartadosc\}/g, '\\begin{apartados}')
+    .replace(/\\end\s*\{apartadosc\}/g, '\\end{apartados}')
 }
 
 function splitAlignedRows(body) {
@@ -589,7 +598,7 @@ ${variation?.enunciado || ''}`
         throw new HttpsError('internal', 'La IA terminó sin generar el ejercicio. Prueba de nuevo o selecciona otro modelo.')
       }
 
-      variation.enunciado = compactAlignedChains(stripLegacySolutionCommands(variation.enunciado.trim()))
+      variation.enunciado = forceSingleColumnSolvedSections(compactAlignedChains(stripLegacySolutionCommands(variation.enunciado.trim())))
       validationIssues = validateLatexVariation(exerciseForGeneration, variation.enunciado, expectedInfo)
       if (experimental && !variation.enunciado.includes(`\\info{${expectedInfo}}`)) {
         validationIssues.push(`La variación experimental debe terminar con \\info{${expectedInfo}}.`)
@@ -680,7 +689,7 @@ export const generateExerciseSolution = onCall({
           require_parameters: true,
           data_collection: 'deny',
         },
-        max_tokens: 6_000,
+        max_tokens: 12_000,
       }),
       signal: AbortSignal.timeout(105_000),
     })
@@ -697,7 +706,9 @@ export const generateExerciseSolution = onCall({
     }
 
     const content = choiceContent(payload.choices?.[0])
-    let solvedExercise = content ? compactAlignedChains(stripLegacySolutionCommands(JSON.parse(content)?.enunciado?.trim() || '')) : ''
+    let solvedExercise = content
+      ? forceSingleColumnSolvedSections(compactAlignedChains(stripLegacySolutionCommands(JSON.parse(content)?.enunciado?.trim() || '')))
+      : ''
     if (!solvedExercise) {
       throw new HttpsError('internal', 'La IA terminó sin generar el ejercicio resuelto.')
     }
@@ -708,6 +719,8 @@ export const generateExerciseSolution = onCall({
     const needsLayoutRepair = latexIssues.includes('Una fila de aligned no puede contener dos matrices o determinantes compactos.')
       || latexIssues.includes('No se puede usar el entorno center dentro de una solución.')
       || latexIssues.includes('Todos los delimitadores $ de modo matemático deben estar emparejados.')
+      || latexIssues.some((issue) => issue.includes('Cada apartado debe contener su propio entorno solucion'))
+      || latexIssues.some((issue) => issue.includes('Debe haber una solución por apartado'))
     if (needsLayoutRepair) {
       console.info('OpenRouter solution layout repair started', { model })
       const repairResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -724,19 +737,31 @@ export const generateExerciseSolution = onCall({
           messages: [
             {
               role: 'system',
-              content: String.raw`Eres un maquetador profesional de ejercicios de Matemáticas. Devuelve el ejercicio LaTeX completo que recibes, preservando literalmente su enunciado, sus resultados, los entornos solucion y la orden final \info. Solo corrige su composición para una columna útil de 8 cm: dentro de aligned nunca pueden aparecer dos matrices, determinantes o sistemas en una misma fila; reescribe los productos largos mediante nombres intermedios y una sola matriz resultado por fila. Conserva los entornos compactos matrizp, detp y sistemap. Dentro de solucion no uses center, figure ni flotantes: si hay tikzpicture, céntralo con \noindent\hfill antes y \hfill\mbox{}\par después. Todo comando matemático debe estar dentro de $...$ o $$...$$ y cada $ debe estar emparejado, también dentro de TikZ. Devuelve solo LaTeX, sin Markdown.`,
+              content: String.raw`Eres el corrector final y maquetador profesional de ejercicios de Matemáticas. Devuelve el ejercicio LaTeX completo que recibes, preservando literalmente el enunciado, sus datos, dibujos, resultados y la orden final \info.
+
+Corrige también la estructura obligatoria de las soluciones: cuenta los comandos \ap del enunciado y coloca exactamente un entorno \begin{solucion}...\end{solucion} después de cada apartado, antes del siguiente \ap o de \end{apartados}. No agrupes soluciones al final, no omitas apartados y no dejes un apartado sin solución. Si aparece \begin{apartadosc} o \end{apartadosc}, cámbialos por \begin{apartados} y \end{apartados}.
+
+Solo corrige la composición para una columna útil de 8 cm: dentro de aligned nunca pueden aparecer dos matrices, determinantes o sistemas en una misma fila; reescribe los productos largos mediante nombres intermedios y una sola matriz resultado por fila. Conserva los entornos compactos matrizp, detp y sistemap. Dentro de solucion no uses center, figure ni flotantes: si hay tikzpicture, céntralo con \noindent\hfill antes y \hfill\mbox{}\par después. Todo comando matemático debe estar dentro de $...$ o $$...$$ y cada $ debe estar emparejado, también dentro de TikZ. Devuelve solo LaTeX, sin Markdown.`,
             },
-            { role: 'user', content: `RECOMPÓN ESTE EJERCICIO. Defectos detectados: ${latexIssues.join(' ')}\n\n${solvedExercise}` },
+            { role: 'user', content: `RECOMPÓN ESTE EJERCICIO. Defectos detectados: ${latexIssues.join(' ')}
+
+EJERCICIO ORIGINAL COMPLETO (fuente de verdad para recuperar cualquier apartado o dibujo que falte):
+${exerciseForSolution}
+
+Borrador generado que debes corregir:
+${solvedExercise}` },
           ],
           response_format: solutionResponseFormat,
           provider: { require_parameters: true, data_collection: 'deny' },
-          max_tokens: 6_000,
+          max_tokens: 12_000,
         }),
         signal: AbortSignal.timeout(45_000),
       })
       const repairPayload = await repairResponse.json().catch(() => ({}))
       const repairContent = repairResponse.ok ? choiceContent(repairPayload.choices?.[0]) : ''
-      const repairedExercise = repairContent ? compactAlignedChains(stripLegacySolutionCommands(JSON.parse(repairContent)?.enunciado?.trim() || '')) : ''
+      const repairedExercise = repairContent
+        ? forceSingleColumnSolvedSections(compactAlignedChains(stripLegacySolutionCommands(JSON.parse(repairContent)?.enunciado?.trim() || '')))
+        : ''
       if (repairedExercise) {
         solvedExercise = repairedExercise
         latexIssues = [...new Set([

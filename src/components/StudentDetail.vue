@@ -1,0 +1,130 @@
+<script setup>
+import { ref, watch } from 'vue'
+import { loadStudentIdentities, saveStudentIdentities } from '../services/localStudentIdentity'
+
+const props = defineProps({
+  student: { type: Object, required: true },
+  groupId: { type: String, required: true },
+  configurationMode: { type: Boolean, default: false },
+})
+
+const emit = defineEmits(['saved', 'error'])
+const identity = ref({ id: '', nombre: '', nombreCorto: '', foto: '', repetidor: false, pendiente: false, nuevo: false })
+const isLoading = ref(true)
+const isSaving = ref(false)
+const error = ref('')
+const photoDragActive = ref(false)
+let ready = false
+let saveSequence = 0
+
+function applyStudent(value) {
+  identity.value = {
+    id: value?.id || '',
+    nombre: value?.nombre || '',
+    nombreCorto: value?.nombreCorto || '',
+    foto: value?.foto || '',
+    repetidor: Boolean(value?.repetidor),
+    pendiente: Boolean(value?.pendiente),
+    nuevo: Boolean(value?.nuevo),
+  }
+}
+
+async function persist() {
+  if (!ready || !identity.value.id) return
+  const sequence = ++saveSequence
+  isSaving.value = true
+  error.value = ''
+  try {
+    await saveStudentIdentities(props.groupId, [{ ...identity.value }])
+    if (sequence === saveSequence) emit('saved', { ...identity.value })
+  } catch (cause) {
+    error.value = 'No se han podido guardar los datos en este dispositivo.'
+    emit('error', cause)
+  } finally {
+    if (sequence === saveSequence) isSaving.value = false
+  }
+}
+
+async function load() {
+  isLoading.value = true
+  ready = false
+  try {
+    const stored = await loadStudentIdentities(props.groupId)
+    applyStudent({ ...props.student, ...(stored.get(props.student.id) || {}) })
+  } catch (cause) {
+    applyStudent(props.student)
+    error.value = 'No se han podido abrir los datos locales de este alumno.'
+    emit('error', cause)
+  } finally {
+    isLoading.value = false
+    ready = true
+  }
+}
+
+function setPhotoFile(file) {
+  if (!file || !file.type.startsWith('image/')) return
+  const reader = new FileReader()
+  reader.onload = () => { identity.value.foto = String(reader.result || '') }
+  reader.readAsDataURL(file)
+}
+
+function selectPhoto(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  setPhotoFile(file)
+}
+
+function dropPhoto(event) {
+  photoDragActive.value = false
+  if (!props.configurationMode) return
+  setPhotoFile(event.dataTransfer?.files?.[0])
+}
+
+function startPhotoDrag() { if (props.configurationMode) photoDragActive.value = true }
+
+function clearPhoto() { identity.value.foto = '' }
+
+watch(() => [props.student, props.groupId], load, { immediate: true, deep: true })
+watch(identity, persist, { deep: true })
+
+defineExpose({ persist })
+</script>
+
+<template>
+  <div class="student-detail-view">
+    <v-alert v-if="error" type="error" variant="tonal" density="compact" class="student-detail-error">{{ error }}</v-alert>
+    <div class="student-detail-grid">
+      <v-card class="student-detail-card" variant="flat">
+        <v-card-item>
+          <v-card-title>Datos del alumno</v-card-title>
+          <v-card-subtitle>La información se guarda únicamente en este dispositivo.</v-card-subtitle>
+        </v-card-item>
+        <v-card-text class="student-detail-form">
+          <v-text-field v-model="identity.nombre" label="Nombre completo" placeholder="APELLIDO 1 APELLIDO 2, Nombre" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="comfortable" hide-details="auto" />
+          <v-text-field v-model="identity.nombreCorto" label="Nombre corto" placeholder="Nombre para el aula" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="comfortable" hide-details="auto" />
+          <div class="student-detail-code"><span>Código pseudónimo</span><code>{{ identity.id }}</code></div>
+          <div class="student-detail-flags">
+            <div class="student-detail-flags-title">Indicadores</div>
+            <v-switch v-model="identity.repetidor" label="Repetidor" color="primary" :disabled="!configurationMode" hide-details density="compact" />
+            <v-switch v-model="identity.pendiente" label="Pendiente" color="primary" :disabled="!configurationMode" hide-details density="compact" />
+            <v-switch v-model="identity.nuevo" label="Nuevo" color="primary" :disabled="!configurationMode" hide-details density="compact" />
+          </div>
+        </v-card-text>
+      </v-card>
+
+      <v-card class="student-detail-photo-card" variant="flat">
+        <div class="student-detail-photo" :class="{ 'student-detail-photo-empty': !identity.foto, 'student-detail-photo-dragging': photoDragActive }" @dragenter.prevent="startPhotoDrag" @dragover.prevent="startPhotoDrag" @dragleave.prevent="photoDragActive = false" @drop.prevent="dropPhoto">
+          <img v-if="identity.foto" :src="identity.foto" alt="Fotografía del alumno">
+          <v-icon v-else icon="mdi-account-school-outline" size="72" />
+        </div>
+        <v-card-actions class="student-detail-photo-actions">
+          <v-btn variant="tonal" color="primary" prepend-icon="mdi-camera-outline" :disabled="!configurationMode" @click="$refs.photoInput?.click()">Cambiar fotografía</v-btn>
+          <v-btn v-if="identity.foto" icon="mdi-delete-outline" variant="text" aria-label="Eliminar fotografía" :disabled="!configurationMode" @click="clearPhoto" />
+          <input ref="photoInput" type="file" accept="image/*" hidden @change="selectPhoto">
+        </v-card-actions>
+        <div class="student-detail-local-note"><v-icon icon="mdi-lock-outline" size="15" /> Fotografía local y cifrada</div>
+      </v-card>
+    </div>
+    <div v-if="isSaving" class="student-detail-saving">Guardando en este dispositivo…</div>
+  </div>
+</template>

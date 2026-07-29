@@ -6,6 +6,7 @@ const props = defineProps({
   itemKey: { type: Function, required: true },
   gap: { type: Number, default: 6 },
   minDesktopColumnWidth: { type: Number, default: 240 },
+  maxColumns: { type: Number, default: 0 },
 })
 
 const container = ref(null)
@@ -21,13 +22,15 @@ function columnCount(containerWidth) {
   const viewportHeight = window.innerHeight
   const isLandscape = viewportWidth > viewportHeight
 
+  let columns
   if (viewportWidth >= 1600) {
-    return Math.max(5, Math.floor((containerWidth + props.gap) / (props.minDesktopColumnWidth + props.gap)))
-  }
-  if (viewportWidth >= 1200) return 3
-  if (isLandscape && viewportHeight <= 600) return 2
-  if (viewportWidth >= 600) return isLandscape ? 3 : 2
-  return isLandscape ? 2 : 1
+    columns = Math.max(5, Math.floor((containerWidth + props.gap) / (props.minDesktopColumnWidth + props.gap)))
+  } else if (viewportWidth >= 1200) columns = 3
+  else if (isLandscape && viewportHeight <= 600) columns = 2
+  else if (viewportWidth >= 600) columns = isLandscape ? 3 : 2
+  else columns = isLandscape ? 2 : 1
+
+  return props.maxColumns > 0 ? Math.min(columns, props.maxColumns) : columns
 }
 
 function layoutItems() {

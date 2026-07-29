@@ -17,6 +17,7 @@ const props = defineProps({
   centerTitle: { type: String, default: '' },
   showCurriculum: { type: Boolean, default: true },
   showHint: { type: Boolean, default: true },
+  fitAlignment: { type: String, default: 'center' },
 })
 
 const emit = defineEmits(['add-node', 'rename-node', 'delete-node', 'reorder-nodes', 'group-nodes', 'select-subject', 'update-subject-node-ids', 'update-selected-node-ids'])
@@ -27,8 +28,8 @@ const centerX = width / 2
 const centerY = height / 2
 const centerRadius = 148
 const innerRadius = 178
-const outerRadius = 590
-const radialIncrementScale = 2
+const outerRadius = 650
+const radialIncrementScale = 2.35
 const fitMargin = 54
 const rootId = 'matematicas'
 const branchColors = ['#3569b8', '#078b57', '#f07818', '#d94432', '#6958c7', '#b43f86', '#168ca2']
@@ -170,12 +171,29 @@ function segmentColor(segment) {
   return lighten(branchColors[branchIndex % branchColors.length], Math.min(0.46, (segment.node.depth - 1) * 0.1))
 }
 
+function exerciseSelectionColor(segment) {
+  return darken(segmentColor(segment), 0.36)
+}
+
 function segmentMetrics(segment) {
   const angle = (segment.startAngle + segment.endAngle) / 2
   const radius = (segment.innerRadius + segment.outerRadius) / 2
   const angularLength = (segment.endAngle - segment.startAngle) * radius
   const radialLength = segment.outerRadius - segment.innerRadius
   return { angle, radius, angularLength, radialLength }
+}
+
+function radialLabelArea(segment) {
+  const hasCount = Number(props.exerciseCounts[segment.node.data.id]) > 0
+  const startRadius = segment.innerRadius + 18
+  const endRadius = segment.outerRadius - (hasCount ? 54 : 18)
+  const width = Math.max(30, endRadius - startRadius)
+  return {
+    startRadius,
+    endRadius,
+    width,
+    radius: startRadius + width / 2,
+  }
 }
 
 function labelFontSize(segment) {
@@ -260,9 +278,10 @@ function labelLines(segment) {
       Math.min(3, Math.max(1, Math.floor(radialLength / (fontSize * 1.15)))),
     )
   }
+  const radialArea = radialLabelArea(segment)
   return wrapLabel(
     segment.node.data.title,
-    Math.floor((radialLength - 12) / (fontSize * 0.55)),
+    Math.floor(radialArea.width / (fontSize * 0.55)),
     Math.min(3, Math.max(1, Math.floor(angularLength / (fontSize * 1.15)))),
   )
 }
@@ -316,7 +335,8 @@ const mathLabelEntries = computed(() => segments.value
 function mathLabelBox(entry) {
   const { angle, radius, angularLength, radialLength } = segmentMetrics(entry.segment)
   const degrees = angle * 180 / Math.PI
-  const width = Math.max(38, Math.min(340, (entry.angular ? angularLength : radialLength) - 14))
+  const radialArea = radialLabelArea(entry.segment)
+  const width = Math.max(38, Math.min(340, entry.angular ? angularLength - 14 : radialArea.width))
   const height = Math.max(28, Math.min(110, (entry.angular ? radialLength : angularLength) - 12))
   if (entry.angular) {
     const point = pointOnCircle(angle, radius)
@@ -324,7 +344,7 @@ function mathLabelBox(entry) {
     return { width, height, transform: `translate(${point.x}, ${point.y}) rotate(${rotation})` }
   }
   const rotation = degrees >= 180 ? 180 : 0
-  return { width, height, transform: `rotate(${degrees - 90}) translate(${radius}, 0) rotate(${rotation})` }
+  return { width, height, transform: `rotate(${degrees - 90}) translate(${radialArea.radius}, 0) rotate(${rotation})` }
 }
 
 const curvedLabelPaths = computed(() => labelEntries.value
@@ -337,10 +357,11 @@ const curvedLabelPaths = computed(() => labelEntries.value
     path: curvedPath(entry.segment, index, entry.lines.length),
   }))))
 
-function radialLabelTransform(segment) {
-  const { angle, radius } = segmentMetrics(segment)
+function radialLabelTransform(entry) {
+  const { segment } = entry
+  const { angle } = segmentMetrics(segment)
   const degrees = angle * 180 / Math.PI
-  return `rotate(${degrees - 90}) translate(${radius},0) rotate(${degrees >= 180 ? 180 : 0})`
+  return `rotate(${degrees - 90}) translate(${radialLabelArea(segment).radius},0) rotate(${degrees >= 180 ? 180 : 0})`
 }
 
 function radialLineOffset(entry, index) {
@@ -362,15 +383,18 @@ const editingSegment = computed(() => segments.value.find((segment) => segment.n
 function countTransform(entry) {
   const { segment, angular, fontSize } = entry
   const { angle, radius } = segmentMetrics(segment)
+  const degrees = angle * 180 / Math.PI
   if (angular) {
     const lineCount = entry.lines?.length || 1
     const lastLineRadius = radius + ((lineCount - 1) / 2) * fontSize * 1.15
-    const badgeRadius = Math.min(segment.outerRadius - 14, lastLineRadius + fontSize * 1.08 + 5)
+    // La segunda línea queda hacia el interior del arco: es la posición visual inferior del título.
+    const badgeRadius = Math.max(segment.innerRadius + 14, lastLineRadius - fontSize * 1.08 - 5)
     const point = pointOnCircle(angle, badgeRadius)
-    return `translate(${point.x}, ${point.y})`
+    return `translate(${point.x}, ${point.y}) rotate(${degrees})`
   }
-  const point = pointOnCircle(angle, Math.max(segment.innerRadius + 14, segment.outerRadius - 18))
-  return `translate(${point.x}, ${point.y})`
+  const point = pointOnCircle(angle, Math.max(segment.innerRadius + 22, segment.outerRadius - 27))
+  const radialRotation = degrees - 90 + (degrees >= 180 ? 180 : 0)
+  return `translate(${point.x}, ${point.y}) rotate(${radialRotation})`
 }
 
 const countEntries = computed(() => [
@@ -379,16 +403,15 @@ const countEntries = computed(() => [
 ].map((entry) => ({
   ...entry,
   count: Number(props.exerciseCounts[entry.segment.node.data.id]) || 0,
+  selected: (conceptSelectionMode.value && exerciseSelectedIdSet.value.has(entry.segment.node.data.id))
+    || (assignmentMode.value && subjectIdSet.value.has(entry.segment.node.data.id)),
   color: darken(segmentColor(entry.segment), 0.18),
-  strokeColor: darken(segmentColor(entry.segment), 0.3),
+  selectionColor: exerciseSelectionColor(entry.segment),
 })).filter((entry) => entry.count > 0))
 
 function toggleExerciseNode(nodeId) {
   if (!conceptSelectionMode.value) return
-  const next = new Set(props.selectedNodeIds)
-  if (next.has(nodeId)) next.delete(nodeId)
-  else next.add(nodeId)
-  emit('update-selected-node-ids', [...next])
+  emit('update-selected-node-ids', toggleHierarchySelection(props.nodes, props.selectedNodeIds, nodeId))
 }
 
 function toggleSegmentSelection(segment, event) {
@@ -575,9 +598,17 @@ function handleSegmentKey(segment, event) {
 function fitView() {
   if (!svgElement.value || !zoomBehavior) return
   const scale = fittedScale.value
-  const transform = zoomIdentity
-    .translate(centerX * (1 - scale), centerY * (1 - scale))
-    .scale(scale)
+  const mapRadius = fullMapRadius.value
+  const translation = props.fitAlignment === 'bottom-right'
+    ? {
+        x: width - fitMargin - scale * (centerX + mapRadius),
+        y: height - fitMargin - scale * (centerY + mapRadius),
+      }
+    : {
+        x: centerX * (1 - scale),
+        y: centerY * (1 - scale),
+      }
+  const transform = zoomIdentity.translate(translation.x, translation.y).scale(scale)
   select(svgElement.value).call(zoomBehavior.transform, transform)
 }
 
@@ -701,7 +732,13 @@ defineExpose({ fitView })
       </table>
     </div>
 
-    <svg ref="svgElement" :viewBox="`0 0 ${width} ${height}`" role="application" aria-label="Mapa radial de conceptos de Matemáticas">
+    <svg
+      ref="svgElement"
+      :viewBox="`0 0 ${width} ${height}`"
+      :preserveAspectRatio="fitAlignment === 'bottom-right' ? 'xMaxYMax meet' : 'xMidYMid meet'"
+      role="application"
+      aria-label="Mapa radial de conceptos de Matemáticas"
+    >
       <defs>
         <filter id="sunburst-shadow" x="-30%" y="-30%" width="160%" height="160%">
           <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#19375f" flood-opacity=".16" />
@@ -726,6 +763,7 @@ defineExpose({ fitView })
               :data-node-id="segment.node.data.id"
               :d="segmentPath(segment)"
               :fill="segmentColor(segment)"
+              :style="{ '--exercise-selected-color': exerciseSelectionColor(segment) }"
               role="button"
               tabindex="0"
               :aria-label="(configurationMode || conceptSelectionMode) ? `Seleccionar ${segment.node.data.title}` : (segment.node.children?.length ? `Ampliar ${segment.node.data.title}` : segment.node.data.title)"
@@ -745,7 +783,7 @@ defineExpose({ fitView })
               v-for="entry in curvedLabelPaths"
               :key="`text-${entry.id}`"
               class="sunburst-label sunburst-curved-label"
-              :class="{ 'sunburst-label-subject-excluded': assignmentMode && !subjectIdSet.has(entry.segment.node.data.id) }"
+              :class="{ 'sunburst-label-subject-excluded': assignmentMode && !subjectIdSet.has(entry.segment.node.data.id), 'sunburst-label-exercise-selected': conceptSelectionMode && exerciseSelectedIdSet.has(entry.segment.node.data.id) }"
               :font-size="entry.fontSize"
               @click.stop="handleLabelClick(entry.segment)"
             >
@@ -756,8 +794,8 @@ defineExpose({ fitView })
               v-for="entry in labelEntries.filter((item) => !item.angular)"
               :key="`radial-${entry.segment.node.data.id}`"
               class="sunburst-label sunburst-radial-label"
-              :class="{ 'sunburst-label-subject-excluded': assignmentMode && !subjectIdSet.has(entry.segment.node.data.id) }"
-              :transform="radialLabelTransform(entry.segment)"
+              :class="{ 'sunburst-label-subject-excluded': assignmentMode && !subjectIdSet.has(entry.segment.node.data.id), 'sunburst-label-exercise-selected': conceptSelectionMode && exerciseSelectedIdSet.has(entry.segment.node.data.id) }"
+              :transform="radialLabelTransform(entry)"
               :font-size="entry.fontSize"
               @click.stop="handleLabelClick(entry.segment)"
             >
@@ -781,7 +819,7 @@ defineExpose({ fitView })
               :height="mathLabelBox(entry).height"
               :transform="mathLabelBox(entry).transform"
               class="sunburst-math-label"
-              :class="{ 'sunburst-label-subject-excluded': assignmentMode && !subjectIdSet.has(entry.segment.node.data.id) }"
+              :class="{ 'sunburst-label-subject-excluded': assignmentMode && !subjectIdSet.has(entry.segment.node.data.id), 'sunburst-math-label-exercise-selected': conceptSelectionMode && exerciseSelectedIdSet.has(entry.segment.node.data.id) }"
               @click.stop="handleLabelClick(entry.segment)"
             >
               <div
@@ -794,9 +832,15 @@ defineExpose({ fitView })
           </g>
 
           <g class="sunburst-counts" aria-hidden="true">
-            <g v-for="entry in countEntries" :key="`count-${entry.segment.node.data.id}`" :transform="entry.transform" class="sunburst-count">
-              <circle r="12" :fill="entry.color" :stroke="entry.strokeColor" />
-              <text y="1">{{ entry.count }}</text>
+            <g
+              v-for="entry in countEntries"
+              :key="`count-${entry.segment.node.data.id}`"
+              :transform="entry.transform"
+              class="sunburst-count"
+              :class="{ 'sunburst-count-radial': !entry.angular, 'sunburst-count-selected': entry.selected }"
+            >
+              <circle :r="assignmentMode ? 15 : 11.5" :fill="entry.selected ? '#fff' : entry.color" />
+              <text y="1" :fill="entry.selected ? entry.selectionColor : '#fff'">{{ entry.count }}</text>
             </g>
           </g>
 
@@ -889,7 +933,7 @@ defineExpose({ fitView })
             @dblclick.stop.prevent="handleRootDoubleClick"
           >
             <circle class="sunburst-center" :r="centerRadius" />
-            <foreignObject :x="-122" :y="-55" width="244" height="110" class="sunburst-center-label">
+            <foreignObject :x="-122" :y="-68" width="244" height="136" class="sunburst-center-label">
               <div xmlns="http://www.w3.org/1999/xhtml" class="sunburst-center-label-inner">
                 <div class="sunburst-center-title-row">
                   <span class="sunburst-center-title">{{ centerDisplayTitle }}</span>
@@ -943,13 +987,14 @@ svg:active { cursor: grabbing; }
 .sunburst-segment:hover { opacity: .84; filter: brightness(1.04); }
 .math-concept-map-configuring .sunburst-segment { cursor: pointer; }
 .math-concept-map-selecting .sunburst-segment { cursor: pointer; }
-.math-concept-map-assigning .sunburst-segment-subject-excluded { opacity: .2; filter: saturate(.35) brightness(1.16); }
-.math-concept-map-assigning .sunburst-segment-subject-excluded:hover { opacity: .38; filter: saturate(.55) brightness(1.1); }
-.math-concept-map-assigning .sunburst-segment-subject-selected { opacity: 1; stroke: rgba(255,255,255,.92); stroke-width: 3; filter: brightness(1.08) drop-shadow(0 4px 5px rgba(24,55,92,.18)); }
+.math-concept-map-assigning .sunburst-segment-subject-excluded { opacity: 1; filter: none; }
+.math-concept-map-assigning .sunburst-segment-subject-excluded:hover { opacity: .84; filter: brightness(1.04); }
 .sunburst-segment-selected { opacity: 1 !important; stroke: #173b66; stroke-width: 5; filter: brightness(1.24) drop-shadow(0 6px 8px rgba(24,55,92,.34)) !important; }
-.sunburst-segment-exercise-selected { opacity: 1 !important; stroke: #fff; stroke-width: 5; filter: brightness(1.18) drop-shadow(0 5px 7px rgba(24,55,92,.3)) !important; }
+.math-concept-map-assigning .sunburst-segment-subject-selected,
+.sunburst-segment-exercise-selected { opacity: 1 !important; fill: var(--exercise-selected-color) !important; stroke: rgba(255,255,255,.92); stroke-width: 3; filter: saturate(1.08) drop-shadow(0 4px 6px rgba(25,55,95,.3)) !important; }
 .sunburst-label { fill: #fff; text-anchor: middle; dominant-baseline: central; font-weight: 720; letter-spacing: .01em; pointer-events: none; }
-.math-concept-map-assigning .sunburst-label-subject-excluded { opacity: .22; }
+.sunburst-label-exercise-selected { fill: #fff !important; }
+.math-concept-map-assigning .sunburst-label-subject-excluded { opacity: 1; }
 .sunburst-labels-editable .sunburst-label { cursor: text; pointer-events: auto; }
 .math-concept-map-assigning .sunburst-labels-editable .sunburst-label { cursor: pointer; }
 .sunburst-curved-label textPath { text-anchor: middle; }
@@ -958,6 +1003,7 @@ svg:active { cursor: grabbing; }
 .sunburst-math-labels-editable .sunburst-math-label { cursor: text; pointer-events: auto; }
 .math-concept-map-assigning .sunburst-math-labels-editable .sunburst-math-label { cursor: pointer; }
 .sunburst-math-label-inner { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; overflow: hidden; color: #fff; text-align: center; font-weight: 720; line-height: 1.08; overflow-wrap: anywhere; }
+.sunburst-math-label-exercise-selected .sunburst-math-label-inner { color: #fff; }
 .sunburst-math-label-inner :deep(.katex) { color: inherit; font-size: 1em; }
 .sunburst-math-label-inner :deep(.katex-display) { margin: 0; }
 .sunburst-edit-overlay { overflow: visible; }
@@ -966,18 +1012,21 @@ svg:active { cursor: grabbing; }
 .sunburst-root-node { cursor: default; outline: none; }
 .math-concept-map-configuring .sunburst-root-node { cursor: pointer; }
 .sunburst-root-selected .sunburst-center { fill: #eef5ff; stroke: #4d86ca; stroke-width: 10; }
-.math-concept-map-assigning .sunburst-root-subject-excluded { opacity: .5; }
-.math-concept-map-assigning .sunburst-root-subject-selected .sunburst-center { fill: #eef5ff; stroke: #4d86ca; stroke-width: 8; }
+.math-concept-map-assigning .sunburst-root-subject-excluded { opacity: 1; }
+.math-concept-map-assigning .sunburst-root-subject-selected .sunburst-center { fill: #e8f2ff; stroke: #4d86ca; stroke-width: 8; }
 .sunburst-center-label { overflow: visible; }
 .sunburst-center-label-inner { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; color: #19375f; text-align: center; }
-.sunburst-center-title-row { display: inline-flex; max-width: 100%; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px; }
-.sunburst-center-title { max-width: 100%; padding: 3px 0; font-size: 1.5rem; font-weight: 760; line-height: 1.08; overflow-wrap: anywhere; }
+.sunburst-center-title-row { display: inline-flex; max-width: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+.sunburst-center-title { max-width: 100%; padding: 3px 0; text-align: center; font-size: 1.5rem; font-weight: 760; line-height: 1.08; overflow-wrap: anywhere; }
 .sunburst-center-count { display: inline-grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border-radius: 50%; background: #19375f; color: #fff; font-size: .7rem; font-weight: 800; }
 .sunburst-root-exercise-selected .sunburst-center { fill: #e8f2ff; stroke: #4d86ca; stroke-width: 8; }
 .sunburst-counts { pointer-events: none; }
 .sunburst-count { filter: drop-shadow(0 1px 2px rgba(25,55,95,.14)); }
-.sunburst-count circle { stroke-width: 1; }
-.sunburst-count text { fill: #fff; text-anchor: middle; dominant-baseline: central; font-size: 10px; font-weight: 850; }
+.sunburst-count circle { stroke: none; }
+.sunburst-count text { text-anchor: middle; dominant-baseline: central; font-size: 10px; font-weight: 850; }
+.math-concept-map-assigning .sunburst-count text { font-size: 12px; }
+.math-concept-map-assigning .sunburst-center-count { width: 34px; height: 34px; flex-basis: 34px; font-size: .82rem; }
+.sunburst-count-selected { filter: drop-shadow(0 2px 3px rgba(25,55,95,.24)); }
 .sunburst-control { cursor: pointer; outline: none; }
 .sunburst-control:focus { outline: none; }
 .sunburst-control circle { fill: #fff; stroke: #86afe8; stroke-width: 2.5; transition: fill .16s ease, stroke .16s ease; }

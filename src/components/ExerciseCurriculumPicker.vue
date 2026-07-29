@@ -60,6 +60,7 @@ function updateCompetencial(competencial) {
       :exercise-counts="exerciseCounts"
       :center-title="selectedSubject?.title || 'Matemáticas'"
       :show-hint="false"
+      fit-alignment="bottom-right"
       @select-subject="updateSubject"
       @update-selected-node-ids="updateConcepts"
     />
@@ -93,7 +94,8 @@ function updateCompetencial(competencial) {
   position: absolute;
   z-index: 5;
   right: 16px;
-  bottom: 14px;
+  top: 14px;
+  bottom: auto;
   display: inline-flex;
   height: 36px;
   align-items: center;

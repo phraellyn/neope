@@ -1,0 +1,14 @@
+CREADOR DE DOCUMENTOS
+
+1. Se debe activar cuando seleccionamos la opción "Documentos" del navigation-drawer.
+
+2. En el panel central aparecerán las siguientes zonas:
+	a. Una columna con las plantillas disponibles (scrollable), en la parte superior habrá un buscador (sticky)
+	b. Definición de variables. En esta columna aparecerán una serie de campos que están extraídos del comando \logo de la plantilla elegida (te pongo como ejemplo el archivo exámenes.tex en esta carpeta). Cuando el usuario rellene estos campos se \se añadirán de alguna manera al archivo que se mande a compilación
+	c. La siguiente columna mostrará las siguientes pestañas:
+		c1. Ventana de código
+		c2. Selector de curso y conceptos (si uno de los campos que se han introducido es el curso aparecerá seleccionado automaticamente)
+		c3. Aquí aparecerán las tarjetas de los ejercicios que coinciden en curso conceptos y un cuadro superior para buscar por texto. Si el ejercicio tiene variantes aparecerá en su tarjeta una segunda barra superior con un conjunto de selectores numéricos redondos pequeños para cambiar de versión. En realidad creo que esa barra sería útil en cualquier otra visualización de los ejercicios individuales.
+	d. Vista previa. La compilación devuelta por LaTeX
+
+3. El layout de columnas tendrá la proporción: 2 | 6 | 4

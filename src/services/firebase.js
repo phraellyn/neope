@@ -1,6 +1,6 @@
 import { getApp, getApps, initializeApp } from 'firebase/app'
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check'
-import { getFirestore } from 'firebase/firestore'
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
 import { getFunctions } from 'firebase/functions'
 import { getStorage } from 'firebase/storage'
 
@@ -33,7 +33,18 @@ if (appCheckSiteKey) {
   })
 }
 
+// La cola persistente permite completar escrituras iniciadas al perder la conexión
+// o justo antes de cerrar la pestaña. En recargas HMR la instancia ya puede existir.
+let firestore
+try {
+  firestore = initializeFirestore(firebaseApp, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  })
+} catch {
+  firestore = getFirestore(firebaseApp)
+}
+
 // Servicios habilitados por ahora. Auth se añadirá cuando corresponda.
-export const db = getFirestore(firebaseApp)
+export const db = firestore
 export const storage = getStorage(firebaseApp)
 export const functions = getFunctions(firebaseApp, 'europe-west1')

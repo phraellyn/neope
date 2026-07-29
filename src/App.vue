@@ -2,7 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
-import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
+import { deleteObject, getDownloadURL, listAll, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
@@ -11,11 +11,18 @@ import { indentWithTab } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { latex } from 'codemirror-lang-latex'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
 import { db, functions, isAppCheckConfigured, storage } from './services/firebase'
 import MasonryGrid from './components/MasonryGrid.vue'
 import ExerciseCurriculumPicker from './components/ExerciseCurriculumPicker.vue'
 import MathConceptMap from './components/MathConceptMap.vue'
+import DocumentCreator from './components/DocumentCreator.vue'
+import Gradebook from './components/Gradebook.vue'
+import Classroom from './components/Classroom.vue'
+import StudentDetail from './components/StudentDetail.vue'
 import { mathSubjects, normalizeHierarchySelection } from './data/mathCurriculum'
+import { saveStudentIdentities } from './services/localStudentIdentity'
 
 const ExercisePdfPreview = defineAsyncComponent(() => import('./components/ExercisePdfPreview.vue'))
 
@@ -41,6 +48,16 @@ const scheduleConfigMode = ref(false)
 const scheduleDialog = ref(false)
 const selectedSlot = ref(null)
 const scheduleBlocks = ref([])
+const careerCourses = ref([])
+const selectedCareerGroupId = ref(null)
+const gradebookRef = ref(null)
+const gradebookDirty = ref(false)
+const gradebookValid = ref(true)
+const isSavingGradebook = ref(false)
+const gradebookConfigurationMode = ref(false)
+const groupView = ref('evaluation')
+const selectedStudentDetail = ref(null)
+const studentDetailConfigurationMode = ref(false)
 const scheduleForm = ref(emptyScheduleForm())
 const selectedSchedulePreset = ref(null)
 const isSavingSchedule = ref(false)
@@ -55,6 +72,9 @@ const exerciseSearchCurriculum = ref(emptyCurriculum())
 const exerciseSearchCurriculumDialog = ref(false)
 const isLoadingExercises = ref(false)
 const isSavingExercise = ref(false)
+const isDeletingExercise = ref(false)
+const exerciseDeleteDialog = ref(false)
+const exerciseDeleteError = ref('')
 const isGeneratingVariation = ref(false)
 const isGeneratingSolution = ref(false)
 const isDeletingSolution = ref(false)
@@ -85,12 +105,17 @@ const isLoadingTemplates = ref(false)
 const isSavingTemplate = ref(false)
 const templatesError = ref('')
 const templateEditorHost = ref(null)
+const templateFileInput = ref(null)
 let templateCodeEditor
 const compilerBaseUrl = '/compiler-api/v1'
 const selectedPreamble = ref('')
 const exercisePreviewTab = ref('statement')
 const compilerError = ref('')
 const isCompiling = ref(false)
+const documentCreatorRef = ref(null)
+const isCompilingDocument = ref(false)
+const documentSearchQuery = ref('')
+const documentWorkflow = ref({ mode: 'library', step: 0, canContinue: false, canGoBack: false, canSave: false, isSaving: false })
 const mathSubjectsById = new Map(mathSubjects.map((subject) => [subject.id, subject]))
 
 const monthLabel = computed(() => new Intl.DateTimeFormat('es-ES', { month: 'long', year: 'numeric' }).format(shownMonth.value))
@@ -169,6 +194,9 @@ const exerciseSearchFilterCount = computed(() => Number(Boolean(exerciseSearchCu
   + exerciseSearchCurriculum.value.conceptIds.length
   + Number(Boolean(exerciseSearchCurriculum.value.competencial)))
 const selectedExercise = computed(() => exercises.value.find((exercise) => exercise.id === selectedExerciseId.value) || null)
+const isEditingPersistedExercise = computed(() => Boolean(
+  exerciseEditor.value.id && exercises.value.some((exercise) => exercise.id === exerciseEditor.value.id),
+))
 const activeExerciseVersion = computed(() => selectedExerciseVersion.value === 0
   ? exerciseEditor.value
   : exerciseEditor.value.variaciones[selectedExerciseVersion.value - 1] || exerciseEditor.value)
@@ -342,7 +370,20 @@ function conceptTitlePath(conceptId) {
 }
 
 function conceptSelectionLabel(conceptIds = []) {
-  const paths = conceptIds.map(conceptTitlePath).filter((path) => path.length)
+  const nodesById = new Map(mathConceptNodes.value.map((node) => [node.id, node]))
+  const selectedIds = [...new Set(conceptIds)].filter((id) => nodesById.has(id) && id !== 'matematicas')
+  const isAncestorOf = (ancestorId, candidateId) => {
+    let current = nodesById.get(candidateId)
+    while (current?.parentId) {
+      if (current.parentId === ancestorId) return true
+      current = nodesById.get(current.parentId)
+    }
+    return false
+  }
+  // El selector guarda también los ascendientes para mantener la selección del mapa.
+  // Para la etiqueta solo deben aparecer los conceptos más específicos.
+  const terminalIds = selectedIds.filter((id) => !selectedIds.some((otherId) => otherId !== id && isAncestorOf(id, otherId)))
+  const paths = terminalIds.map(conceptTitlePath).filter((path) => path.length)
   if (!paths.length) return ''
   if (paths.length === 1) return paths[0].join(' · ')
   let commonLength = 0
@@ -369,6 +410,37 @@ function exerciseSubjectLabel(exercise) {
 function exerciseConceptLabel(exercise) {
   const concepts = conceptSelectionLabel(normalizeCurriculum(exercise?.curriculum).conceptIds)
   return concepts || 'Sin conceptos'
+}
+
+const conceptMathDelimiterPattern = /(\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\\\(([\s\S]+?)\\\)|\\\[([\s\S]+?)\\\])/g
+
+function escapeConceptHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function exerciseConceptRichLabel(exercise) {
+  const source = exerciseConceptLabel(exercise)
+  let cursor = 0
+  let rendered = ''
+  conceptMathDelimiterPattern.lastIndex = 0
+  for (const match of source.matchAll(conceptMathDelimiterPattern)) {
+    rendered += escapeConceptHtml(source.slice(cursor, match.index))
+    const expression = match[2] ?? match[3] ?? match[4] ?? match[5] ?? ''
+    rendered += katex.renderToString(expression, {
+      displayMode: false,
+      throwOnError: false,
+      strict: 'ignore',
+      trust: false,
+      output: 'html',
+    })
+    cursor = match.index + match[0].length
+  }
+  return rendered + escapeConceptHtml(source.slice(cursor))
 }
 
 async function syncExerciseConceptIndex(exerciseId, previousConceptIds = [], nextConceptIds = [], existingBatch = null) {
@@ -403,10 +475,24 @@ function emptyTemplate() {
   return { id: null, nombre: '', descripcion: '', codigo: '', archivo: '' }
 }
 
+const documentTemplateMetadataGuide = `% neope:document {"name":"Examen","command":"logo","optionalCommand":"optativos"}
+% neope:field {"key":"subject","label":"Asignatura","argument":1,"type":"subject","placeholder":"Matemáticas II"}
+% neope:field {"key":"title","label":"Título","argument":2,"type":"text","placeholder":"Recuperación -- 2ª Evaluación"}
+% neope:field {"key":"date","label":"Fecha","argument":3,"type":"text","placeholder":"09 / 03 / 26"}
+% neope:field {"key":"course","label":"Curso y grupo","argument":4,"type":"course","placeholder":"2ºBTO A"}
+
+`
+
 function preambleFileName(name) {
   const normalized = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'plantilla'
   return `${normalized}.tex`
+}
+
+function templateCodeForCompiler(code = '') {
+  return code
+    .replace(/\\includegraphics\*?\s*(?:\[[^\]]*\]\s*)?\{[^{}]*\}/g, '')
+    .replace(/\\epsfig\s*\{[^{}]*\}/g, '')
 }
 
 function exercisePreambleName() {
@@ -805,28 +891,32 @@ async function loadTemplates() {
   templatesError.value = ''
   try {
     const metadataSnapshot = await getDocs(collection(db, 'plantillas'))
-    const savedTemplates = metadataSnapshot.docs
-      .map((template) => ({ id: template.id, ...template.data() }))
-    const metadataByFile = new Map(savedTemplates.map((template) => [template.archivo || preambleFileName(template.nombre), template]))
-    const preamblesResponse = await compilerRequest('/preambles')
-    const { preambles = [] } = await preamblesResponse.json()
-    templates.value = await Promise.all(preambles.map(async (archivo) => {
-      const contentResponse = await compilerRequest(`/preambles/${encodeURIComponent(archivo)}`)
-      const { content } = await contentResponse.json()
-      const metadata = metadataByFile.get(archivo)
+    templates.value = metadataSnapshot.docs.map((template) => {
+      const data = template.data()
       return {
-        id: metadata?.id || archivo,
-        archivo,
-        nombre: metadata?.nombre || archivo.replace(/\.tex$/i, ''),
-        descripcion: metadata?.descripcion || '',
-        codigo: content,
+        id: template.id,
+        archivo: data.archivo || preambleFileName(data.nombre || 'plantilla'),
+        nombre: data.nombre || 'Plantilla',
+        descripcion: data.descripcion || '',
+        codigo: data.codigo || '',
       }
-    }))
+    })
     templates.value.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
     if (!selectedPreamble.value && templates.value.length) selectedPreamble.value = templates.value[0].archivo
+
+    try {
+      await Promise.all(templates.value.map((template) => compilerRequest('/preambles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: template.archivo, content: templateCodeForCompiler(template.codigo) }),
+      })))
+    } catch (error) {
+      templatesError.value = 'Las plantillas se han cargado desde Firestore, pero no se han podido sincronizar todas con el servidor LaTeX.'
+      console.error('Error al sincronizar plantillas con el compilador:', error)
+    }
   } catch (error) {
-    templatesError.value = 'No se han podido cargar los preámbulos del compilador remoto.'
-    console.error('Error al cargar plantillas remotas:', error)
+    templatesError.value = 'No se han podido cargar las plantillas de Firestore.'
+    console.error('Error al cargar plantillas:', error)
   } finally {
     isLoadingTemplates.value = false
   }
@@ -860,7 +950,13 @@ function mountLatexEditor() {
           latexHighlighting,
           latex({ enableAutocomplete: false, autoCloseBrackets: true, autoCloseTags: true, enableTooltips: true }),
           autocompletion({ override: [latexCompletion] }),
-          keymap.of([indentWithTab]),
+          keymap.of([
+            indentWithTab,
+            { key: 'Mod-s', run: () => { refreshLatexRender(); return true } },
+            { key: 'Ctrl-s', run: () => { refreshLatexRender(); return true } },
+            { key: 'Mod-f', run: () => { formatExerciseLatex(); return true } },
+            { key: 'Ctrl-f', run: () => { formatExerciseLatex(); return true } },
+          ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               activeExerciseVersion.value.enunciado = update.state.doc.toString()
@@ -900,9 +996,41 @@ function mountTemplateEditor() {
 
 function openNewTemplate() {
   selectedTemplateId.value = null
-  templateEditor.value = emptyTemplate()
+  templateEditor.value = { ...emptyTemplate(), codigo: documentTemplateMetadataGuide }
   isEditingTemplate.value = true
   mountTemplateEditor()
+}
+
+function chooseTemplateFile() {
+  if (!templateFileInput.value) return
+  templateFileInput.value.value = ''
+  templateFileInput.value.click()
+}
+
+async function importTemplateFile(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  if (!/\.tex$/i.test(file.name)) {
+    templatesError.value = 'Solo se pueden importar archivos LaTeX con extensión .tex.'
+    return
+  }
+  try {
+    const code = await file.text()
+    selectedTemplateId.value = null
+    templateEditor.value = {
+      id: null,
+      nombre: file.name.replace(/\.tex$/i, ''),
+      descripcion: '',
+      codigo: code,
+      archivo: file.name,
+    }
+    isEditingTemplate.value = true
+    templatesError.value = ''
+    mountTemplateEditor()
+  } catch (error) {
+    templatesError.value = 'No se ha podido leer el archivo seleccionado.'
+    console.error('Error al importar plantilla:', error)
+  }
 }
 
 function selectTemplate(template) {
@@ -928,11 +1056,6 @@ async function saveTemplate() {
       descripcion: templateEditor.value.descripcion.trim(),
       codigo: templateEditor.value.codigo,
     }
-    await compilerRequest('/preambles', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: archivo, content: data.codigo }),
-    })
     await setDoc(reference, data)
     const index = templates.value.findIndex((template) => template.id === reference.id)
     if (index === -1) templates.value.push(data)
@@ -940,8 +1063,18 @@ async function saveTemplate() {
     templates.value.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
     selectedTemplateId.value = reference.id
     templateEditor.value = { ...data }
+    try {
+      await compilerRequest('/preambles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: archivo, content: templateCodeForCompiler(data.codigo) }),
+      })
+    } catch (error) {
+      templatesError.value = 'La plantilla se ha guardado en Firestore, pero no se ha podido sincronizar con el servidor LaTeX. Se reintentará al volver a cargar la aplicación.'
+      console.error('Error al sincronizar plantilla:', error)
+    }
   } catch (error) {
-    templatesError.value = 'No se ha podido guardar el preámbulo en el compilador remoto.'
+    templatesError.value = 'No se ha podido guardar la plantilla en Firestore.'
     console.error('Error al guardar plantilla:', error)
   } finally {
     isSavingTemplate.value = false
@@ -953,13 +1086,19 @@ async function removeTemplate() {
   isSavingTemplate.value = true
   templatesError.value = ''
   try {
-    await compilerRequest(`/preambles/${encodeURIComponent(selectedTemplate.value.archivo)}`, { method: 'DELETE' })
-    await deleteDoc(doc(db, 'plantillas', selectedTemplate.value.id))
-    templates.value = templates.value.filter((template) => template.id !== selectedTemplate.value.id)
+    const templateToDelete = { ...selectedTemplate.value }
+    await deleteDoc(doc(db, 'plantillas', templateToDelete.id))
+    templates.value = templates.value.filter((template) => template.id !== templateToDelete.id)
     selectedTemplateId.value = null
     templateEditor.value = emptyTemplate()
     isEditingTemplate.value = false
     destroyTemplateEditor()
+    try {
+      await compilerRequest(`/preambles/${encodeURIComponent(templateToDelete.archivo)}`, { method: 'DELETE' })
+    } catch (error) {
+      templatesError.value = 'La plantilla se ha eliminado de Firestore, pero no se ha podido retirar del servidor LaTeX.'
+      console.error('Error al eliminar la plantilla del compilador:', error)
+    }
   } catch (error) {
     templatesError.value = 'No se ha podido eliminar la plantilla de Firestore.'
     console.error('Error al eliminar plantilla:', error)
@@ -983,6 +1122,7 @@ function openNewExercise() {
 
 function editExercise(exercise = selectedExercise.value) {
   if (!exercise) return
+  selectedExerciseId.value = exercise.id
   exerciseEditor.value = normalizeExercise(exercise)
   exerciseEditorTab.value = 'code'
   sessionUploadedAttachmentPaths.clear()
@@ -1007,6 +1147,126 @@ async function cancelExerciseEdit() {
 function selectExerciseEditorTab(tab) {
   exerciseEditorTab.value = tab
   if (tab === 'code') nextTick(() => latexCodeEditor?.requestMeasure())
+}
+
+const latexCompactEnvironments = new Set([
+  'align', 'align*', 'aligned', 'alignedat', 'array', 'bmatrix', 'bmatrix*',
+  'cases', 'det', 'detp', 'gather', 'gather*', 'gathered', 'matrix', 'matrix*',
+  'matriz', 'matrizb', 'matrizp', 'matrizv', 'pmatrix', 'pmatrix*', 'smallmatrix',
+  'split', 'Vmatrix', 'vmatrix',
+])
+const latexVerbatimEnvironments = new Set(['Verbatim', 'lstlisting', 'minted', 'verbatim'])
+
+function latexEnvironmentTokens(line) {
+  return [...line.matchAll(/\\(begin|end)\s*\{([^{}]+)\}/g)].map((match) => ({
+    type: match[1],
+    name: match[2].trim(),
+  }))
+}
+
+function removeLatexEnvironment(stack, name) {
+  const index = stack.lastIndexOf(name)
+  if (index >= 0) stack.splice(index, 1)
+}
+
+function compactLatexBlockIsOpen(stack) {
+  return stack.some((name) => latexCompactEnvironments.has(name))
+}
+
+function prettyPrintLatex(source) {
+  const indent = '    '
+  const stack = []
+  const output = []
+  let pendingBlankLine = false
+  let verbatimEnvironment = null
+
+  for (const originalLine of String(source || '').replace(/\r\n?/g, '\n').split('\n')) {
+    const trimmed = originalLine.trim()
+
+    if (verbatimEnvironment) {
+      const closesVerbatim = latexEnvironmentTokens(originalLine)
+        .some(({ type, name }) => type === 'end' && name === verbatimEnvironment)
+      if (!closesVerbatim) {
+        output.push(originalLine)
+        continue
+      }
+      removeLatexEnvironment(stack, verbatimEnvironment)
+      output.push(`${indent.repeat(stack.length)}${trimmed}`)
+      verbatimEnvironment = null
+      continue
+    }
+
+    if (!trimmed) {
+      if (output.length && !compactLatexBlockIsOpen(stack)) pendingBlankLine = true
+      continue
+    }
+
+    const tokens = latexEnvironmentTokens(trimmed)
+    const leadingEnds = []
+    let remainingPrefix = trimmed
+    while (true) {
+      const match = remainingPrefix.match(/^\\end\s*\{([^{}]+)\}\s*/)
+      if (!match) break
+      const name = match[1].trim()
+      leadingEnds.push(name)
+      removeLatexEnvironment(stack, name)
+      remainingPrefix = remainingPrefix.slice(match[0].length)
+    }
+
+    if (pendingBlankLine) {
+      const closesCompactBlock = leadingEnds.some((name) => latexCompactEnvironments.has(name))
+      if (!closesCompactBlock && output.at(-1) !== '') output.push('')
+      pendingBlankLine = false
+    }
+
+    output.push(`${indent.repeat(stack.length)}${trimmed}`)
+
+    let skippedLeadingEnds = 0
+    for (const token of tokens) {
+      if (token.type === 'end' && skippedLeadingEnds < leadingEnds.length) {
+        skippedLeadingEnds += 1
+        continue
+      }
+      if (token.type === 'begin') {
+        stack.push(token.name)
+        if (latexVerbatimEnvironments.has(token.name)) verbatimEnvironment = token.name
+      } else {
+        removeLatexEnvironment(stack, token.name)
+      }
+    }
+  }
+
+  return output.join('\n')
+}
+
+function formattedCursorOffset(text, lineNumber, column) {
+  const lines = text.split('\n')
+  const targetLine = Math.min(Math.max(lineNumber, 1), lines.length)
+  const lineStart = lines.slice(0, targetLine - 1).reduce((total, line) => total + line.length + 1, 0)
+  return lineStart + Math.min(column, lines[targetLine - 1].length)
+}
+
+function formatExerciseLatex() {
+  if (!latexCodeEditor) return
+  const source = latexCodeEditor.state.doc.toString()
+  const formatted = prettyPrintLatex(source)
+  if (formatted === source) {
+    latexCodeEditor.focus()
+    return
+  }
+
+  const selection = latexCodeEditor.state.selection.main
+  const anchorLine = latexCodeEditor.state.doc.lineAt(selection.anchor)
+  const headLine = latexCodeEditor.state.doc.lineAt(selection.head)
+  latexCodeEditor.dispatch({
+    changes: { from: 0, to: source.length, insert: formatted },
+    selection: {
+      anchor: formattedCursorOffset(formatted, anchorLine.number, selection.anchor - anchorLine.from),
+      head: formattedCursorOffset(formatted, headLine.number, selection.head - headLine.from),
+    },
+    scrollIntoView: true,
+  })
+  latexCodeEditor.focus()
 }
 
 function ensureExerciseId() {
@@ -1381,6 +1641,70 @@ async function saveExercise() {
   }
 }
 
+function requestDeleteExercise() {
+  if (!isEditingPersistedExercise.value || isDeletingExercise.value) return
+  exerciseDeleteError.value = ''
+  exerciseDeleteDialog.value = true
+}
+
+async function exerciseStorageObjects(reference) {
+  const listing = await listAll(reference)
+  const nestedObjects = await Promise.all(listing.prefixes.map((prefix) => exerciseStorageObjects(prefix)))
+  return [...listing.items, ...nestedObjects.flat()]
+}
+
+async function deleteExerciseStorage(exerciseId) {
+  const rootReference = storageRef(storage, `ejercicios/${exerciseId}`)
+  const objects = await exerciseStorageObjects(rootReference)
+  await Promise.all(objects.map(async (reference) => {
+    try {
+      await deleteObject(reference)
+    } catch (error) {
+      if (error?.code !== 'storage/object-not-found') throw error
+    }
+  }))
+}
+
+async function deleteExercise() {
+  const exerciseId = exerciseEditor.value.id
+  if (!exerciseId || isDeletingExercise.value) return
+
+  isDeletingExercise.value = true
+  exerciseDeleteError.value = ''
+  exercisesError.value = ''
+  try {
+    const indexedConcepts = await getDocs(collection(db, 'especialidades', 'Matemáticas', 'conceptos'))
+    const conceptIds = new Set([
+      ...mathConceptNodes.value.map((node) => node.id),
+      ...indexedConcepts.docs.map((concept) => concept.id),
+    ])
+    const batch = writeBatch(db)
+    batch.delete(doc(db, 'ejercicios', exerciseId))
+    conceptIds.forEach((conceptId) => {
+      batch.delete(doc(db, 'especialidades', 'Matemáticas', 'conceptos', conceptId, 'ejercicios', exerciseId))
+    })
+    await batch.commit()
+    await deleteExerciseStorage(exerciseId)
+
+    destroyLatexEditor()
+    clearExercisePreviews()
+    sessionUploadedAttachmentPaths.clear()
+    pendingDeletedAttachments.splice(0)
+    exercises.value = exercises.value.filter((exercise) => exercise.id !== exerciseId)
+    selectedExerciseId.value = null
+    selectedExerciseVersion.value = 0
+    exerciseEditor.value = emptyExercise()
+    exercisePreviewTab.value = 'statement'
+    exerciseView.value = 'search'
+    exerciseDeleteDialog.value = false
+  } catch (error) {
+    exerciseDeleteError.value = error.message || 'No se ha podido eliminar completamente el ejercicio.'
+    console.error('Error al eliminar el ejercicio:', error)
+  } finally {
+    isDeletingExercise.value = false
+  }
+}
+
 function createGroupId() {
   return globalThis.crypto?.randomUUID?.() || `group-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
@@ -1391,8 +1715,55 @@ function currentAcademicYear() {
   return `${startYear}-${startYear + 1}`
 }
 
-function serializeSchedule(blocks) {
-  const coursesByYear = new Map()
+function normalizeCareerCourses(courses = []) {
+  return courses.map((course) => ({
+    ...course,
+    grupos: (course.grupos || []).map((group) => {
+      const legacyGroupId = [group.nombre, group.asignatura, group.aula, group.color].join('|')
+      return {
+        ...group,
+        id: group.id || legacyGroupId,
+        alumnos: Array.isArray(group.alumnos)
+          ? group.alumnos.map((student) => ({ id: typeof student === 'string' ? student : student.id })).filter((student) => student.id)
+          : [],
+        evaluaciones: {
+          estructura: Array.isArray(group.evaluaciones?.estructura)
+            ? group.evaluaciones.estructura
+            : (group.evaluaciones?.columnas || []).map((column) => ({
+                type: 'item',
+                id: column.id,
+                nombre: column.title || column.nombre || 'Resultado',
+                nombreCorto: column.nombreCorto || column.title || column.nombre || 'Resultado',
+              })),
+          resultados: group.evaluaciones?.resultados && typeof group.evaluaciones.resultados === 'object'
+            ? group.evaluaciones.resultados
+            : {},
+        },
+      }
+    }),
+  }))
+}
+
+async function migrateLegacyStudentIdentities(courses = []) {
+  for (const course of courses) {
+    for (const group of course.grupos || []) {
+      const groupId = group.id || [group.nombre, group.asignatura, group.aula, group.color].join('|')
+      const identities = (group.alumnos || [])
+        .filter((student) => student && typeof student === 'object' && student.id && student.nombre)
+        .map((student) => ({ ...student }))
+      await saveStudentIdentities(groupId, identities)
+    }
+  }
+}
+
+function serializeSchedule(blocks, existingCourses = careerCourses.value) {
+  const coursesByYear = new Map(normalizeCareerCourses(existingCourses).map((course) => [
+    course.year,
+    new Map((course.grupos || []).map((group) => [group.id, {
+      ...group,
+      horario: course.year === currentAcademicYear() ? [] : (group.horario || []),
+    }])),
+  ]))
 
   blocks.forEach((block) => {
     const year = currentAcademicYear()
@@ -1407,9 +1778,16 @@ function serializeSchedule(blocks) {
         aula: block.classroom,
         color: block.color,
         horario: [],
+        alumnos: [],
+        evaluaciones: { estructura: [], resultados: {} },
       })
     }
-    groups.get(groupKey).horario.push({ dia: block.dayIndex, tramo: block.moduleIndex })
+    const group = groups.get(groupKey)
+    group.nombre = block.course
+    group.asignatura = block.subject
+    group.aula = block.classroom
+    group.color = block.color
+    group.horario.push({ dia: block.dayIndex, tramo: block.moduleIndex })
   })
 
   return {
@@ -1446,7 +1824,18 @@ async function loadTeacherSchedule() {
   try {
     const snapshot = await getDoc(teacherDocument)
     if (snapshot.exists()) {
-      scheduleBlocks.value = deserializeSchedule(snapshot.data())
+      const storedCourses = snapshot.data()?.carrera?.cursos || []
+      await migrateLegacyStudentIdentities(storedCourses)
+      careerCourses.value = normalizeCareerCourses(storedCourses)
+      scheduleBlocks.value = deserializeSchedule({ carrera: { cursos: careerCourses.value } })
+      const needsGradebookMigration = storedCourses.some((course) => (course.grupos || []).some((group) => (
+        !Array.isArray(group.alumnos)
+        || !Array.isArray(group.evaluaciones?.estructura)
+        || group.alumnos.some((student) => !student || typeof student !== 'object' || Object.keys(student).some((key) => key !== 'id'))
+      )))
+      if (needsGradebookMigration) {
+        await setDoc(teacherDocument, { carrera: { cursos: careerCourses.value } }, { merge: true })
+      }
     } else {
       await setDoc(teacherDocument, { carrera: { cursos: [] } })
     }
@@ -1509,7 +1898,9 @@ async function saveScheduleBlock() {
   isSavingSchedule.value = true
   firestoreError.value = ''
   try {
-    await setDoc(teacherDocument, serializeSchedule(scheduleBlocks.value))
+    const serialized = serializeSchedule(scheduleBlocks.value)
+    await setDoc(teacherDocument, serialized, { merge: true })
+    careerCourses.value = serialized.carrera.cursos
     scheduleDialog.value = false
   } catch (error) {
     scheduleBlocks.value = previousBlocks
@@ -1528,7 +1919,9 @@ async function clearScheduleBlock() {
   isSavingSchedule.value = true
   firestoreError.value = ''
   try {
-    await setDoc(teacherDocument, serializeSchedule(scheduleBlocks.value))
+    const serialized = serializeSchedule(scheduleBlocks.value)
+    await setDoc(teacherDocument, serialized, { merge: true })
+    careerCourses.value = serialized.carrera.cursos
     scheduleDialog.value = false
   } catch (error) {
     scheduleBlocks.value = previousBlocks
@@ -1590,24 +1983,189 @@ const navigation = [
 ]
 
 const groups = computed(() => {
-  const completeGroups = new Map()
-  scheduleBlocks.value
-    .filter((block) => block.course && block.subject)
-    .forEach((block) => {
-      const key = `${block.course}|${block.subject}`
-      if (!completeGroups.has(key)) {
-        completeGroups.set(key, {
-          title: block.course,
-          subtitle: block.subject,
-          icon: 'mdi-function-variant',
-        })
-      }
-    })
-  return [...completeGroups.values()]
+  return careerCourses.value.flatMap((course) => (course.grupos || [])
+    .filter((group) => Boolean(group.asignatura?.trim()))
+    .map((group) => ({
+      ...group,
+      academicYear: course.year,
+      title: group.nombre,
+      subtitle: group.asignatura,
+      icon: 'mdi-function-variant',
+    })))
 })
+
+const selectedCareerGroup = computed(() => groups.value.find((group) => group.id === selectedCareerGroupId.value) || null)
+const existingStudentIds = computed(() => careerCourses.value.flatMap((course) => (
+  (course.grupos || []).flatMap((group) => (group.alumnos || []).map((student) => student.id).filter(Boolean))
+)))
+
+let gradebookSavePromise = null
+
+async function openCareerGroup(group) {
+  if (active.value === 'Grupo' && selectedCareerGroupId.value !== group.id && gradebookDirty.value) {
+    const saved = await saveGradebook({ includeIdentities: gradebookConfigurationMode.value })
+    if (!saved) return
+  }
+  selectedCareerGroupId.value = group.id
+  gradebookDirty.value = false
+  gradebookValid.value = true
+  gradebookConfigurationMode.value = false
+  selectedStudentDetail.value = null
+  studentDetailConfigurationMode.value = false
+  groupView.value = 'evaluation'
+  active.value = 'Grupo'
+}
+
+async function setGroupView(view) {
+  if (groupView.value === view) return
+  if (gradebookDirty.value) {
+    const saved = await saveGradebook({ includeIdentities: gradebookConfigurationMode.value })
+    if (!saved) return
+  }
+  groupView.value = view
+  gradebookDirty.value = false
+}
+
+function openStudentDetail(student) {
+  if (gradebookConfigurationMode.value || !student?.id) return
+  selectedStudentDetail.value = { ...student }
+  studentDetailConfigurationMode.value = false
+}
+
+function closeStudentDetail() {
+  selectedStudentDetail.value = null
+  studentDetailConfigurationMode.value = false
+}
+
+function toggleStudentDetailConfiguration() {
+  studentDetailConfigurationMode.value = !studentDetailConfigurationMode.value
+}
+
+function addGradebookStudent() {
+  gradebookRef.value?.addStudent?.()
+}
+
+function addGradebookColumn() {
+  gradebookRef.value?.openItemDialog?.()
+}
+
+function fitClassroom() {
+  gradebookRef.value?.fitRoom?.()
+}
+
+function openClassroomLayoutDialog() {
+  gradebookRef.value?.openLayoutDialog?.()
+}
+
+async function saveGradebook({ includeIdentities = false } = {}) {
+  if (!gradebookValid.value) {
+    firestoreError.value = 'Completa correctamente los nombres antes de salir de la configuración.'
+    return false
+  }
+  if (gradebookSavePromise) await gradebookSavePromise
+  if (!gradebookDirty.value) return true
+
+  const saveTask = (async () => {
+    isSavingGradebook.value = true
+    firestoreError.value = ''
+    const savedRevision = gradebookRef.value?.getRevision?.()
+    try {
+      if (includeIdentities) await gradebookRef.value?.persistLocalIdentities?.()
+      const updatedGroup = gradebookRef.value?.getGroup?.()
+      if (!updatedGroup) return false
+      const updatedCourses = careerCourses.value.map((course) => ({
+        ...course,
+        grupos: (course.grupos || []).map((group) => (group.id === updatedGroup.id ? updatedGroup : group)),
+      }))
+      await setDoc(teacherDocument, { carrera: { cursos: updatedCourses } }, { merge: true })
+      careerCourses.value = updatedCourses
+      if (includeIdentities) {
+        try {
+          await gradebookRef.value?.finalizeIdentityDeletions?.()
+        } catch (error) {
+          firestoreError.value = 'El cuaderno se ha guardado, pero no se han podido limpiar algunos datos identificativos locales.'
+          console.error('Error al limpiar identidades locales:', error)
+        }
+      }
+      gradebookRef.value?.markSaved?.(savedRevision)
+      return true
+    } catch (error) {
+      firestoreError.value = 'No se ha podido guardar el cuaderno del grupo.'
+      console.error('Error al guardar el cuaderno del grupo:', error)
+      return false
+    } finally {
+      isSavingGradebook.value = false
+    }
+  })()
+
+  gradebookSavePromise = saveTask
+  const result = await saveTask
+  if (gradebookSavePromise === saveTask) gradebookSavePromise = null
+  return result
+}
+
+async function toggleGradebookConfiguration() {
+  if (!gradebookConfigurationMode.value) {
+    gradebookConfigurationMode.value = true
+    return
+  }
+  const saved = await saveGradebook({ includeIdentities: true })
+  if (saved) gradebookConfigurationMode.value = false
+}
+
+async function setActiveView(view) {
+  if (active.value === 'Grupo' && view !== 'Grupo' && gradebookDirty.value) {
+    const saved = await saveGradebook({ includeIdentities: gradebookConfigurationMode.value })
+    if (!saved) return
+  }
+  if (view !== 'Grupo') gradebookConfigurationMode.value = false
+  if (view !== 'Grupo') {
+    selectedStudentDetail.value = null
+    studentDetailConfigurationMode.value = false
+  }
+  active.value = view
+}
+
+function autosaveGradebook(options = {}) {
+  void saveGradebook(options)
+}
+
+function flushGradebookOnPageHide() {
+  if (active.value === 'Grupo' && gradebookDirty.value) {
+    void saveGradebook({ includeIdentities: gradebookConfigurationMode.value })
+  }
+}
+
+function flushGradebookWhenHidden() {
+  if (document.visibilityState === 'hidden') flushGradebookOnPageHide()
+}
 
 function fitMathConceptView() {
   nextTick(() => mathConceptViewRef.value?.fitView?.())
+}
+
+function compileActiveDocument() {
+  documentCreatorRef.value?.compile?.()
+}
+
+function newActiveDocument() {
+  documentCreatorRef.value?.newDocument?.()
+}
+
+function closeActiveDocument() {
+  documentCreatorRef.value?.backToLibrary?.()
+}
+
+function previousDocumentStep() {
+  documentCreatorRef.value?.previous?.()
+}
+
+function nextDocumentStep() {
+  documentCreatorRef.value?.next?.()
+}
+
+function saveActiveDocument() {
+  documentCreatorRef.value?.save?.()
 }
 
 let currentTimeInterval
@@ -1617,10 +2175,15 @@ onMounted(() => {
   loadMathConcepts()
   loadTemplates()
   currentTimeInterval = window.setInterval(() => { currentTime.value = new Date() }, 30_000)
+  window.addEventListener('pagehide', flushGradebookOnPageHide)
+  document.addEventListener('visibilitychange', flushGradebookWhenHidden)
 })
 
 onBeforeUnmount(() => {
   window.clearInterval(currentTimeInterval)
+  window.removeEventListener('pagehide', flushGradebookOnPageHide)
+  document.removeEventListener('visibilitychange', flushGradebookWhenHidden)
+  flushGradebookOnPageHide()
   destroyLatexEditor()
   destroyTemplateEditor()
   clearExercisePreviews()
@@ -1649,7 +2212,7 @@ onBeforeUnmount(() => {
           :title="item.title"
           :active="active === item.title"
           color="primary"
-          @click="active = item.title"
+          @click="setActiveView(item.title)"
         />
       </v-list>
 
@@ -1659,13 +2222,13 @@ onBeforeUnmount(() => {
         <v-list-subheader>GRUPOS</v-list-subheader>
         <v-list-item
           v-for="group in groups"
-          :key="`${group.title}-${group.subtitle}`"
+          :key="group.id"
           :prepend-icon="group.icon"
           :title="group.title"
           :subtitle="group.subtitle"
-          :active="active === group.title"
+          :active="active === 'Grupo' && selectedCareerGroupId === group.id"
           color="primary"
-          @click="active = group.title"
+          @click="openCareerGroup(group)"
         >
           <template v-if="group.tutor" #append>
             <v-tooltip text="Mi tutoría" location="end">
@@ -1760,7 +2323,22 @@ onBeforeUnmount(() => {
           </template>
         </v-select>
         <v-spacer />
-        <v-btn color="primary" variant="flat" prepend-icon="mdi-content-save-outline" class="app-toolbar-primary-action mr-3" :disabled="!exerciseEditor.enunciado.trim()" :loading="isSavingExercise" @click="saveExercise">Guardar</v-btn>
+        <v-tooltip v-if="isEditingPersistedExercise" text="Eliminar ejercicio" location="bottom">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon="mdi-delete-outline"
+              rounded="circle"
+              color="error"
+              variant="tonal"
+              class="mr-2"
+              aria-label="Eliminar ejercicio"
+              :disabled="isSavingExercise || isGeneratingVariation || isGeneratingSolution || isCompiling"
+              @click="requestDeleteExercise"
+            />
+          </template>
+        </v-tooltip>
+        <v-btn color="primary" variant="flat" prepend-icon="mdi-content-save-outline" class="app-toolbar-primary-action mr-3" :disabled="!exerciseEditor.enunciado.trim() || isDeletingExercise" :loading="isSavingExercise" @click="saveExercise">Guardar</v-btn>
       </template>
       <template v-else-if="active === 'Matemáticas'">
         <v-tooltip :text="mathConceptConfigurationMode ? 'Salir de la configuración' : 'Configurar mapa de contenidos'" location="bottom">
@@ -1783,7 +2361,69 @@ onBeforeUnmount(() => {
           <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-fit-to-screen-outline" variant="text" aria-label="Centrar y encajar el mapa" @click="fitMathConceptView" /></template>
         </v-tooltip>
         <v-tooltip text="Calendario" location="bottom">
-          <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="active = 'Calendario'" /></v-badge></template>
+          <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
+        </v-tooltip>
+        <v-tooltip text="Chat" location="bottom">
+          <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
+        </v-tooltip>
+        <v-btn icon="mdi-account-circle-outline" variant="text" aria-label="Perfil" class="mr-2" />
+      </template>
+      <template v-else-if="active === 'Documentos'">
+        <template v-if="documentWorkflow.mode === 'library'">
+          <v-text-field
+            v-model="documentSearchQuery"
+            aria-label="Buscar documentos"
+            placeholder="Buscar documentos"
+            prepend-inner-icon="mdi-magnify"
+            variant="outlined"
+            density="compact"
+            rounded="pill"
+            clearable
+            hide-details
+            class="app-toolbar-search"
+          />
+          <v-spacer />
+          <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action mr-3" @click="newActiveDocument">Nuevo documento</v-btn>
+          <v-spacer />
+        </template>
+        <template v-else-if="documentWorkflow.mode === 'viewer'">
+          <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" @click="closeActiveDocument">Documentos</v-btn>
+          <v-spacer />
+          <span class="document-toolbar-step">Vista del documento</span>
+          <v-spacer />
+        </template>
+        <template v-else>
+          <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" :disabled="isCompilingDocument" @click="closeActiveDocument">Documentos</v-btn>
+          <v-spacer />
+          <span class="document-toolbar-step">Paso {{ documentWorkflow.step }} de 4</span>
+          <v-spacer />
+          <v-btn v-if="documentWorkflow.step > 1" variant="text" prepend-icon="mdi-chevron-left" :disabled="isCompilingDocument" @click="previousDocumentStep">Anterior</v-btn>
+          <v-btn
+            v-if="documentWorkflow.step < 4"
+            color="primary"
+            variant="flat"
+            append-icon="mdi-chevron-right"
+            class="app-toolbar-primary-action mr-3 ml-2"
+            :disabled="!documentWorkflow.canContinue || isCompilingDocument"
+            @click="nextDocumentStep"
+          >Siguiente</v-btn>
+          <template v-else>
+            <v-tooltip text="Recompilar documento" location="bottom">
+              <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-refresh" variant="text" color="primary" aria-label="Recompilar documento" :loading="isCompilingDocument" @click="compileActiveDocument" /></template>
+            </v-tooltip>
+            <v-btn
+              color="primary"
+              variant="flat"
+              prepend-icon="mdi-content-save-outline"
+              class="app-toolbar-primary-action mr-3 ml-2"
+              :disabled="!documentWorkflow.canSave"
+              :loading="documentWorkflow.isSaving"
+              @click="saveActiveDocument"
+            >Guardar</v-btn>
+          </template>
+        </template>
+        <v-tooltip text="Calendario" location="bottom">
+          <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
         </v-tooltip>
         <v-tooltip text="Chat" location="bottom">
           <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
@@ -1792,14 +2432,77 @@ onBeforeUnmount(() => {
       </template>
       <template v-else-if="active === 'Plantillas'">
         <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action ml-2" @click="openNewTemplate">Nueva plantilla</v-btn>
+        <v-btn variant="text" prepend-icon="mdi-upload-outline" class="ml-2" @click="chooseTemplateFile">Importar .tex</v-btn>
         <v-spacer />
         <v-btn v-if="selectedTemplate" color="error" variant="text" prepend-icon="mdi-delete-outline" :loading="isSavingTemplate" @click="removeTemplate">Eliminar</v-btn>
         <v-btn v-if="isEditingTemplate" color="primary" variant="flat" prepend-icon="mdi-content-save-outline" class="app-toolbar-primary-action mr-3 ml-2" :disabled="!templateEditor.nombre.trim() || !templateEditor.codigo.trim()" :loading="isSavingTemplate" @click="saveTemplate">Guardar</v-btn>
       </template>
+      <template v-else-if="active === 'Grupo'">
+        <template v-if="selectedStudentDetail">
+          <v-btn variant="text" prepend-icon="mdi-arrow-left" class="ml-2" @click="closeStudentDetail">Volver</v-btn>
+          <v-spacer />
+          <v-tooltip :text="studentDetailConfigurationMode ? 'Finalizar edición' : 'Configurar datos del alumno'" location="bottom">
+            <template #activator="{ props }">
+              <v-btn v-bind="props" icon="mdi-cog-outline" rounded="circle" :color="studentDetailConfigurationMode ? 'primary' : undefined" :variant="studentDetailConfigurationMode ? 'tonal' : 'text'" class="mr-2" aria-label="Configurar datos del alumno" @click="toggleStudentDetailConfiguration" />
+            </template>
+          </v-tooltip>
+        </template>
+        <template v-else>
+        <v-tooltip :text="gradebookConfigurationMode ? 'Finalizar y guardar configuración' : 'Configurar cuaderno'" location="bottom">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon="mdi-cog-outline"
+              rounded="circle"
+              :color="gradebookConfigurationMode ? 'primary' : undefined"
+              :variant="gradebookConfigurationMode ? 'tonal' : 'text'"
+              class="ml-2"
+              :loading="isSavingGradebook"
+              aria-label="Configurar cuaderno"
+              @click="toggleGradebookConfiguration"
+            />
+          </template>
+        </v-tooltip>
+        <v-tooltip v-if="groupView === 'classroom' && gradebookConfigurationMode" text="Configurar disposición" location="bottom">
+          <template #activator="{ props }">
+            <v-btn v-bind="props" icon="mdi-view-grid-plus-outline" rounded="circle" variant="text" class="ml-1" aria-label="Configurar disposición" @click="openClassroomLayoutDialog" />
+          </template>
+        </v-tooltip>
+        <v-tooltip v-if="groupView === 'classroom'" text="Encajar aula" location="bottom">
+          <template #activator="{ props }">
+            <v-btn v-bind="props" icon="mdi-fit-to-screen-outline" rounded="circle" variant="text" class="ml-1" aria-label="Encajar aula" @click="fitClassroom" />
+          </template>
+        </v-tooltip>
+        <v-spacer />
+        <v-btn-toggle :model-value="groupView" mandatory density="compact" class="calendar-toolbar-modes" aria-label="Vista del grupo" @update:model-value="setGroupView">
+          <v-btn value="evaluation">Evaluación</v-btn>
+          <v-btn value="classroom">Aula</v-btn>
+        </v-btn-toggle>
+        <v-spacer />
+        <v-tooltip v-if="gradebookConfigurationMode && groupView === 'evaluation'" text="Añadir alumno" location="bottom">
+          <template #activator="{ props }">
+            <v-btn v-bind="props" variant="text" prepend-icon="mdi-account-plus-outline" :disabled="!selectedCareerGroup" @click="addGradebookStudent">Alumno</v-btn>
+          </template>
+        </v-tooltip>
+        <v-tooltip v-if="gradebookConfigurationMode && groupView === 'evaluation'" text="Añadir un ítem de evaluación" location="bottom">
+          <template #activator="{ props }">
+            <v-btn v-bind="props" variant="text" prepend-icon="mdi-table-column-plus-after" @click="addGradebookColumn">Ítem</v-btn>
+          </template>
+        </v-tooltip>
+        <div v-if="isSavingGradebook && !gradebookConfigurationMode" class="gradebook-autosave-status">Guardando…</div>
+        <v-tooltip text="Calendario" location="bottom">
+          <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
+        </v-tooltip>
+        <v-tooltip text="Chat" location="bottom">
+          <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
+        </v-tooltip>
+        <v-btn icon="mdi-account-circle-outline" variant="text" aria-label="Perfil" class="mr-2" />
+        </template>
+      </template>
       <template v-else-if="active === 'Calendario'">
         <v-tooltip :text="calendarMode === 'week' ? 'Configurar horario semanal' : 'Configuración disponible en la vista semanal'" location="bottom">
           <template #activator="{ props }">
-            <span v-bind="props" class="calendar-config-control"><v-btn icon="mdi-cog-outline" :disabled="calendarMode !== 'week'" :color="scheduleConfigMode ? 'primary' : undefined" :variant="scheduleConfigMode ? 'tonal' : 'text'" aria-label="Configurar horario semanal" @click="scheduleConfigMode = !scheduleConfigMode" /></span>
+            <v-btn v-bind="props" icon="mdi-cog-outline" rounded="circle" class="ml-2" :disabled="calendarMode !== 'week'" :color="scheduleConfigMode ? 'primary' : undefined" :variant="scheduleConfigMode ? 'tonal' : 'text'" aria-label="Configurar horario semanal" @click="scheduleConfigMode = !scheduleConfigMode" />
           </template>
         </v-tooltip>
         <v-btn icon="mdi-chevron-left" variant="text" aria-label="Periodo anterior" @click="changeMonth(-1)" />
@@ -1846,7 +2549,7 @@ onBeforeUnmount(() => {
         <v-btn v-if="active === 'Ejercicios'" color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action app-toolbar-new-exercise mr-2" @click="openNewExercise">Nuevo ejercicio</v-btn>
         <v-spacer v-if="active === 'Ejercicios'" />
         <v-tooltip text="Calendario" location="bottom">
-          <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="active = 'Calendario'" /></v-badge></template>
+          <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
         </v-tooltip>
         <v-tooltip text="Chat" location="bottom">
           <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
@@ -1856,7 +2559,7 @@ onBeforeUnmount(() => {
     </v-app-bar>
 
     <v-main>
-      <div class="page-shell" :class="{ 'page-shell-mathematics': active === 'Matemáticas', 'page-shell-exercise-search': active === 'Ejercicios' && exerciseView === 'search', 'page-shell-exercise-edit': active === 'Ejercicios' && exerciseView === 'edit', 'page-shell-templates': active === 'Plantillas', 'page-shell-calendar': active === 'Calendario' }">
+      <div class="page-shell" :class="{ 'page-shell-mathematics': active === 'Matemáticas', 'page-shell-exercise-search': active === 'Ejercicios' && exerciseView === 'search', 'page-shell-exercise-edit': active === 'Ejercicios' && exerciseView === 'edit', 'page-shell-documents': active === 'Documentos', 'page-shell-templates': active === 'Plantillas', 'page-shell-gradebook': active === 'Grupo', 'page-shell-calendar': active === 'Calendario' }">
         <section v-if="active === 'Matemáticas'" class="mathematics-page">
           <v-alert v-if="mathConceptsError" type="error" variant="tonal" density="compact" class="math-concepts-error">{{ mathConceptsError }}</v-alert>
           <div v-if="isLoadingMathConcepts" class="math-concepts-loading"><v-progress-circular indeterminate color="primary" /><span>Cargando mapa de conceptos…</span></div>
@@ -1905,7 +2608,7 @@ onBeforeUnmount(() => {
                     </v-tooltip>
                   </div>
                   <footer class="exercise-result-concepts" :title="exerciseConceptLabel(exercise)">
-                    <span>{{ exerciseConceptLabel(exercise) }}</span>
+                    <span v-html="exerciseConceptRichLabel(exercise)" />
                     <v-icon v-if="exercise.curriculum.competencial" icon="mdi-lightbulb-on-outline" size="14" class="exercise-result-competency" title="Ejercicio competencial" />
                   </footer>
                 </v-card>
@@ -1924,6 +2627,21 @@ onBeforeUnmount(() => {
                     <v-tab value="contents">Contenidos</v-tab>
                     <v-tab value="files">Archivos</v-tab>
                   </v-tabs>
+                  <v-spacer />
+                  <v-tooltip v-if="exerciseEditorTab === 'code'" text="Formatear código LaTeX" location="bottom">
+                    <template #activator="{ props }">
+                      <v-btn
+                        v-bind="props"
+                        icon="mdi-format-indent-increase"
+                        size="small"
+                        variant="text"
+                        color="primary"
+                        class="exercise-code-format"
+                        aria-label="Formatear código LaTeX"
+                        @click="formatExerciseLatex"
+                      />
+                    </template>
+                  </v-tooltip>
                 </div>
                 <div v-show="exerciseEditorTab === 'code'" ref="latexEditorHost" class="latex-editor-shell exercise-editor-shell" />
                 <div v-show="exerciseEditorTab === 'contents'" class="exercise-editor-curriculum">
@@ -2008,7 +2726,23 @@ onBeforeUnmount(() => {
           </template>
         </section>
 
+        <section v-else-if="active === 'Documentos'" class="documents-page">
+          <DocumentCreator
+            ref="documentCreatorRef"
+            :templates="templates"
+            :exercises="exercises"
+            :concept-nodes="mathConceptNodes"
+            :subject-selections="mathConceptSubjectSelections"
+            :exercise-counts="activeMathExerciseCountByConcept"
+            :compiler-base-url="compilerBaseUrl"
+            :library-query="documentSearchQuery"
+            @busy-change="isCompilingDocument = $event"
+            @state-change="documentWorkflow = $event"
+          />
+        </section>
+
         <section v-else-if="active === 'Plantillas'" class="templates-page">
+          <input ref="templateFileInput" type="file" accept=".tex,text/x-tex,text/plain" hidden @change="importTemplateFile">
           <div class="templates-workspace">
             <aside class="template-list-pane" aria-label="Plantillas disponibles">
               <v-list v-if="!isLoadingTemplates && templates.length" nav density="comfortable" class="templates-list">
@@ -2029,11 +2763,38 @@ onBeforeUnmount(() => {
                   <v-text-field v-model="templateEditor.nombre" label="Nombre" density="compact" variant="outlined" hide-details />
                   <v-textarea v-model="templateEditor.descripcion" label="Descripción" rows="2" max-rows="4" auto-grow density="compact" variant="outlined" hide-details />
                 </div>
+                <v-alert density="compact" variant="tonal" color="primary" icon="mdi-form-textbox" class="template-metadata-help">
+                  Para que una plantilla aparezca en «Documentos», debe declarar al comienzo un comentario <code>% neope:document</code> y un comentario <code>% neope:field</code> por cada argumento del formulario. Las plantillas nuevas incluyen un ejemplo editable. Temporalmente, los comandos <code>\includegraphics</code> y <code>\epsfig</code> se omiten al enviarla al compilador.
+                </v-alert>
                 <div ref="templateEditorHost" class="latex-editor-shell template-code-editor" />
               </template>
               <div v-else class="template-editor-empty"><v-icon icon="mdi-content-duplicate" size="42" color="primary" /><p>Selecciona una plantilla o crea una nueva desde la toolbar.</p></div>
             </section>
           </div>
+        </section>
+
+        <section v-else-if="active === 'Grupo'" class="gradebook-page">
+          <v-alert v-if="firestoreError" type="error" variant="tonal" density="compact" class="gradebook-error">{{ firestoreError }}</v-alert>
+          <StudentDetail
+            v-if="selectedCareerGroup && selectedStudentDetail"
+            :student="selectedStudentDetail"
+            :group-id="selectedCareerGroup.id"
+            :configuration-mode="studentDetailConfigurationMode"
+          />
+          <component
+            v-else-if="selectedCareerGroup"
+            ref="gradebookRef"
+            :is="groupView === 'evaluation' ? Gradebook : Classroom"
+            :key="selectedCareerGroup.id"
+            :group="selectedCareerGroup"
+            :existing-student-ids="existingStudentIds"
+            :configuration-mode="gradebookConfigurationMode"
+            @dirty-change="gradebookDirty = $event"
+            @validity-change="gradebookValid = $event"
+            @autosave-request="autosaveGradebook"
+            @student-selected="openStudentDetail"
+          />
+          <div v-else class="gradebook-empty">Selecciona un grupo en el panel izquierdo.</div>
         </section>
 
         <section v-else class="calendar-workspace">
@@ -2117,6 +2878,22 @@ onBeforeUnmount(() => {
           <v-spacer />
           <v-btn color="primary" variant="tonal" :disabled="isSavingMathConcepts" @click="deleteMathConceptKeepingChildren()">Conservar descendientes</v-btn>
           <v-btn color="error" variant="flat" :disabled="isSavingMathConcepts" @click="deleteMathConceptBranch()">Borrar descendientes</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="exerciseDeleteDialog" max-width="520" :persistent="isDeletingExercise">
+      <v-card>
+        <v-card-title class="pt-5 px-6">Eliminar ejercicio</v-card-title>
+        <v-card-text class="px-6 pb-2">
+          <p>Se eliminarán el ejercicio, todas sus variantes, sus PDF, los archivos adjuntos y sus referencias en el mapa de conceptos.</p>
+          <p class="text-body-2 text-medium-emphasis mt-3">Esta acción no se puede deshacer.</p>
+          <v-alert v-if="exerciseDeleteError" type="error" variant="tonal" density="compact" class="mt-4">{{ exerciseDeleteError }}</v-alert>
+        </v-card-text>
+        <v-card-actions class="px-6 pb-5">
+          <v-spacer />
+          <v-btn variant="text" :disabled="isDeletingExercise" @click="exerciseDeleteDialog = false">Cancelar</v-btn>
+          <v-btn color="error" variant="flat" prepend-icon="mdi-delete-outline" :loading="isDeletingExercise" @click="deleteExercise">Eliminar definitivamente</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
