@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { collection, doc, getDocs, setDoc } from 'firebase/firestore'
-import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
+import { collection, deleteDoc, doc, getDocs, setDoc } from 'firebase/firestore'
+import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { db, storage } from '../services/firebase'
 import { mathSubjects } from '../data/mathCurriculum'
 import ExerciseCurriculumPicker from './ExerciseCurriculumPicker.vue'
@@ -10,6 +10,10 @@ import ExerciseVariantSelector from './ExerciseVariantSelector.vue'
 import DocumentPdfPreview from './DocumentPdfPreview.vue'
 import DocumentCodeEditor from './DocumentCodeEditor.vue'
 import MasonryGrid from './MasonryGrid.vue'
+import { aggregateExerciseStructure, buildExerciseLatex, mergeExerciseStructure, parseExerciseLatex } from '../utils/exerciseStructure'
+import { compactExerciseConceptLabel, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
+import { normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
+import { showAppErrorToast } from '../composables/useAppErrorToast'
 
 const props = defineProps({
   templates: { type: Array, default: () => [] },
@@ -17,6 +21,8 @@ const props = defineProps({
   conceptNodes: { type: Array, default: () => [] },
   subjectSelections: { type: Object, default: () => ({}) },
   exerciseCounts: { type: Object, default: () => ({}) },
+  teacherProfile: { type: Object, default: () => ({ centros: [] }) },
+  groups: { type: Array, default: () => [] },
   compilerBaseUrl: { type: String, default: '/compiler-api/v1' },
   libraryQuery: { type: String, default: '' },
 })
@@ -39,6 +45,7 @@ const defaultMetadata = Object.freeze({
     { key: 'date', label: 'Fecha', argument: 3, type: 'text', placeholder: '09 / 03 / 26' },
     { key: 'course', label: 'Curso y grupo', argument: 4, type: 'course', placeholder: '2ºBTO VA' },
   ],
+  tools: [],
 })
 
 const mode = ref('library')
@@ -47,11 +54,20 @@ const maxVisitedStep = ref(1)
 const documents = ref([])
 const isLoadingDocuments = ref(false)
 const documentsError = ref('')
+watch(documentsError, (message) => {
+  if (message) showAppErrorToast(message)
+})
+const documentDeleteDialog = ref(false)
+const documentDeleteTarget = ref(null)
+const isDeletingDocument = ref(false)
 const selectedDocumentId = ref(null)
 const createdAt = ref(null)
 const selectedTemplateKey = ref('')
+const selectedTemplateKeys = ref([])
+const selectedPreviewTemplateKey = ref('')
 const fieldValues = reactive({})
 const documentCurriculum = ref(emptyCurriculum())
+const curriculumPickerKey = ref(0)
 const exerciseQuery = ref('')
 const selectedVersions = reactive({})
 const exerciseQueue = ref([])
@@ -59,14 +75,19 @@ const optionalRequiredCount = ref(1)
 const previewUrl = ref('')
 const previewBlob = ref(null)
 const previewCode = ref('')
+const previewAssetSignature = ref('')
+const previewDocuments = ref([])
 const documentCode = ref('')
 const documentCodeNeedsRegeneration = ref(true)
 const showDocumentCode = ref(false)
 const compileError = ref('')
+const compileErrorVisible = ref(false)
 const isCompiling = ref(false)
 const isSaving = ref(false)
 const dragPayload = ref(null)
 const viewedDocument = ref(null)
+const queueStructureCache = new WeakMap()
+const grayscaleLogoCache = new Map()
 
 function emptyCurriculum() {
   return { course: null, subjectId: null, conceptIds: [], competencial: false }
@@ -76,26 +97,91 @@ function normalizeName(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').trim()
 }
 
+const markerFieldDefinitions = Object.freeze({
+  asignatura: { key: 'subject', label: 'Asignatura', type: 'subject', placeholder: 'Matemáticas II' },
+  subject: { key: 'subject', label: 'Asignatura', type: 'subject', placeholder: 'Matemáticas II' },
+  titulo: { key: 'title', label: 'Título', type: 'text', placeholder: 'Recuperación -- 2ª Evaluación' },
+  title: { key: 'title', label: 'Título', type: 'text', placeholder: 'Recuperación -- 2ª Evaluación' },
+  fecha: { key: 'date', label: 'Fecha', type: 'date', placeholder: '' },
+  date: { key: 'date', label: 'Fecha', type: 'date', placeholder: '' },
+  grupo: { key: 'course', label: 'Grupo', type: 'group', placeholder: '2ºBTO B' },
+  curso: { key: 'course', label: 'Grupo', type: 'group', placeholder: '2ºBTO B' },
+  course: { key: 'course', label: 'Grupo', type: 'group', placeholder: '2ºBTO B' },
+})
+
+function markerFieldDefinition(name, argument) {
+  const normalized = normalizeName(name)
+  const known = markerFieldDefinitions[normalized]
+  if (known) return { ...known, argument }
+  const key = normalized.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `field_${argument}`
+  return { key, label: String(name || key).trim(), type: 'text', placeholder: '', argument }
+}
+
+function parseTemplateMarkers(code = '') {
+  const markers = [...code.matchAll(/%%\s*([^%\r\n]+?)\s*%%/g)]
+    .filter((marker) => code[marker.index - 1] !== '%' && code[marker.index + marker[0].length] !== '%')
+  const fields = []
+  let command = ''
+
+  markers.forEach((marker) => {
+    const beforeMarker = code.slice(0, marker.index)
+    const commandMatches = [...beforeMarker.matchAll(/\\newcommand\s*\{\\([A-Za-z@]+)\}(?:\[(\d+)\])?/g)]
+    const enclosingCommand = commandMatches[commandMatches.length - 1]?.[1] || ''
+    if (!command && enclosingCommand) command = enclosingCommand
+
+    const lineStart = beforeMarker.lastIndexOf('\n') + 1
+    const linePrefix = code.slice(lineStart, marker.index)
+    const argumentsOnLine = [...linePrefix.matchAll(/#(\d+)/g)].map((match) => Number(match[1]))
+    const names = marker[1].split(',').map((name) => name.trim()).filter(Boolean)
+
+    names.forEach((name, index) => {
+      const argument = argumentsOnLine[index]
+      if (!argument) return
+      fields.push(markerFieldDefinition(name, argument))
+    })
+  })
+
+  const uniqueFields = []
+  const seen = new Set()
+  fields.sort((left, right) => left.argument - right.argument).forEach((field) => {
+    const identity = `${field.argument}:${field.key}`
+    if (seen.has(identity)) return
+    seen.add(identity)
+    uniqueFields.push(field)
+  })
+  return { command, fields: uniqueFields }
+}
+
 function parseTemplateMetadata(code = '') {
-  const documentMatch = code.match(/^\s*%\s*neope:document\s+(\{.*\})\s*$/m)
-  if (!documentMatch) return null
   try {
-    const documentData = JSON.parse(documentMatch[1])
-    const fields = [...code.matchAll(/^\s*%\s*neope:field\s+(\{.*\})\s*$/gm)]
-      .map((match) => JSON.parse(match[1]))
-      .filter((field) => field?.key && field?.label && Number.isFinite(Number(field.argument)))
-      .map((field) => ({ ...field, argument: Number(field.argument), type: field.type || 'text' }))
-      .sort((a, b) => a.argument - b.argument)
-    const detectedOptionalCommand = /\\(?:newcommand\s*\{\\optativos\}|def\s*\\optativos\b)/.test(code)
-      ? 'optativos'
-      : ''
-    const optionalCommand = String(documentData.optionalCommand || detectedOptionalCommand)
-      .replace(/^\\/, '')
-      .replace(/[^A-Za-z@]/g, '')
+    const markerMetadata = parseTemplateMarkers(code)
+    const fields = markerMetadata.fields
+    if (!fields.length) return null
+    const declaredTools = [...code.matchAll(/^\s*%\s*neope:tool\s+(\{.*\})\s*$/gm)]
+      .flatMap((match) => {
+        try { return [JSON.parse(match[1])] } catch { return [] }
+      })
+    const tools = declaredTools
+      .filter((tool) => tool?.id && (tool.code || tool.command))
+      .map((tool) => ({
+        id: String(tool.id),
+        label: tool.label || tool.name || tool.id,
+        description: tool.description || 'Inserta un bloque LaTeX en el documento.',
+        icon: tool.icon || 'mdi-tools',
+        code: tool.code || `\\${String(tool.command).replace(/^\\/, '')}`,
+        arguments: Array.isArray(tool.arguments) ? tool.arguments.filter((argument) => argument?.key && argument?.label).map((argument) => ({
+          key: String(argument.key),
+          label: String(argument.label),
+          type: argument.type || 'text',
+          default: argument.default,
+          min: argument.min,
+          max: argument.max,
+        })) : [],
+      }))
     return {
-      name: documentData.name || 'Documento',
-      command: documentData.command || 'logo',
-      optionalCommand,
+      name: 'Documento',
+      command: markerMetadata.command || 'logo',
+      tools,
       fields,
     }
   } catch (error) {
@@ -111,13 +197,107 @@ const documentTemplates = computed(() => {
     return [{
       ...template,
       key: template.id || template.archivo,
-      metadata,
+      metadata: {
+        ...metadata,
+        name: template.nombre || 'Documento',
+      },
     }]
   }).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
 })
 
 const selectedTemplate = computed(() => documentTemplates.value.find((template) => template.key === selectedTemplateKey.value) || null)
 const selectedMetadata = computed(() => selectedTemplate.value?.metadata || defaultMetadata)
+const selectedTemplates = computed(() => selectedTemplateKeys.value
+  .map((key) => documentTemplates.value.find((template) => template.key === key))
+  .filter(Boolean))
+const previewTemplate = computed(() => selectedTemplates.value.find((template) => template.key === selectedPreviewTemplateKey.value) || selectedTemplates.value[0] || selectedTemplate.value)
+const unifiedFields = computed(() => {
+  const result = []
+  const seen = new Set()
+  selectedTemplates.value.forEach((template) => template.metadata.fields.forEach((field) => {
+    const identity = normalizeName(field.label || field.key)
+    if (seen.has(identity)) return
+    seen.add(identity)
+    result.push({ ...field, unifiedKey: field.key })
+  }))
+  return result.sort((a, b) => a.argument - b.argument)
+})
+const groupOptions = computed(() => {
+  const seen = new Set()
+  return props.groups.flatMap((group) => {
+    const name = String(group?.nombre || group?.title || '').trim()
+    if (!name || seen.has(name)) return []
+    seen.add(name)
+    return [{
+      id: group.id || null,
+      title: name,
+      value: name,
+      course: group.curso || matchCourse(name),
+      subject: group.asignatura || group.subtitle || '',
+      subjectId: group.subjectId || null,
+      studentCount: group.studentsLoaded && Array.isArray(group.alumnos)
+        ? group.alumnos.length
+        : Number(group.studentCount) || 0,
+    }]
+  }).sort((left, right) => left.title.localeCompare(right.title, 'es', { numeric: true }))
+})
+const subjectOptions = computed(() => [...new Set(groupOptions.value.map((group) => group.subject).filter(Boolean))])
+const selectedGroupOption = computed(() => {
+  const groupField = unifiedFields.value.find((field) => field.type === 'group' || field.type === 'course' || field.key === 'course')
+  return groupOptions.value.find((group) => group.value === fieldValues[groupField?.key]) || null
+})
+
+function summaryFieldValue(values, aliases) {
+  const entries = Object.entries(values || {})
+  for (const alias of aliases) {
+    if (values?.[alias] !== undefined && String(values[alias]).trim()) return String(values[alias]).trim()
+    const normalizedAlias = normalizeName(alias)
+    const entry = entries.find(([key, value]) => normalizeName(key) === normalizedAlias && String(value || '').trim())
+    if (entry) return String(entry[1]).trim()
+  }
+  return ''
+}
+
+function buildDocumentSummary(values = {}, curriculum = {}, storedGroup = null) {
+  const groupName = summaryFieldValue(values, ['course', 'curso', 'group', 'grupo']) || storedGroup?.name || storedGroup?.title || ''
+  const liveGroup = groupOptions.value.find((group) => group.value === groupName)
+  const group = liveGroup || storedGroup
+  const subject = summaryFieldValue(values, ['subject', 'asignatura'])
+    || group?.subject
+    || mathSubjects.find((item) => item.id === curriculum?.subjectId)?.title
+    || ''
+  const title = summaryFieldValue(values, ['title', 'titulo'])
+  const rawDate = summaryFieldValue(values, ['date', 'fecha'])
+  const count = Number(group?.studentCount)
+  return {
+    group: groupName,
+    studentCount: Number.isFinite(count) ? count : null,
+    items: [
+      subject ? { key: 'subject', label: 'Asignatura', value: subject, icon: 'mdi-function-variant' } : null,
+      title ? { key: 'title', label: 'Documento', value: title, icon: 'mdi-file-document-outline' } : null,
+      rawDate ? { key: 'date', label: 'Fecha', value: formatDocumentDate(rawDate).replaceAll('/', ' / '), icon: 'mdi-calendar-blank-outline' } : null,
+    ].filter(Boolean),
+  }
+}
+
+const workflowDocumentSummary = computed(() => buildDocumentSummary(fieldValues, documentCurriculum.value, selectedGroupOption.value))
+const viewerDocumentSummary = computed(() => buildDocumentSummary(
+  viewedDocument.value?.campos || {},
+  viewedDocument.value?.curriculum || {},
+  viewedDocument.value?.groupContext || null,
+))
+const currentAcademicYear = computed(() => {
+  const today = new Date()
+  const startYear = today.getMonth() >= 7 ? today.getFullYear() : today.getFullYear() - 1
+  return `${startYear}-${startYear + 1}`
+})
+const currentCenter = computed(() => {
+  const centers = Array.isArray(props.teacherProfile?.centros) ? props.teacherProfile.centros : []
+  if (!centers.length) return null
+  const normalizedYear = currentAcademicYear.value.replace(/\D/g, '')
+  return centers.find((center) => String(center.curso || '').replace(/\D/g, '') === normalizedYear) || centers[0]
+})
+const currentCenterLogo = computed(() => currentCenter.value?.imagenes?.find((image) => image?.url)?.url || '')
 const filteredDocuments = computed(() => {
   const query = normalizeName(props.libraryQuery)
   if (!query) return documents.value
@@ -127,18 +307,46 @@ const filteredDocuments = computed(() => {
     ...Object.values(documentData.campos || {}),
   ].join(' ')).includes(query))
 })
-const requiredExercises = computed(() => exerciseQueue.value.filter((item) => item.section !== 'optional'))
-const optionalExercises = computed(() => exerciseQueue.value.filter((item) => item.section === 'optional'))
-const optionalChoiceOptions = computed(() => Array.from(
-  { length: Math.max(0, optionalExercises.value.length - 1) },
-  (_, index) => index + 1,
-))
+const selectedExercises = computed(() => exerciseQueue.value.filter((item) => item.type !== 'tool'))
+const documentTools = computed(() => {
+  const declared = selectedMetadata.value.tools || []
+  const builtins = []
+  builtins.push({
+    id: 'obligatorios',
+    label: 'Obligatorios',
+    description: 'Inicia una sección de ejercicios obligatorios',
+    icon: '',
+    code: '\\item[] \\textsf{\\textbf{El alumno debe responder obligatoriamente los siguientes ejercicios}}',
+    arguments: [],
+  })
+  builtins.push({
+    id: 'optativos',
+    label: 'Optatividad',
+    description: 'Inicia una sección de ejercicios optativos',
+    icon: '',
+    code: null,
+    arguments: [{ key: 'count', label: 'Ejercicios a elegir', type: 'number', default: 1, min: 1 }],
+  })
+  builtins.push({
+    id: 'salto-pagina',
+    label: 'Salto de página',
+    description: 'Inserta un salto de página',
+    icon: '',
+    code: '\\newpage',
+    arguments: [],
+  })
+  const tools = [...declared, ...builtins]
+  return tools
+    .filter((tool, index) => tools.findIndex((candidate) => candidate.id === tool.id) === index)
+    .sort((left, right) => ({ obligatorios: 0, optativos: 1, 'salto-pagina': 2 }[left.id] ?? 3) - ({ obligatorios: 0, optativos: 1, 'salto-pagina': 2 }[right.id] ?? 3))
+})
 const requiredFieldsComplete = computed(() => Boolean(selectedTemplate.value)
-  && selectedMetadata.value.fields.every((field) => String(fieldValues[field.key] || '').trim()))
+  && selectedTemplates.value.length > 0
+  && unifiedFields.value.every((field) => String(fieldValues[field.key] || '').trim()))
 const canContinue = computed(() => {
   if (currentStep.value === 1) return requiredFieldsComplete.value
   if (currentStep.value === 2) return Boolean(documentCurriculum.value.subjectId)
-  if (currentStep.value === 3) return exerciseQueue.value.length > 0
+  if (currentStep.value === 3) return selectedExercises.value.length > 0
   return false
 })
 const workflowState = computed(() => ({
@@ -152,11 +360,6 @@ const workflowState = computed(() => ({
 }))
 
 watch(workflowState, (state) => emit('state-change', state), { immediate: true })
-watch(() => optionalExercises.value.length, (length) => {
-  if (length <= 1) optionalRequiredCount.value = Math.max(1, length)
-  else optionalRequiredCount.value = Math.min(Math.max(1, optionalRequiredCount.value), length - 1)
-})
-
 function conceptAncestors(conceptId) {
   const byId = new Map(props.conceptNodes.map((node) => [node.id, node]))
   const ids = []
@@ -199,13 +402,17 @@ function conceptLabel(exercise) {
   }).filter(Boolean).join(' / ') || 'Sin conceptos'
 }
 
+function cardConceptLabel(exercise) {
+  return compactExerciseConceptLabel(exercise?.curriculum?.conceptIds || [], props.conceptNodes)
+}
+
 const matchingExercises = computed(() => {
   const query = normalizeName(exerciseQuery.value)
   const filter = documentCurriculum.value
-  const queuedIds = new Set(exerciseQueue.value.map((item) => item.exerciseId))
+  const queuedIds = new Set(exerciseQueue.value.filter((item) => item.type !== 'tool').map((item) => item.exerciseId))
   return props.exercises.filter((exercise) => {
     if (queuedIds.has(exercise.id)) return false
-    const searchText = normalizeName(`${exercise.enunciado || ''} ${subjectLabel(exercise)} ${conceptLabel(exercise)}`)
+    const searchText = normalizeName(exerciseStatementText(exercise))
     if (query && !searchText.includes(query)) return false
     if (filter.course && exercise.curriculum?.course !== filter.course) return false
     if (filter.subjectId && exercise.curriculum?.subjectId !== filter.subjectId) return false
@@ -227,15 +434,53 @@ function activeVersion(exercise, version = selectedVersionFor(exercise)) {
   return version === 0 ? exercise : exercise.variaciones?.[version - 1] || exercise
 }
 
+function versionStructure(exercise, version = selectedVersionFor(exercise)) {
+  const active = activeVersion(exercise, version)
+  if (!active) return parseExerciseLatex('')
+  return mergeExerciseStructure(parseExerciseLatex(active.enunciado || active.codigo || ''), active.structure || active)
+}
+
+function metricsForVersion(exercise, version = selectedVersionFor(exercise)) {
+  const structure = versionStructure(exercise, version)
+  return {
+    puntuacion: Number(structure.puntuacion) || 0,
+    tiempo: Number(structure.tiempo) || 0,
+    apartados: structure.apartados.map((apartado) => ({
+      puntuacion: Number(apartado.puntuacion) || 0,
+      tiempo: Number(apartado.tiempo) || 0,
+    })),
+  }
+}
+
 function activePdf(exercise) {
   return activeVersion(exercise).pdf?.enunciado || ''
+}
+
+function activePdfAspectRatio(exercise) {
+  return Number(activeVersion(exercise)?.pdfLayout?.enunciado) || 0
+}
+
+function activeThumbnail(exercise) {
+  const version = activeVersion(exercise)
+  const thumbnail = version?.preview?.enunciado
+  if (!thumbnail?.url) return ''
+  return !thumbnail.sourceUrl || thumbnail.sourceUrl === version?.pdf?.enunciado
+    ? thumbnail.url
+    : ''
+}
+
+function activeVersionAuthors(exercise) {
+  return exerciseVersionAuthors(exercise, selectedVersionFor(exercise))
 }
 
 function setSelectedVersion(exercise, version) {
   if (!exercise) return
   selectedVersions[exercise.id] = version
   const queued = exerciseQueue.value.find((item) => item.exerciseId === exercise.id)
-  if (queued) queued.version = version
+  if (queued) {
+    queued.version = version
+    queued.metrics = metricsForVersion(exercise, version)
+  }
   invalidatePreview()
 }
 
@@ -272,10 +517,76 @@ function exerciseForQueue(item) {
   return props.exercises.find((exercise) => exercise.id === item.exerciseId) || null
 }
 
-function queueExerciseCode(item) {
+function exerciseImageFiles(exercise) {
+  return (Array.isArray(exercise?.archivos) ? exercise.archivos : []).filter((file) => file?.url && file?.latexName)
+}
+
+function documentExerciseAssetName(exercise, file, index) {
+  const exerciseId = String(exercise?.id || 'ejercicio').replace(/[^a-zA-Z0-9_-]/g, '') || 'ejercicio'
+  const extension = String(file.compilerName || file.nombre || '').match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase() || 'png'
+  return `ej_${exerciseId}_${file.latexName || `imagen${index + 1}`}.${extension === 'jpeg' ? 'jpg' : extension}`
+}
+
+function rewriteExerciseImageReferences(code, exercise) {
+  const files = exerciseImageFiles(exercise)
+  if (!files.length || !code.includes('\\includegraphics')) return code
+  return code.replace(/\\includegraphics(\*)?\s*(\[[^\]]*\]\s*)?\{([^{}]+)\}/g, (match, star = '', options = '', rawReference) => {
+    const reference = String(rawReference).trim().split('/').at(-1).replace(/\.(?:png|jpe?g|pdf)$/i, '')
+    const index = files.findIndex((file) => file.latexName === reference)
+    if (index === -1) return match
+    return `\\includegraphics${star}${options || ''}{${documentExerciseAssetName(exercise, files[index], index)}}`
+  })
+}
+
+function adaptExerciseEnvironmentsToTemplate(code, template) {
+  const templateCode = String(template?.codigo || '')
+  const apartadoscNeedsArgument = /\\newenvironment\s*\{apartadosc\}\s*\[1\]/.test(templateCode)
+  if (!apartadoscNeedsArgument) return code
+  return code.replace(/\\begin\s*\{apartadosc\}(?!\s*\{)/g, '\\begin{apartadosc}{}')
+}
+
+function templateDefinesEnvironment(template, environmentName) {
+  const code = String(template?.codigo || '')
+  const escapedName = String(environmentName).replace(/[^A-Za-z@*]/g, '')
+  return new RegExp(`\\\\(?:newenvironment|renewenvironment)\\*?\\s*\\{${escapedName}\\}`, 'i').test(code)
+    || new RegExp(`\\\\(?:New|Renew|Provide)DocumentEnvironment\\s*\\{${escapedName}\\}`, 'i').test(code)
+    || new RegExp(`\\\\(?:includecomment|excludecomment|NewEnviron|RenewEnviron)\\s*\\{${escapedName}\\}`, 'i').test(code)
+    || (templateDefinesCommand(template, escapedName) && templateDefinesCommand(template, `end${escapedName}`))
+}
+
+function templateDefinesCommand(template, commandName) {
+  const code = String(template?.codigo || '')
+  const escapedName = String(commandName).replace(/[^A-Za-z@]/g, '')
+  return new RegExp(`\\\\(?:newcommand|renewcommand|providecommand)\\*?\\s*\\{?\\\\${escapedName}\\}?`, 'i').test(code)
+    || new RegExp(`\\\\(?:def|gdef|edef|xdef)\\s*\\\\${escapedName}\\b`, 'i').test(code)
+}
+
+function queueExerciseCode(item, template = selectedTemplate.value) {
   const exercise = exerciseForQueue(item)
   if (!exercise) return ''
-  return statementCode(activeVersion(exercise, item.version).enunciado)
+  const sourceVersion = activeVersion(exercise, item.version)
+  const structure = versionStructure(exercise, item.version)
+  const metrics = item.metrics || metricsForVersion(exercise, item.version)
+  if (structure.apartados.length) {
+    structure.apartados.forEach((apartado, index) => {
+      apartado.puntuacion = Number(metrics.apartados?.[index]?.puntuacion) || 0
+      apartado.tiempo = Number(metrics.apartados?.[index]?.tiempo) || 0
+    })
+  } else {
+    structure.puntuacion = Number(metrics.puntuacion) || 0
+    structure.tiempo = Number(metrics.tiempo) || 0
+  }
+  const includeSolutions = templateDefinesEnvironment(template, 'solucion')
+  const includeAnswers = templateDefinesCommand(template, 'lsol')
+    && (!structure.apartados.length || structure.apartados.length === 1 || templateDefinesCommand(template, 'sol'))
+  const code = buildExerciseLatex(aggregateExerciseStructure(structure), {
+    includeSolutions,
+    includeAnswers,
+    // Los tiempos son metadatos de planificación de Neope. Las plantillas de
+    // documentos no necesitan definir \T ni \t para poder usar ejercicios.
+    includeDurationMetadata: false,
+  }) || statementCode(sourceVersion?.enunciado || '')
+  return rewriteExerciseImageReferences(adaptExerciseEnvironmentsToTemplate(code, template), exercise)
 }
 
 function queueExercisePdf(item) {
@@ -284,7 +595,7 @@ function queueExercisePdf(item) {
 }
 
 function normalizeQueueSections() {
-  exerciseQueue.value = [...requiredExercises.value, ...optionalExercises.value]
+  exerciseQueue.value = exerciseQueue.value.map((item) => ({ ...item, section: 'required' }))
 }
 
 function addExercise(exercise, section = 'required') {
@@ -293,22 +604,69 @@ function addExercise(exercise, section = 'required') {
   if (existingIndex !== -1) {
     ;[item] = exerciseQueue.value.splice(existingIndex, 1)
   } else {
-    item = { exerciseId: exercise.id, version: selectedVersionFor(exercise) }
+    const version = selectedVersionFor(exercise)
+    item = { type: 'exercise', exerciseId: exercise.id, version, metrics: metricsForVersion(exercise, version) }
   }
-  item.section = section
+  item.section = 'required'
   exerciseQueue.value.push(item)
   normalizeQueueSections()
   invalidatePreview()
 }
 
+function updateQueueMetric(item, field, value, apartadoIndex = null) {
+  if (!item.metrics) item.metrics = metricsForVersion(exerciseForQueue(item), item.version)
+  const number = Math.max(0, Number(value) || 0)
+  const normalized = field === 'puntuacion' ? Math.round(number * 4) / 4 : Math.round(number)
+  if (typeof apartadoIndex === 'number' && item.metrics.apartados?.[apartadoIndex]) {
+    item.metrics.apartados[apartadoIndex][field] = normalized
+    item.metrics[field] = item.metrics.apartados.reduce((sum, apartado) => sum + (Number(apartado[field]) || 0), 0)
+  } else {
+    item.metrics[field] = normalized
+  }
+  invalidatePreview()
+}
+
+function queueMetrics(item) {
+  return item.metrics || metricsForVersion(exerciseForQueue(item), item.version)
+}
+
+function queueStructure(item) {
+  const exercise = exerciseForQueue(item)
+  const active = activeVersion(exercise, item.version)
+  const source = active?.codigo || active?.enunciado || ''
+  const cached = queueStructureCache.get(item)
+  if (cached?.version === item.version && cached.source === source) return cached.structure
+  const structure = versionStructure(exercise, item.version)
+  queueStructureCache.set(item, { version: item.version, source, structure })
+  return structure
+}
+
+function queueApartados(item) {
+  return queueStructure(item).apartados
+}
+
+function queueMainPdf(item) {
+  const structure = queueStructure(item)
+  if (structure.pdfenunciado) return structure.pdfenunciado
+  return structure.apartados.length ? '' : queueExercisePdf(item)
+}
+
+function queueApartadoPdf(item, apartadoIndex) {
+  return queueApartados(item)[apartadoIndex]?.pdfenunciado || ''
+}
+
 function removeQueuedExercise(exerciseId) {
-  exerciseQueue.value = exerciseQueue.value.filter((item) => item.exerciseId !== exerciseId)
+  if (String(exerciseId).startsWith('tool:')) {
+    const toolId = String(exerciseId).slice(5)
+    exerciseQueue.value = exerciseQueue.value.filter((item) => !(item.type === 'tool' && item.toolId === toolId))
+  } else {
+    exerciseQueue.value = exerciseQueue.value.filter((item) => item.exerciseId !== exerciseId)
+  }
   invalidatePreview()
 }
 
 function moveQueuedExercise(item, section) {
-  const exercise = exerciseForQueue(item)
-  if (exercise) addExercise(exercise, section)
+  return item
 }
 
 function startExerciseDrag(event, exercise) {
@@ -318,9 +676,122 @@ function startExerciseDrag(event, exercise) {
 }
 
 function startQueueDrag(event, item) {
-  dragPayload.value = { type: 'queue', exerciseId: item.exerciseId }
+  dragPayload.value = { type: 'queue', itemId: item.type === 'tool' ? item.toolId : item.exerciseId, itemType: item.type || 'exercise' }
   event.dataTransfer.effectAllowed = 'move'
-  event.dataTransfer.setData('text/plain', item.exerciseId)
+  event.dataTransfer.setData('text/plain', dragPayload.value.itemId)
+}
+
+function startToolDrag(event, tool) {
+  dragPayload.value = { type: 'tool', toolId: tool.id }
+  event.dataTransfer.effectAllowed = 'copy'
+  event.dataTransfer.setData('text/plain', tool.id)
+}
+
+function isTool(item) {
+  return item?.type === 'tool'
+}
+
+function exerciseOrder(index) {
+  return exerciseQueue.value.slice(0, index + 1).filter((item) => !isTool(item)).length
+}
+
+function isSectionBoundaryTool(item) {
+  return isTool(item) && ['obligatorios', 'optativos'].includes(item.toolId)
+}
+
+function exercisesAfterTool(index, toolId) {
+  let count = 0
+  for (let cursor = index + 1; cursor < exerciseQueue.value.length; cursor += 1) {
+    const item = exerciseQueue.value[cursor]
+    // La sección termina al encontrar cualquier otro separador de sección;
+    // los saltos de página no son separadores y se ignoran aquí.
+    if (isSectionBoundaryTool(item)) break
+    if (!isTool(item)) count += 1
+  }
+  return count
+}
+
+function exercisesBeforeTool(index) {
+  let count = 0
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const item = exerciseQueue.value[cursor]
+    if (isSectionBoundaryTool(item)) break
+    count += 1
+  }
+  return count
+}
+
+function exercisesAfterAnyBoundary(index) {
+  let count = 0
+  for (let cursor = index + 1; cursor < exerciseQueue.value.length; cursor += 1) {
+    if (!isTool(exerciseQueue.value[cursor])) count += 1
+  }
+  return count
+}
+
+function exercisesAfterAnyTool(index) {
+  let count = 0
+  for (let cursor = index + 1; cursor < exerciseQueue.value.length; cursor += 1) {
+    const item = exerciseQueue.value[cursor]
+    if (isSectionBoundaryTool(item)) break
+    count += 1
+  }
+  return count
+}
+
+function optionalToolChoiceOptions(index) {
+  const count = exercisesAfterTool(index, 'optativos')
+  return Array.from({ length: Math.max(0, count - 1) }, (_, option) => option + 1)
+}
+
+function toolForQueue(item) {
+  return documentTools.value.find((tool) => tool.id === item?.toolId) || null
+}
+
+function toolArguments(item, tool) {
+  const args = { ...(item?.args || {}) }
+  ;(tool?.arguments || []).forEach((argument) => {
+    if (args[argument.key] === undefined && argument.default !== undefined) args[argument.key] = argument.default
+  })
+  return args
+}
+
+function setToolArgument(item, key, value) {
+  if (!item.args) item.args = {}
+  item.args[key] = value
+  invalidatePreview()
+}
+
+function addTool(tool) {
+  exerciseQueue.value.push({ type: 'tool', toolId: tool.id, args: tool.arguments?.reduce((values, argument) => ({ ...values, [argument.key]: argument.default ?? '' }), {}), section: 'required' })
+  invalidatePreview()
+}
+
+function toolCode(item, index = -1) {
+  const tool = toolForQueue(item)
+  if (!tool) return ''
+  const args = toolArguments(item, tool)
+  if (tool.id === 'obligatorios') {
+    if (index >= 0 && !exercisesAfterAnyTool(index)) return ''
+    return '\\obligatorios'
+  }
+  if (tool.id === 'salto-pagina') {
+    if (index >= 0 && (!exercisesBeforeTool(index) || !exercisesAfterAnyBoundary(index))) return ''
+    return '\\salto'
+  }
+  if (index >= 0 && (!exercisesBeforeTool(index) || !exercisesAfterAnyTool(index))) return ''
+  if (tool.id === 'optativos') {
+    const available = index >= 0 ? exercisesAfterTool(index, tool.id) : Number(args.count || 0) + 1
+    if (available <= 1) return ''
+    const count = Math.min(Math.max(1, Number(args.count) || 1), available - 1)
+    return `\\optativos{${numberToSpanish(count)}}{${numberToSpanish(available)}}`
+  }
+  return String(tool.code || '').replace(/\{\{\s*([A-Za-z][\w-]*)\s*\}\}/g, (_, key) => String(args[key] ?? ''))
+}
+
+function numberToSpanish(value) {
+  const words = ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez', 'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve', 'veinte']
+  return words[Number(value)] || String(value)
 }
 
 function dropOnQueueSection(event, section, targetExerciseId = null) {
@@ -333,13 +804,26 @@ function dropOnQueueSection(event, section, targetExerciseId = null) {
     if (exercise) addExercise(exercise, section)
     return
   }
+  if (payload.type === 'tool') {
+    const targetIndex = targetExerciseId?.startsWith('tool:')
+      ? exerciseQueue.value.findIndex((candidate) => candidate.type === 'tool' && candidate.toolId === targetExerciseId.slice(5))
+      : (targetExerciseId ? exerciseQueue.value.findIndex((candidate) => candidate.type !== 'tool' && candidate.exerciseId === targetExerciseId) : -1)
+    const tool = documentTools.value.find((candidate) => candidate.id === payload.toolId)
+    const args = tool?.arguments?.reduce((values, argument) => ({ ...values, [argument.key]: argument.default ?? '' }), {}) || {}
+    exerciseQueue.value.splice(targetIndex === -1 ? exerciseQueue.value.length : targetIndex, 0, { type: 'tool', toolId: payload.toolId, args, section: 'required' })
+    normalizeQueueSections()
+    invalidatePreview()
+    return
+  }
   if (payload.type === 'queue') {
-    const sourceIndex = exerciseQueue.value.findIndex((item) => item.exerciseId === payload.exerciseId)
+    const sourceIndex = exerciseQueue.value.findIndex((item) => payload.itemType === 'tool' ? item.type === 'tool' && item.toolId === payload.itemId : item.type !== 'tool' && item.exerciseId === payload.itemId)
     if (sourceIndex === -1) return
     const [item] = exerciseQueue.value.splice(sourceIndex, 1)
-    item.section = section
+    item.section = 'required'
     if (targetExerciseId) {
-      const targetIndex = exerciseQueue.value.findIndex((candidate) => candidate.exerciseId === targetExerciseId)
+      const targetIndex = targetExerciseId.startsWith('tool:')
+        ? exerciseQueue.value.findIndex((candidate) => candidate.type === 'tool' && candidate.toolId === targetExerciseId.slice(5))
+        : exerciseQueue.value.findIndex((candidate) => candidate.type !== 'tool' && candidate.exerciseId === targetExerciseId)
       exerciseQueue.value.splice(targetIndex === -1 ? exerciseQueue.value.length : targetIndex, 0, item)
     } else {
       exerciseQueue.value.push(item)
@@ -349,46 +833,168 @@ function dropOnQueueSection(event, section, targetExerciseId = null) {
   }
 }
 
-function headerCode() {
-  const fields = [...selectedMetadata.value.fields].sort((a, b) => a.argument - b.argument)
-  return `\\${selectedMetadata.value.command}\n${fields.map((field) => `    {${String(fieldValues[field.key] || '').trim()}}`).join('\n')}`
+function headerCode(template = selectedTemplate.value) {
+  const metadata = template?.metadata || defaultMetadata
+  const fields = [...metadata.fields].sort((a, b) => a.argument - b.argument)
+  return `\\${metadata.command}\n${fields.map((field) => `    {${documentFieldValue(field, template)}}`).join('\n')}`
 }
 
 function templateInputName(template) {
   return (template.archivo || template.nombre || 'plantilla').replace(/\.tex$/i, '')
 }
 
-function generatedCode() {
-  if (!selectedTemplate.value) return ''
-  const requiredCode = requiredExercises.value.map(queueExerciseCode).filter(Boolean).join('\n\n')
-  const optionalCode = optionalExercises.value.map(queueExerciseCode).filter(Boolean).join('\n\n')
-  const optionalSeparator = selectedMetadata.value.optionalCommand
-    ? `\\${selectedMetadata.value.optionalCommand}{${optionalRequiredCount.value}}`
-    : `% Ejercicios optativos: elegir ${optionalRequiredCount.value}`
-  const exercises = [
-    requiredCode ? `% Ejercicios obligatorios\n${requiredCode}` : '',
-    optionalCode ? `${optionalSeparator}\n${optionalCode}` : '',
-  ].filter(Boolean).join('\n\n')
-  return `\\input{../${templateInputName(selectedTemplate.value)}}
+function exercisePreambleRequirements(exercisesCode = '') {
+  const requirements = []
+  if (/canvas\s+is\s+(?:xy|xz|yz)\s+plane\s+at\s+[xyz]\s*=/.test(exercisesCode)) {
+    requirements.push('\\usetikzlibrary{3d}')
+  }
+  return requirements.join('\n')
+}
+
+function generatedCodeForTemplate(template) {
+  if (!template) return ''
+  const exercises = exerciseQueue.value.map((item, index) => isTool(item) ? toolCode(item, index) : queueExerciseCode(item, template)).filter(Boolean).join('\n\n')
+  const preambleRequirements = exercisePreambleRequirements(exercises)
+  return `\\input{../${templateInputName(template)}}
+
+${preambleRequirements}
 
 \\begin{document}
 
-${headerCode()}
+${headerCode(template)}
 
 ${exercises ? `\\begin{ejercicios}\n${exercises}\n\\end{ejercicios}` : ''}
 
 \\end{document}`
 }
 
+function generatedCode() {
+  return generatedCodeForTemplate(previewTemplate.value || selectedTemplate.value)
+}
+
+function hasLegacyOptionalCommand(code = '') {
+  return /\\optativos\s*\{[^{}]*\}(?!\s*\{)/.test(code)
+}
+
+function binaryBase64(buffer) {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return btoa(binary)
+}
+
+function browserAssetUrl(url) {
+  if (!import.meta.env.DEV) return url
+  if (!['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)) return url
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname !== 'firebasestorage.googleapis.com') return url
+    return `/firebase-storage${parsed.pathname}${parsed.search}`
+  } catch {
+    return url
+  }
+}
+
+async function grayscaleLogoAsset(url) {
+  if (grayscaleLogoCache.has(url)) return grayscaleLogoCache.get(url)
+  const pending = (async () => {
+    const response = await fetch(browserAssetUrl(url))
+    if (!response.ok) throw new Error(`No se ha podido descargar el logotipo del centro (HTTP ${response.status}).`)
+    const sourceBlob = await response.blob()
+    let source
+    let releaseSource = () => {}
+    if (typeof createImageBitmap === 'function') {
+      source = await createImageBitmap(sourceBlob)
+      releaseSource = () => source.close?.()
+    } else {
+      const objectUrl = URL.createObjectURL(sourceBlob)
+      source = await new Promise((resolve, reject) => {
+        const image = new Image()
+        image.onload = () => resolve(image)
+        image.onerror = () => reject(new Error('El navegador no ha podido interpretar el logotipo del centro.'))
+        image.src = objectUrl
+      })
+      releaseSource = () => URL.revokeObjectURL(objectUrl)
+    }
+    try {
+      const sourceWidth = source.width || source.naturalWidth
+      const sourceHeight = source.height || source.naturalHeight
+      const scale = Math.min(1, 2400 / Math.max(sourceWidth, sourceHeight))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(sourceWidth * scale))
+      canvas.height = Math.max(1, Math.round(sourceHeight * scale))
+      const context = canvas.getContext('2d')
+      context.drawImage(source, 0, 0, canvas.width, canvas.height)
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+      for (let offset = 0; offset < imageData.data.length; offset += 4) {
+        const gray = Math.round(
+          imageData.data[offset] * 0.2126
+          + imageData.data[offset + 1] * 0.7152
+          + imageData.data[offset + 2] * 0.0722,
+        )
+        imageData.data[offset] = gray
+        imageData.data[offset + 1] = gray
+        imageData.data[offset + 2] = gray
+      }
+      context.putImageData(imageData, 0, 0)
+      const grayscaleBlob = await new Promise((resolve, reject) => canvas.toBlob(
+        (blob) => blob ? resolve(blob) : reject(new Error('No se ha podido convertir el logotipo a escala de grises.')),
+        'image/png',
+      ))
+      return { data: binaryBase64(await grayscaleBlob.arrayBuffer()) }
+    } finally {
+      releaseSource()
+    }
+  })()
+  grayscaleLogoCache.set(url, pending)
+  try {
+    return await pending
+  } catch (error) {
+    grayscaleLogoCache.delete(url)
+    throw error
+  }
+}
+
+function documentAssetSignature() {
+  const exerciseFiles = exerciseQueue.value
+    .filter((item) => item.type !== 'tool')
+    .flatMap((item) => exerciseImageFiles(exerciseForQueue(item)).map((file) => `${item.exerciseId}:${file.path}:${file.url}`))
+  return [currentCenterLogo.value, ...exerciseFiles].join('|')
+}
+
+async function documentAssets() {
+  const assets = {}
+  if (currentCenterLogo.value) {
+    try {
+      assets['logo.png'] = await grayscaleLogoAsset(currentCenterLogo.value)
+    } catch (error) {
+      throw new Error(`No se ha podido preparar el logotipo del centro: ${error?.message || 'error desconocido'}`)
+    }
+  }
+  exerciseQueue.value.filter((item) => item.type !== 'tool').forEach((item) => {
+    const exercise = exerciseForQueue(item)
+    exerciseImageFiles(exercise).forEach((file, index) => {
+      assets[documentExerciseAssetName(exercise, file, index)] = { url: file.url }
+    })
+  })
+  return assets
+}
+
 function bodyForCompiler(source) {
   const match = source.match(/\\begin\s*\{document\}([\s\S]*?)\\end\s*\{document\}/)
-  return (match?.[1] || source).replace(/^\s*\\input\s*\{[^}]+\}\s*/m, '').trim()
+  return normalizeDisplayMathDelimiters(
+    (match?.[1] || source).replace(/^\s*\\input\s*\{[^}]+\}\s*/m, '').trim(),
+  )
 }
 
 function invalidatePreview() {
   previewBlob.value = null
   previewCode.value = ''
+  previewAssetSignature.value = ''
   compileError.value = ''
+  compileErrorVisible.value = false
   if (currentStep.value < 4) documentCodeNeedsRegeneration.value = true
 }
 
@@ -398,35 +1004,133 @@ function updateDocumentCode(value) {
   previewBlob.value = null
   previewCode.value = ''
   compileError.value = ''
+  compileErrorVisible.value = false
 }
 
-function activeDocumentCode() {
-  return currentStep.value === 4 && documentCode.value.trim()
-    ? documentCode.value
-    : generatedCode()
+async function copyCompileError() {
+  if (!compileError.value) return
+  try {
+    await navigator.clipboard.writeText(compileError.value)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = compileError.value
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    textarea.remove()
+  }
+}
+
+function activeDocumentCode(template = previewTemplate.value || selectedTemplate.value) {
+  const generated = generatedCodeForTemplate(template)
+  if (currentStep.value !== 4 || !documentCode.value.trim() || template?.key !== selectedPreviewTemplateKey.value) return generated
+  return hasLegacyOptionalCommand(documentCode.value) ? generated : documentCode.value
 }
 
 function revokePreview() {
   if (previewUrl.value.startsWith('blob:')) URL.revokeObjectURL(previewUrl.value)
+  previewDocuments.value.forEach((entry) => {
+    if (entry.url?.startsWith('blob:')) URL.revokeObjectURL(entry.url)
+  })
+  previewDocuments.value = []
   previewUrl.value = ''
   previewBlob.value = null
   previewCode.value = ''
+  previewAssetSignature.value = ''
 }
 
 function resetFields() {
   Object.keys(fieldValues).forEach((key) => delete fieldValues[key])
-  selectedMetadata.value.fields.forEach((field) => { fieldValues[field.key] = '' })
+  unifiedFields.value.forEach((field) => { fieldValues[field.key] = '' })
+}
+
+function ensureFields() {
+  unifiedFields.value.forEach((field) => {
+    if (fieldValues[field.key] === undefined) fieldValues[field.key] = ''
+  })
 }
 
 function selectTemplate(template) {
-  if (selectedTemplateKey.value === template.key) return
-  selectedTemplateKey.value = template.key
-  resetFields()
+  const hadTemplates = selectedTemplateKeys.value.length > 0
+  if (selectedTemplateKeys.value.includes(template.key)) {
+    selectedTemplateKeys.value = selectedTemplateKeys.value.filter((key) => key !== template.key)
+  } else {
+    selectedTemplateKeys.value = [...selectedTemplateKeys.value, template.key]
+  }
+  if (!selectedTemplateKeys.value.length) selectedTemplateKeys.value = [template.key]
+  selectedTemplateKey.value = selectedTemplateKeys.value[0]
+  selectedPreviewTemplateKey.value = selectedTemplateKeys.value[0]
+  if (hadTemplates) ensureFields()
+  else resetFields()
   documentCurriculum.value = emptyCurriculum()
   exerciseQueue.value = []
   optionalRequiredCount.value = 1
   Object.keys(selectedVersions).forEach((key) => delete selectedVersions[key])
   invalidatePreview()
+}
+
+function startTemplateDrag(event, template) {
+  dragPayload.value = { type: 'template', templateKey: template.key }
+  event.dataTransfer.effectAllowed = 'copy'
+  event.dataTransfer.setData('text/plain', template.key)
+}
+
+function addTemplateToQueue(template) {
+  if (!template || selectedTemplateKeys.value.includes(template.key)) return
+  selectedTemplateKeys.value = [...selectedTemplateKeys.value, template.key]
+  selectedTemplateKey.value = selectedTemplateKeys.value[0]
+  selectedPreviewTemplateKey.value = selectedPreviewTemplateKey.value || template.key
+  ensureFields()
+  invalidatePreview()
+}
+
+function removeTemplateFromQueue(templateKey) {
+  if (selectedTemplateKeys.value.length <= 1) return
+  selectedTemplateKeys.value = selectedTemplateKeys.value.filter((key) => key !== templateKey)
+  selectedTemplateKey.value = selectedTemplateKeys.value[0]
+  if (!selectedTemplateKeys.value.includes(selectedPreviewTemplateKey.value)) selectedPreviewTemplateKey.value = selectedTemplateKeys.value[0]
+  resetFields()
+  invalidatePreview()
+}
+
+function dropTemplateQueue(event) {
+  event.preventDefault()
+  const payload = dragPayload.value
+  dragPayload.value = null
+  if (payload?.type !== 'template') return
+  const template = documentTemplates.value.find((candidate) => candidate.key === payload.templateKey)
+  addTemplateToQueue(template)
+}
+
+function fieldValueFor(field, template = null) {
+  if (fieldValues[field.key] !== undefined) return fieldValues[field.key]
+  if (template) {
+    const sameLabel = template.metadata.fields.find((candidate) => normalizeName(candidate.label) === normalizeName(field.label))
+    if (sameLabel && fieldValues[sameLabel.key] !== undefined) return fieldValues[sameLabel.key]
+  }
+  return ''
+}
+
+function formatDocumentDate(value) {
+  const isoMatch = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!isoMatch) return String(value || '').trim()
+  return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1].slice(-2)}`
+}
+
+function documentFieldValue(field, template = null) {
+  const value = fieldValueFor(field, template)
+  return field.type === 'date' || field.key === 'date' ? formatDocumentDate(value) : String(value || '').trim()
+}
+
+function dateInputValue(value) {
+  const text = String(value || '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text
+  const match = text.match(/^(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2}|\d{4})$/)
+  if (!match) return text
+  const year = match[3].length === 2 ? `20${match[3]}` : match[3]
+  return `${year}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`
 }
 
 function matchCourse(value) {
@@ -442,10 +1146,12 @@ function matchSubject(value, course) {
 }
 
 function syncCurriculumFromFields() {
-  const courseField = selectedMetadata.value.fields.find((field) => field.type === 'course' || field.key === 'course')
-  const subjectField = selectedMetadata.value.fields.find((field) => field.type === 'subject' || field.key === 'subject')
-  const course = matchCourse(courseField ? fieldValues[courseField.key] : '')
-  const subject = matchSubject(subjectField ? fieldValues[subjectField.key] : '', course)
+  const courseField = unifiedFields.value.find((field) => field.type === 'group' || field.type === 'course' || field.key === 'course')
+  const subjectField = unifiedFields.value.find((field) => field.type === 'subject' || field.key === 'subject')
+  const selectedGroup = groupOptions.value.find((group) => group.value === fieldValues[courseField?.key])
+  const course = selectedGroup?.course || matchCourse(courseField ? fieldValues[courseField.key] : '')
+  const subject = mathSubjects.find((item) => item.id === selectedGroup?.subjectId)
+    || matchSubject(selectedGroup?.subject || (subjectField ? fieldValues[subjectField.key] : ''), course)
   const currentSubject = mathSubjects.find((item) => item.id === documentCurriculum.value.subjectId)
   documentCurriculum.value = {
     ...documentCurriculum.value,
@@ -456,7 +1162,15 @@ function syncCurriculumFromFields() {
   invalidatePreview()
 }
 
-function onFieldInput() {
+function onFieldInput(field = null) {
+  if (field && (field.type === 'group' || field.type === 'course' || field.key === 'course')) {
+    const group = groupOptions.value.find((option) => option.value === fieldValues[field.key])
+    if (group) {
+      unifiedFields.value
+        .filter((candidate) => candidate.type === 'subject' || candidate.key === 'subject')
+        .forEach((subjectField) => { fieldValues[subjectField.key] = group.subject })
+    }
+  }
   syncCurriculumFromFields()
   invalidatePreview()
 }
@@ -465,6 +1179,8 @@ function resetWorkflow() {
   selectedDocumentId.value = null
   createdAt.value = null
   selectedTemplateKey.value = ''
+  selectedTemplateKeys.value = []
+  selectedPreviewTemplateKey.value = ''
   Object.keys(fieldValues).forEach((key) => delete fieldValues[key])
   documentCurriculum.value = emptyCurriculum()
   exerciseQuery.value = ''
@@ -474,6 +1190,7 @@ function resetWorkflow() {
   currentStep.value = 1
   maxVisitedStep.value = 1
   compileError.value = ''
+  compileErrorVisible.value = false
   documentCode.value = ''
   documentCodeNeedsRegeneration.value = true
   showDocumentCode.value = false
@@ -495,8 +1212,156 @@ function viewDocument(documentData) {
   if (!documentData?.pdf?.url) return
   resetWorkflow()
   viewedDocument.value = documentData
-  previewUrl.value = documentData.pdf.url
+  const storedTemplates = Array.isArray(documentData.plantillas) && documentData.plantillas.length
+    ? documentData.plantillas
+    : (documentData.plantilla ? [documentData.plantilla] : [])
+  const storedPdfs = Array.isArray(documentData.pdfs) && documentData.pdfs.length
+    ? documentData.pdfs
+    : [documentData.pdf]
+  previewDocuments.value = storedPdfs.map((pdf, index) => ({
+    templateKey: pdf.templateKey || storedTemplates[index]?.archivo || `pdf-${index}`,
+    name: storedTemplates[index]?.nombre || storedTemplates[index]?.archivo || `Documento ${index + 1}`,
+    url: pdf.url,
+    path: pdf.path || '',
+    blob: null,
+    code: '',
+    assetSignature: '',
+  })).filter((entry) => entry.url)
+  selectedPreviewTemplateKey.value = previewDocuments.value[0]?.templateKey || ''
+  previewUrl.value = previewDocuments.value[0]?.url || documentData.pdf.url
   mode.value = 'viewer'
+}
+
+function requestDeleteDocument(documentData) {
+  documentDeleteTarget.value = documentData
+  documentDeleteDialog.value = true
+}
+
+function storagePathFromUrl(url = '') {
+  try {
+    const pathname = new URL(url).pathname
+    const marker = '/o/'
+    const markerIndex = pathname.indexOf(marker)
+    if (markerIndex === -1) return ''
+    return decodeURIComponent(pathname.slice(markerIndex + marker.length))
+  } catch {
+    return ''
+  }
+}
+
+async function deleteDocument() {
+  const documentData = documentDeleteTarget.value
+  if (!documentData?.id || isDeletingDocument.value) return
+  isDeletingDocument.value = true
+  documentsError.value = ''
+  try {
+    const paths = new Set()
+    if (documentData.pdf?.path) paths.add(documentData.pdf.path)
+    if (documentData.pdf?.url) {
+      const path = storagePathFromUrl(documentData.pdf.url)
+      if (path) paths.add(path)
+    }
+    ;(Array.isArray(documentData.pdfs) ? documentData.pdfs : []).forEach((pdf) => {
+      if (pdf?.path) paths.add(pdf.path)
+      if (pdf?.url) {
+        const path = storagePathFromUrl(pdf.url)
+        if (path) paths.add(path)
+      }
+    })
+    await Promise.all([...paths].map(async (path) => {
+      try {
+        await deleteObject(storageRef(storage, path))
+      } catch (error) {
+        if (error?.code !== 'storage/object-not-found') throw error
+      }
+    }))
+    await deleteDoc(doc(db, 'documentos', documentData.id))
+    documents.value = documents.value.filter((item) => item.id !== documentData.id)
+    documentDeleteDialog.value = false
+    documentDeleteTarget.value = null
+  } catch (error) {
+    documentsError.value = error.message || 'No se ha podido eliminar el documento.'
+    console.error('Error al eliminar documento:', error)
+  } finally {
+    isDeletingDocument.value = false
+  }
+}
+
+function selectViewerDocument(entry) {
+  if (!entry) return
+  selectedPreviewTemplateKey.value = entry.templateKey
+  previewUrl.value = entry.url
+}
+
+function previewEntryForTemplate(templateKey) {
+  return previewDocuments.value.find((entry) => entry.templateKey === templateKey) || null
+}
+
+function documentFileName(entry) {
+  const base = String(entry?.name || 'documento')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-|-$/g, '') || 'documento'
+  return `${base}.pdf`
+}
+
+async function documentBlob(entry) {
+  if (entry?.blob instanceof Blob) return entry.blob
+  if (!entry?.url) throw new Error('El PDF todavía no está disponible.')
+  const response = await fetch(browserAssetUrl(entry.url))
+  if (!response.ok) throw new Error(`No se ha podido descargar el PDF (HTTP ${response.status}).`)
+  return response.blob()
+}
+
+async function downloadGeneratedDocument(entry) {
+  try {
+    const blob = await documentBlob(entry)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = documentFileName(entry)
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (error) {
+    compileError.value = error.message || 'No se ha podido descargar el documento.'
+    compileErrorVisible.value = true
+  }
+}
+
+async function printGeneratedDocument(entry) {
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) {
+    compileError.value = 'El navegador ha bloqueado la ventana de impresión.'
+    compileErrorVisible.value = true
+    return
+  }
+  try {
+    printWindow.document.write('<p style="font-family:sans-serif">Preparando documento…</p>')
+    const blob = await documentBlob(entry)
+    const url = URL.createObjectURL(blob)
+    let printRequested = false
+    const requestPrint = () => {
+      if (printRequested || printWindow.closed) return
+      printRequested = true
+      printWindow.focus()
+      printWindow.print()
+    }
+    printWindow.addEventListener('load', () => {
+      setTimeout(() => {
+        requestPrint()
+      }, 350)
+    }, { once: true })
+    printWindow.location.replace(url)
+    setTimeout(requestPrint, 1500)
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  } catch (error) {
+    printWindow.close()
+    compileError.value = error.message || 'No se ha podido imprimir el documento.'
+    compileErrorVisible.value = true
+  }
 }
 
 function setOptionalRequiredCount(value) {
@@ -519,42 +1384,97 @@ async function nextStep() {
   }
 }
 
-function goToVisitedStep(step) {
-  if (step <= maxVisitedStep.value && step <= currentStep.value) currentStep.value = step
+async function goToVisitedStep(step) {
+  if (step > maxVisitedStep.value || step === currentStep.value) return
+  currentStep.value = step
+  if (step === 4) {
+    if (documentCodeNeedsRegeneration.value || !documentCode.value.trim()) documentCode.value = generatedCode()
+    documentCodeNeedsRegeneration.value = false
+    await compileDocument()
+  }
 }
 
 async function compilerRequest(path, options = {}) {
-  const response = await fetch(`${props.compilerBaseUrl}${path}`, options)
+  let response
+  try {
+    response = await fetch(`${props.compilerBaseUrl}${path}`, options)
+  } catch (error) {
+    throw new Error(`No se ha podido conectar con el compilador LaTeX (${path}): ${error?.message || 'error de red'}`)
+  }
   if (response.ok) return response
   let details = {}
   try { details = await response.json() } catch { /* La API puede devolver texto. */ }
   throw new Error(details.log || details.message || `Error del compilador (${response.status})`)
 }
 
-async function compileDocument() {
-  if (!selectedTemplate.value || isCompiling.value) return
-  const code = activeDocumentCode()
-  if (previewBlob.value && previewUrl.value && previewCode.value === code) return
+async function compileDocument(force = false) {
+  if (!selectedTemplates.value.length || isCompiling.value) return
+  const templatesToCompile = selectedTemplates.value
+  const assetSignature = documentAssetSignature()
+  if (!force && previewDocuments.value.length === templatesToCompile.length && previewDocuments.value.every((entry) => entry.assetSignature === assetSignature && entry.code === activeDocumentCode(templatesToCompile.find((template) => template.key === entry.templateKey)))) return
   isCompiling.value = true
   emit('busy-change', true)
   compileError.value = ''
+  compileErrorVisible.value = false
   try {
-    const response = await compilerRequest('/compile', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: bodyForCompiler(code), preamble_name: selectedTemplate.value.archivo }),
-    })
-    const blob = await response.blob()
+    const entries = []
+    const compilationErrors = []
+    const assets = await documentAssets()
+    for (const template of templatesToCompile) {
+      try {
+        const code = activeDocumentCode(template)
+        const preambleRequirements = exercisePreambleRequirements(code)
+        const compilerPreamble = [template.codigo, preambleRequirements].filter(Boolean).join('\n\n')
+        if (template.key === selectedPreviewTemplateKey.value && hasLegacyOptionalCommand(documentCode.value)) documentCode.value = code
+        await compilerRequest('/preambles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: template.archivo, content: compilerPreamble }),
+        })
+        const response = await compilerRequest('/compile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: bodyForCompiler(code), preamble_name: template.archivo, assets }),
+        })
+        const blob = await response.blob()
+        entries.push({ templateKey: template.key, name: template.nombre || template.metadata.name, code, blob, url: URL.createObjectURL(blob), assetSignature })
+      } catch (error) {
+        compilationErrors.push(`${template.nombre || template.metadata.name}: ${error.message || 'error de compilación'}`)
+      }
+    }
+    if (!entries.length) throw new Error(compilationErrors.join('\n\n') || 'No se ha podido compilar ningún documento.')
     revokePreview()
-    previewBlob.value = blob
-    previewCode.value = code
-    previewUrl.value = URL.createObjectURL(blob)
+    previewDocuments.value = entries
+    const active = entries.find((entry) => entry.templateKey === selectedPreviewTemplateKey.value) || entries[0]
+    if (active) {
+      selectedPreviewTemplateKey.value = active.templateKey
+      previewBlob.value = active.blob
+      previewCode.value = active.code
+      previewAssetSignature.value = active.assetSignature
+      previewUrl.value = active.url
+    }
+    if (compilationErrors.length) {
+      compileError.value = compilationErrors.join('\n\n')
+      compileErrorVisible.value = true
+    }
   } catch (error) {
     compileError.value = error.message || 'No se ha podido compilar el documento.'
+    compileErrorVisible.value = true
   } finally {
     isCompiling.value = false
     emit('busy-change', false)
   }
+}
+
+function selectPreviewTemplate(templateKey) {
+  const entry = previewDocuments.value.find((candidate) => candidate.templateKey === templateKey)
+  if (!entry) return
+  selectedPreviewTemplateKey.value = templateKey
+  documentCode.value = entry.code
+  previewBlob.value = entry.blob
+  previewCode.value = entry.code
+  previewAssetSignature.value = entry.assetSignature
+  previewUrl.value = entry.url
 }
 
 function documentCardTitle(documentData) {
@@ -564,7 +1484,12 @@ function documentCardTitle(documentData) {
 
 function documentFieldEntries(documentData) {
   const metadata = documentTemplates.value.find((template) => template.archivo === documentData.plantilla?.archivo)?.metadata || defaultMetadata
-  return metadata.fields.map((field) => ({ label: field.label, value: documentData.campos?.[field.key] || '—' }))
+  return metadata.fields.map((field) => ({
+    label: field.label,
+    value: documentData.campos?.[field.key]
+      ? (field.type === 'date' || field.key === 'date' ? formatDocumentDate(documentData.campos[field.key]) : documentData.campos[field.key])
+      : '—',
+  }))
 }
 
 async function loadDocuments() {
@@ -584,24 +1509,64 @@ async function loadDocuments() {
 
 function editDocument(documentData) {
   resetWorkflow()
-  const template = documentTemplates.value.find((item) => item.archivo === documentData.plantilla?.archivo)
-    || documentTemplates.value.find((item) => item.nombre === documentData.plantilla?.nombre)
+  const storedTemplates = Array.isArray(documentData.plantillas) && documentData.plantillas.length
+    ? documentData.plantillas
+    : (documentData.plantilla ? [documentData.plantilla] : [])
+  const templates = storedTemplates.map((stored) => documentTemplates.value.find((item) => item.archivo === stored.archivo || item.nombre === stored.nombre)).filter(Boolean)
+  const template = templates[0]
   if (!template) {
     documentsError.value = 'La plantilla utilizada por este documento ya no está disponible.'
     return
   }
   selectedDocumentId.value = documentData.id
   createdAt.value = documentData.createdAt || null
+  selectedTemplateKeys.value = templates.map((item) => item.key)
   selectedTemplateKey.value = template.key
+  selectedPreviewTemplateKey.value = template.key
   resetFields()
   Object.assign(fieldValues, documentData.campos || {})
-  documentCurriculum.value = { ...emptyCurriculum(), ...(documentData.curriculum || {}) }
-  exerciseQueue.value = Array.isArray(documentData.ejercicios)
-    ? documentData.ejercicios.filter((item) => item?.exerciseId).map((item) => ({
-        exerciseId: item.exerciseId,
-        version: Number(item.version) || 0,
-        section: item.section === 'optional' ? 'optional' : 'required',
-      }))
+  unifiedFields.value.filter((field) => field.type === 'date' || field.key === 'date').forEach((field) => {
+    fieldValues[field.key] = dateInputValue(fieldValues[field.key])
+  })
+  const savedCurriculum = documentData.curriculum || {}
+  const savedCourse = savedCurriculum.course
+    || documentData.course
+    || documentData.campos?.course
+    || documentData.campos?.curso
+  const savedSubjectId = savedCurriculum.subjectId || documentData.subjectId || documentData.asignaturaId
+  const savedSubject = mathSubjects.find((subject) => subject.id === savedSubjectId)
+    || matchSubject(savedCurriculum.subject || documentData.subject || documentData.campos?.subject, matchCourse(savedCourse))
+    || matchSubject(documentData.campos?.subject, matchCourse(savedCourse))
+  const legacyConceptIds = documentData.conceptIds || documentData.conceptos || documentData.curriculum?.concepts
+  documentCurriculum.value = {
+    ...emptyCurriculum(),
+    ...savedCurriculum,
+    course: savedCourse || savedSubject?.course || null,
+    subjectId: savedSubject?.id || savedSubjectId || null,
+    conceptIds: Array.isArray(savedCurriculum.conceptIds)
+      ? [...savedCurriculum.conceptIds]
+      : (Array.isArray(legacyConceptIds) ? [...legacyConceptIds] : []),
+    competencial: Boolean(savedCurriculum.competencial),
+  }
+  curriculumPickerKey.value += 1
+  const storedQueue = Array.isArray(documentData.bloques) ? documentData.bloques : documentData.ejercicios
+  exerciseQueue.value = Array.isArray(storedQueue)
+    ? storedQueue.filter((item) => item?.exerciseId || item?.toolId).map((item) => item.toolId
+      ? { type: 'tool', toolId: item.toolId, args: { ...(item.args || {}) }, section: 'required' }
+      : {
+          type: 'exercise',
+          exerciseId: item.exerciseId,
+          version: Number(item.version) || 0,
+          metrics: item.metrics ? {
+            puntuacion: Number(item.metrics.puntuacion) || 0,
+            tiempo: Number(item.metrics.tiempo) || 0,
+            apartados: Array.isArray(item.metrics.apartados) ? item.metrics.apartados.map((apartado) => ({
+              puntuacion: Number(apartado.puntuacion) || 0,
+              tiempo: Number(apartado.tiempo) || 0,
+            })) : [],
+          } : undefined,
+          section: item.section === 'optional' ? 'optional' : 'required',
+        })
     : []
   optionalRequiredCount.value = Number(documentData.optativos?.elegir) || 1
   normalizeQueueSections()
@@ -610,6 +1575,17 @@ function editDocument(documentData) {
   previewCode.value = documentData.codigo || ''
   documentCode.value = documentData.codigo || generatedCode()
   documentCodeNeedsRegeneration.value = false
+  previewDocuments.value = []
+  if (Array.isArray(documentData.pdfs)) {
+    previewDocuments.value = documentData.pdfs.map((pdf, index) => ({
+      templateKey: templates[index]?.key,
+      name: templates[index]?.nombre || templates[index]?.metadata.name,
+      url: pdf.url,
+      blob: null,
+      code: documentData.codigos?.[templates[index]?.key] || documentData.codigo || '',
+      assetSignature: documentAssetSignature(),
+    })).filter((entry) => entry.templateKey && entry.url)
+  }
   showDocumentCode.value = false
   currentStep.value = 1
   maxVisitedStep.value = 4
@@ -619,7 +1595,7 @@ function editDocument(documentData) {
 async function saveDocument() {
   if (currentStep.value !== 4 || isSaving.value) return
   if (!previewBlob.value || previewCode.value !== activeDocumentCode()) await compileDocument()
-  if (!previewBlob.value) return
+  if (!previewDocuments.value.length) return
   isSaving.value = true
   emit('busy-change', true)
   documentsError.value = ''
@@ -627,32 +1603,47 @@ async function saveDocument() {
     const reference = selectedDocumentId.value
       ? doc(db, 'documentos', selectedDocumentId.value)
       : doc(collection(db, 'documentos'))
-    const path = `documentos/${reference.id}/documento_${reference.id}.pdf`
-    await uploadBytes(storageRef(storage, path), previewBlob.value, {
-      contentType: 'application/pdf',
-      customMetadata: { documentId: reference.id },
-    })
-    const url = await getDownloadURL(storageRef(storage, path))
+    const uploadedPdfs = []
+    for (const [index, entry] of previewDocuments.value.entries()) {
+      if (!entry.blob) {
+        if (entry.url) uploadedPdfs.push({ templateKey: entry.templateKey, url: entry.url, path: entry.path || '' })
+        continue
+      }
+      const path = `documentos/${reference.id}/documento_${reference.id}_${index + 1}.pdf`
+      await uploadBytes(storageRef(storage, path), entry.blob, { contentType: 'application/pdf', customMetadata: { documentId: reference.id } })
+      uploadedPdfs.push({ templateKey: entry.templateKey, url: await getDownloadURL(storageRef(storage, path)), path })
+    }
+    const primaryPdf = uploadedPdfs[0]
+    if (!primaryPdf) return
     const now = new Date().toISOString()
     const data = {
       plantilla: {
         archivo: selectedTemplate.value.archivo,
         nombre: selectedTemplate.value.metadata.name || selectedTemplate.value.nombre,
       },
-      campos: Object.fromEntries(selectedMetadata.value.fields.map((field) => [field.key, String(fieldValues[field.key] || '').trim()])),
+      plantillas: selectedTemplates.value.map((template) => ({ archivo: template.archivo, nombre: template.nombre || template.metadata.name })),
+      campos: Object.fromEntries(unifiedFields.value.map((field) => [field.key, String(fieldValues[field.key] || '').trim()])),
+      groupContext: selectedGroupOption.value ? {
+        id: selectedGroupOption.value.id,
+        name: selectedGroupOption.value.title,
+        studentCount: selectedGroupOption.value.studentCount,
+      } : null,
       curriculum: {
         course: documentCurriculum.value.course || null,
         subjectId: documentCurriculum.value.subjectId || null,
         conceptIds: [...new Set(documentCurriculum.value.conceptIds || [])],
         competencial: Boolean(documentCurriculum.value.competencial),
       },
-      ejercicios: exerciseQueue.value.map((item, order) => ({ ...item, order })),
+      bloques: exerciseQueue.value.map((item, order) => ({ ...item, order })),
+      ejercicios: exerciseQueue.value.filter((item) => item.type !== 'tool').map((item, order) => ({ ...item, order })),
       optativos: {
-        disponibles: optionalExercises.value.length,
-        elegir: optionalExercises.value.length ? optionalRequiredCount.value : 0,
+        disponibles: selectedExercises.value.length,
+        elegir: exerciseQueue.value.find((item) => isTool(item) && item.toolId === 'optativos')?.args?.count || 0,
       },
-      codigo: activeDocumentCode(),
-      pdf: { url, path },
+      codigo: activeDocumentCode(selectedTemplate.value),
+      codigos: Object.fromEntries(previewDocuments.value.map((entry) => [entry.templateKey, entry.code])),
+      pdfs: uploadedPdfs,
+      pdf: { url: primaryPdf.url, path: primaryPdf.path },
       createdAt: createdAt.value || now,
       updatedAt: now,
     }
@@ -680,7 +1671,7 @@ defineExpose({
   backToLibrary,
   previous: previousStep,
   next: nextStep,
-  compile: compileDocument,
+  compile: () => compileDocument(true),
   save: saveDocument,
 })
 </script>
@@ -688,7 +1679,6 @@ defineExpose({
 <template>
   <div class="document-creator">
     <section v-if="mode === 'library'" class="document-library">
-      <v-alert v-if="documentsError" type="error" variant="tonal" density="compact" class="document-library-error">{{ documentsError }}</v-alert>
       <div v-if="isLoadingDocuments" class="document-library-empty">
         <v-progress-circular indeterminate color="primary" />
         <span>Cargando documentos…</span>
@@ -726,6 +1716,11 @@ defineExpose({
                   <v-btn v-bind="tooltipProps" icon="mdi-pencil-outline" size="small" variant="tonal" color="primary" aria-label="Editar documento" @click="editDocument(documentData)" />
                 </template>
               </v-tooltip>
+              <v-tooltip text="Eliminar documento" location="top">
+                <template #activator="{ props: tooltipProps }">
+                  <v-btn v-bind="tooltipProps" icon="mdi-delete-outline" size="small" variant="tonal" color="error" aria-label="Eliminar documento" @click="requestDeleteDocument(documentData)" />
+                </template>
+              </v-tooltip>
             </div>
           </footer>
         </v-card>
@@ -743,13 +1738,52 @@ defineExpose({
     </section>
 
     <section v-else-if="mode === 'viewer'" class="document-viewer">
-      <DocumentPdfPreview :src="previewUrl" :title="documentCardTitle(viewedDocument || {})" />
+      <div v-if="previewDocuments.length" class="document-viewer-layout">
+        <aside class="document-preview-selector" aria-label="Documentos generados">
+          <article v-if="viewerDocumentSummary.group || viewerDocumentSummary.items.length" class="document-preview-summary">
+            <header>
+              <div>
+                <span>Grupo</span>
+                <strong>{{ viewerDocumentSummary.group || 'Sin grupo' }}</strong>
+              </div>
+              <small v-if="viewerDocumentSummary.studentCount !== null">
+                <v-icon icon="mdi-account-multiple-outline" size="14" />
+                {{ viewerDocumentSummary.studentCount }} {{ viewerDocumentSummary.studentCount === 1 ? 'alumno' : 'alumnos' }}
+              </small>
+            </header>
+            <dl v-if="viewerDocumentSummary.items.length">
+              <div v-for="item in viewerDocumentSummary.items" :key="item.key">
+                <dt><v-icon :icon="item.icon" size="14" />{{ item.label }}</dt>
+                <dd>{{ item.value }}</dd>
+              </div>
+            </dl>
+          </article>
+          <strong>Documentos generados</strong>
+          <div
+            v-for="entry in previewDocuments"
+            :key="entry.templateKey"
+            class="document-preview-selector-item"
+            :class="{ active: selectedPreviewTemplateKey === entry.templateKey }"
+          >
+            <button type="button" class="document-preview-select" @click="selectViewerDocument(entry)">
+              <v-icon icon="mdi-file-pdf-box" size="18" />
+              <span>{{ entry.name }}</span>
+            </button>
+            <span class="document-preview-actions">
+              <v-btn icon="mdi-download" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Descargar documento" @click.stop="downloadGeneratedDocument(entry)" />
+              <v-btn icon="mdi-printer-outline" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Imprimir documento" @click.stop="printGeneratedDocument(entry)" />
+            </span>
+          </div>
+        </aside>
+        <DocumentPdfPreview :src="previewUrl" :title="documentCardTitle(viewedDocument || {})" />
+      </div>
+      <DocumentPdfPreview v-else :src="previewUrl" :title="documentCardTitle(viewedDocument || {})" />
     </section>
 
     <section v-else class="document-workflow">
       <ol class="document-stepper" aria-label="Proceso de creación del documento">
-        <li v-for="step in steps" :key="step.number" :class="{ active: currentStep === step.number, complete: currentStep > step.number }">
-          <button type="button" :disabled="step.number > currentStep" @click="goToVisitedStep(step.number)">
+          <li v-for="step in steps" :key="step.number" :class="{ active: currentStep === step.number, complete: currentStep > step.number }">
+          <button type="button" :disabled="step.number > maxVisitedStep" @click="goToVisitedStep(step.number)">
             <span class="document-step-number"><v-icon v-if="currentStep > step.number" icon="mdi-check" size="16" /><span v-else>{{ step.number }}</span></span>
             <span class="document-step-title">{{ step.title }}</span>
           </button>
@@ -762,30 +1796,80 @@ defineExpose({
             <div v-if="!documentTemplates.length" class="document-template-empty">
               <v-icon icon="mdi-file-document-plus-outline" size="46" color="primary" />
               <strong>No hay plantillas de documentos disponibles.</strong>
-              <span>Crea o edita una desde «Plantillas» y añade las instrucciones <code>neope:document</code> y <code>neope:field</code>.</span>
+              <span>Crea o edita una desde «Plantillas» y marca sus argumentos con comentarios como <code>%% grupo %%</code> o <code>%% fecha %%</code>.</span>
             </div>
             <button
               v-for="template in documentTemplates"
               :key="template.key"
               type="button"
               class="document-template-card"
-              :class="{ selected: selectedTemplateKey === template.key }"
+              :class="{ selected: selectedTemplateKeys.includes(template.key) }"
+              draggable="true"
+              @dragstart="startTemplateDrag($event, template)"
               @click="selectTemplate(template)"
             >
               <v-icon icon="mdi-file-document-outline" size="30" />
-              <strong>{{ template.metadata.name || template.nombre }}</strong>
+              <strong>{{ template.nombre || template.metadata.name }}</strong>
               <span>{{ template.descripcion || 'Sin descripción' }}</span>
-              <v-icon v-if="selectedTemplateKey === template.key" class="document-template-selected" icon="mdi-check-circle" size="22" />
+              <v-icon v-if="selectedTemplateKeys.includes(template.key)" class="document-template-selected" icon="mdi-check-circle" size="22" />
             </button>
           </div>
-          <aside class="document-fields-pane" :class="{ empty: !selectedTemplate }">
-            <template v-if="selectedTemplate">
+          <aside class="document-template-queue" @dragover.prevent @drop="dropTemplateQueue">
+            <header><v-icon icon="mdi-playlist-plus" size="21" /><strong>Plantillas que se generarán</strong></header>
+            <div v-if="selectedTemplates.length" class="document-template-queue-list">
+              <article v-for="template in selectedTemplates" :key="template.key" class="document-template-queue-card">
+                <div><strong>{{ template.nombre || template.metadata.name }}</strong><span>{{ template.descripcion || 'Sin descripción' }}</span></div>
+                <v-btn v-if="selectedTemplates.length > 1" icon="mdi-close" size="x-small" variant="text" aria-label="Quitar plantilla" @click="removeTemplateFromQueue(template.key)" />
+              </article>
+            </div>
+            <div v-else class="document-template-queue-empty"><v-icon icon="mdi-tray-arrow-down" size="28" /><span>Arrastra aquí las plantillas que quieras generar.</span></div>
+          </aside>
+          <aside class="document-fields-pane" :class="{ empty: !selectedTemplates.length }">
+            <template v-if="selectedTemplates.length">
               <div class="document-fields-heading">
                 <v-icon icon="mdi-form-textbox" size="22" />
-                <div><strong>Datos del documento</strong><span>Completa todos los campos para continuar.</span></div>
+                <div><strong>Datos de los documentos</strong><span>Los campos comunes aparecen una sola vez.</span></div>
               </div>
+              <v-select
+                v-for="field in unifiedFields.filter((item) => item.type === 'group' || item.type === 'course')"
+                :key="field.key"
+                v-model="fieldValues[field.key]"
+                :items="groupOptions"
+                item-title="title"
+                item-value="value"
+                :label="field.label"
+                :placeholder="field.placeholder"
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                @update:model-value="onFieldInput(field)"
+              />
+              <v-select
+                v-for="field in unifiedFields.filter((item) => item.type === 'subject')"
+                :key="field.key"
+                v-model="fieldValues[field.key]"
+                :items="subjectOptions"
+                :label="field.label"
+                :placeholder="field.placeholder"
+                :readonly="Boolean(selectedGroupOption?.subject)"
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                @update:model-value="onFieldInput(field)"
+              />
               <v-text-field
-                v-for="field in selectedMetadata.fields"
+                v-for="field in unifiedFields.filter((item) => item.type === 'date')"
+                :key="field.key"
+                v-model="fieldValues[field.key]"
+                type="date"
+                :label="field.label"
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                @update:model-value="onFieldInput(field)"
+              />
+              <v-text-field
+                v-for="field in unifiedFields.filter((item) => !['group', 'course', 'subject', 'date'].includes(item.type))"
                 :key="field.key"
                 v-model="fieldValues[field.key]"
                 :label="field.label"
@@ -793,18 +1877,19 @@ defineExpose({
                 variant="outlined"
                 density="comfortable"
                 hide-details
-                @update:model-value="onFieldInput"
+                @update:model-value="onFieldInput(field)"
               />
             </template>
             <template v-else>
               <v-icon icon="mdi-arrow-left" size="30" />
-              <span>Selecciona una plantilla para configurar sus campos.</span>
+              <span>Selecciona o arrastra una plantilla para configurar sus campos.</span>
             </template>
           </aside>
         </div>
 
         <ExerciseCurriculumPicker
           v-else-if="currentStep === 2"
+          :key="curriculumPickerKey"
           v-model="documentCurriculum"
           class="document-curriculum-step"
           :nodes="conceptNodes"
@@ -837,28 +1922,33 @@ defineExpose({
                     draggable="true"
                     @dragstart="startExerciseDrag($event, exercise)"
                   >
-                    <header>
-                      <span>{{ subjectLabel(exercise) }}</span>
-                      <div class="document-exercise-add-actions">
-                        <v-tooltip text="Añadir como obligatorio" location="top">
-                          <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-lock-outline" size="x-small" color="primary" variant="tonal" aria-label="Añadir como obligatorio" @click="addExercise(exercise, 'required')" /></template>
-                        </v-tooltip>
-                        <v-tooltip text="Añadir como optativo" location="top">
-                          <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-source-branch" size="x-small" color="secondary" variant="tonal" aria-label="Añadir como optativo" @click="addExercise(exercise, 'optional')" /></template>
-                        </v-tooltip>
+                    <header class="document-exercise-card-header">
+                      <div class="document-exercise-card-identity">
+                        <span>{{ subjectLabel(exercise) }}</span>
+                        <div class="document-exercise-add-actions">
+                          <v-tooltip text="Añadir ejercicio" location="top">
+                            <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-plus" size="x-small" color="primary" variant="text" elevation="0" aria-label="Añadir ejercicio" @click="addExercise(exercise)" /></template>
+                          </v-tooltip>
+                        </div>
                       </div>
+                      <ExerciseVariantSelector
+                        :model-value="selectedVersionFor(exercise)"
+                        :variations="exercise.variaciones || []"
+                        compact
+                        @update:model-value="setSelectedVersion(exercise, $event)"
+                      />
                     </header>
-                    <ExerciseVariantSelector
-                      :model-value="selectedVersionFor(exercise)"
-                      :variations="exercise.variaciones || []"
-                      compact
-                      @update:model-value="setSelectedVersion(exercise, $event)"
-                    />
                     <div class="document-exercise-card-pdf">
-                      <ExercisePdfPreview v-if="activePdf(exercise)" :src="activePdf(exercise)" :title="`Vista previa del ejercicio ${exercise.id}`" />
+                      <img v-if="activeThumbnail(exercise)" :src="activeThumbnail(exercise)" :alt="`Enunciado del ejercicio ${exercise.id}`" class="document-exercise-card-thumbnail" loading="lazy" decoding="async">
+                      <ExercisePdfPreview v-else-if="activePdf(exercise)" :src="activePdf(exercise)" :aspect-ratio="activePdfAspectRatio(exercise)" :title="`Enunciado de la versión ${selectedVersionFor(exercise)} del ejercicio ${exercise.id}`" thumbnail />
                       <div v-else class="document-exercise-no-pdf"><v-icon icon="mdi-file-pdf-box" size="32" /><span>PDF pendiente</span></div>
                     </div>
-                    <footer>{{ conceptLabel(exercise) }}</footer>
+                    <footer class="document-exercise-concepts" :title="conceptLabel(exercise)">{{ cardConceptLabel(exercise) }}</footer>
+                    <footer class="document-exercise-authors">
+                      <span :title="`Autor del enunciado: ${activeVersionAuthors(exercise).statement}`"><strong>Enunciado</strong> · {{ activeVersionAuthors(exercise).statement }}</span>
+                      <v-spacer />
+                      <span :title="`Autor de la solución: ${activeVersionAuthors(exercise).solution}`"><strong>Solución</strong> · {{ activeVersionAuthors(exercise).solution }}</span>
+                    </footer>
                   </article>
                 </template>
               </MasonryGrid>
@@ -867,108 +1957,131 @@ defineExpose({
           </section>
 
           <section class="document-queue-pane">
-            <div class="document-queue-section document-required-section" @dragover.prevent @drop="dropOnQueueSection($event, 'required')">
-              <header class="document-queue-heading">
-                <div><strong>Ejercicios obligatorios</strong><span>Todos deberán resolverse.</span></div>
-                <v-chip size="small" color="primary" variant="tonal">{{ requiredExercises.length }}</v-chip>
-              </header>
-              <div v-if="requiredExercises.length" class="document-queue-grid">
+            <div class="document-queue-content" @dragover.prevent @drop="dropOnQueueSection($event, 'required')">
+              <div class="document-queue-section document-required-section">
+                <header class="document-queue-heading">
+                  <div><strong>Ejercicios seleccionados</strong><span>Arrastra para cambiar el orden.</span></div>
+                  <v-chip size="small" color="primary" variant="tonal">{{ selectedExercises.length }}</v-chip>
+                </header>
+                <div v-if="exerciseQueue.length" class="document-queue-grid">
+                  <article
+                    v-for="(item, index) in exerciseQueue"
+                    :key="item.type === 'tool' ? `tool-${item.toolId}-${index}` : item.exerciseId"
+                    class="document-queue-card"
+                    :class="{ 'document-tool-queue-card': isTool(item), [`document-tool-${toolForQueue(item)?.id}`]: isTool(item), 'document-tool-disabled': isTool(item) && toolForQueue(item)?.id === 'optativos' && optionalToolChoiceOptions(index).length === 0 }"
+                    draggable="true"
+                    @dragstart="startQueueDrag($event, item)"
+                    @dragover.prevent
+                    @drop.stop="dropOnQueueSection($event, 'required', isTool(item) ? `tool:${item.toolId}` : item.exerciseId)"
+                  >
+                    <header v-if="isTool(item)" class="document-tool-queue-header" :class="`document-tool-${toolForQueue(item)?.id}`">
+                      <v-icon v-if="toolForQueue(item)?.icon" :icon="toolForQueue(item)?.icon" size="18" />
+                      <strong>{{ toolForQueue(item)?.label || 'Herramienta' }}</strong>
+                      <v-spacer />
+                      <v-btn class="document-tool-remove" icon="mdi-close" size="x-small" variant="text" aria-label="Quitar herramienta" @click="removeQueuedExercise(`tool:${item.toolId}`)" />
+                    </header>
+                    <header v-else>
+                      <span class="document-queue-order">{{ exerciseOrder(index) }}</span>
+                      <strong>{{ subjectLabel(exerciseForQueue(item)) }}</strong>
+                      <v-spacer />
+                      <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Quitar ejercicio" @click="removeQueuedExercise(item.exerciseId)" />
+                    </header>
+                    <div v-if="isTool(item) && toolForQueue(item)?.id === 'optativos'" class="document-tool-queue-body">
+                      <div class="document-tool-choice" role="group" aria-label="Número de ejercicios optativos que deben elegirse">
+                        <button
+                          v-for="option in optionalToolChoiceOptions(index)"
+                          :key="option"
+                          type="button"
+                          :class="{ selected: Number(item.args?.count) === option }"
+                          :aria-pressed="Number(item.args?.count) === option"
+                          @click="setToolArgument(item, 'count', option)"
+                        >{{ option }}</button>
+                        <span v-if="!optionalToolChoiceOptions(index).length">Debe haber al menos dos ejercicios en esta sección</span>
+                      </div>
+                    </div>
+                    <div v-else-if="isTool(item) && (toolForQueue(item)?.arguments || []).length" class="document-tool-queue-body">
+                      <v-text-field
+                        v-for="argument in toolForQueue(item)?.arguments || []"
+                        :key="argument.key"
+                        v-model="item.args[argument.key]"
+                        :type="argument.type === 'number' ? 'number' : 'text'"
+                        :label="argument.label"
+                        :min="argument.min"
+                        :max="argument.max"
+                        density="compact"
+                        variant="outlined"
+                        hide-details
+                        @update:model-value="invalidatePreview"
+                      />
+                    </div>
+                    <ExerciseVariantSelector
+                      v-if="!isTool(item)"
+                      :model-value="item.version"
+                      :variations="exerciseForQueue(item)?.variaciones || []"
+                      compact
+                      @update:model-value="setSelectedVersion(exerciseForQueue(item), $event)"
+                    />
+                    <div v-if="!isTool(item)" class="document-queue-sections">
+                      <section class="document-queue-section">
+                        <div class="document-queue-metric-row document-queue-metric-main">
+                          <strong>{{ queueApartados(item).length ? 'Total' : 'Ejercicio' }}</strong>
+                          <label>Puntos<input :value="queueMetrics(item).puntuacion" type="number" min="0" step="0.25" :disabled="queueApartados(item).length > 0" @change="updateQueueMetric(item, 'puntuacion', $event.target.value)" /></label>
+                          <label>Minutos<input :value="queueMetrics(item).tiempo" type="number" min="0" step="1" :disabled="queueApartados(item).length > 0" @change="updateQueueMetric(item, 'tiempo', $event.target.value)" /></label>
+                        </div>
+                        <div class="document-queue-card-pdf">
+                          <ExercisePdfPreview v-if="queueMainPdf(item)" :src="queueMainPdf(item)" :title="queueApartados(item).length ? `Enunciado común del ejercicio ${index + 1}` : `Ejercicio seleccionado ${index + 1}`" crop-bottom thumbnail />
+                          <div v-else class="document-exercise-no-pdf compact"><v-icon icon="mdi-file-pdf-box" size="24" /><span>PDF común pendiente</span></div>
+                        </div>
+                      </section>
+                      <section v-for="(apartado, apartadoIndex) in queueApartados(item)" :key="apartado.id || apartadoIndex" class="document-queue-section document-queue-apartado">
+                        <div class="document-queue-metric-row">
+                          <strong>{{ String.fromCharCode(97 + apartadoIndex) }}.</strong>
+                          <label>Puntos<input :value="queueMetrics(item).apartados?.[apartadoIndex]?.puntuacion || 0" type="number" min="0" step="0.25" @change="updateQueueMetric(item, 'puntuacion', $event.target.value, apartadoIndex)" /></label>
+                          <label>Minutos<input :value="queueMetrics(item).apartados?.[apartadoIndex]?.tiempo || 0" type="number" min="0" step="1" @change="updateQueueMetric(item, 'tiempo', $event.target.value, apartadoIndex)" /></label>
+                        </div>
+                        <div class="document-queue-card-pdf">
+                          <ExercisePdfPreview v-if="queueApartadoPdf(item, apartadoIndex)" :src="queueApartadoPdf(item, apartadoIndex)" :title="`Apartado ${String.fromCharCode(97 + apartadoIndex)} del ejercicio ${index + 1}`" crop-bottom thumbnail />
+                          <div v-else class="document-exercise-no-pdf compact"><v-icon icon="mdi-file-pdf-box" size="24" /><span>PDF pendiente</span></div>
+                        </div>
+                      </section>
+                    </div>
+                    <footer v-if="!isTool(item)">{{ conceptLabel(exerciseForQueue(item)) }}</footer>
+                  </article>
+                </div>
+                <div v-else class="document-queue-empty compact"><v-icon icon="mdi-tray-arrow-down" size="36" /><span>Suelta aquí ejercicios y herramientas.</span></div>
+              </div>
+            </div>
+            <aside class="document-tools-pane" aria-label="Herramientas del documento">
+              <header><v-icon icon="mdi-tools" size="18" /><strong>Herramientas</strong></header>
+              <div class="document-tools-list">
                 <article
-                  v-for="(item, index) in requiredExercises"
-                  :key="item.exerciseId"
-                  class="document-queue-card"
+                  v-for="tool in documentTools"
+                  :key="tool.id"
+                  class="document-tool-card"
+                  :class="`document-tool-${tool.id}`"
                   draggable="true"
-                  @dragstart="startQueueDrag($event, item)"
-                  @dragover.prevent
-                  @drop.stop="dropOnQueueSection($event, 'required', item.exerciseId)"
+                  @dragstart="startToolDrag($event, tool)"
                 >
-                  <header>
-                    <span class="document-queue-order">{{ index + 1 }}</span>
-                    <strong>{{ subjectLabel(exerciseForQueue(item)) }}</strong>
-                    <v-spacer />
-                    <v-tooltip text="Mover a optativos" location="top">
-                      <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-arrow-down" size="x-small" variant="text" color="secondary" aria-label="Mover a optativos" @click="moveQueuedExercise(item, 'optional')" /></template>
-                    </v-tooltip>
-                    <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Quitar ejercicio" @click="removeQueuedExercise(item.exerciseId)" />
-                  </header>
-                  <ExerciseVariantSelector
-                    :model-value="item.version"
-                    :variations="exerciseForQueue(item)?.variaciones || []"
-                    compact
-                    @update:model-value="setSelectedVersion(exerciseForQueue(item), $event)"
-                  />
-                  <div class="document-queue-card-pdf">
-                    <ExercisePdfPreview v-if="queueExercisePdf(item)" :src="queueExercisePdf(item)" :title="`Ejercicio obligatorio ${index + 1}`" />
-                    <div v-else class="document-exercise-no-pdf"><v-icon icon="mdi-file-pdf-box" size="30" /><span>PDF pendiente</span></div>
-                  </div>
-                  <footer>{{ conceptLabel(exerciseForQueue(item)) }}</footer>
+                  <v-icon v-if="tool.icon" :icon="tool.icon" size="20" />
+                  <strong>{{ tool.label }}</strong>
+                  <span>{{ tool.description }}</span>
                 </article>
               </div>
-              <div v-else class="document-queue-empty compact"><v-icon icon="mdi-tray-arrow-down" size="36" /><span>Suelta aquí los ejercicios obligatorios.</span></div>
-            </div>
-
-            <div class="document-optional-divider">
-              <div><strong>Ejercicios optativos</strong><span v-if="optionalExercises.length">Elegir</span></div>
-              <div
-                v-if="optionalChoiceOptions.length"
-                class="document-optional-count"
-                aria-label="Número de ejercicios optativos que deben elegirse"
-                role="group"
-              >
-                <button
-                  v-for="option in optionalChoiceOptions"
-                  :key="option"
-                  type="button"
-                  :class="{ selected: optionalRequiredCount === option }"
-                  :aria-pressed="optionalRequiredCount === option"
-                  @click="setOptionalRequiredCount(option)"
-                >{{ option }}</button>
-              </div>
-              <span v-else-if="optionalExercises.length === 1" class="document-optional-single">1 de 1</span>
-              <span v-else class="document-optional-empty-label">Ninguno</span>
-              <v-chip size="small" color="secondary" variant="tonal">{{ optionalExercises.length }}</v-chip>
-            </div>
-
-            <div class="document-queue-section document-optional-section" @dragover.prevent @drop="dropOnQueueSection($event, 'optional')">
-              <div v-if="optionalExercises.length" class="document-queue-grid">
-                <article
-                  v-for="(item, index) in optionalExercises"
-                  :key="item.exerciseId"
-                  class="document-queue-card"
-                  draggable="true"
-                  @dragstart="startQueueDrag($event, item)"
-                  @dragover.prevent
-                  @drop.stop="dropOnQueueSection($event, 'optional', item.exerciseId)"
-                >
-                  <header>
-                    <span class="document-queue-order optional">{{ index + 1 }}</span>
-                    <strong>{{ subjectLabel(exerciseForQueue(item)) }}</strong>
-                    <v-spacer />
-                    <v-tooltip text="Mover a obligatorios" location="top">
-                      <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-arrow-up" size="x-small" variant="text" color="primary" aria-label="Mover a obligatorios" @click="moveQueuedExercise(item, 'required')" /></template>
-                    </v-tooltip>
-                    <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Quitar ejercicio" @click="removeQueuedExercise(item.exerciseId)" />
-                  </header>
-                  <ExerciseVariantSelector
-                    :model-value="item.version"
-                    :variations="exerciseForQueue(item)?.variaciones || []"
-                    compact
-                    @update:model-value="setSelectedVersion(exerciseForQueue(item), $event)"
-                  />
-                  <div class="document-queue-card-pdf">
-                    <ExercisePdfPreview v-if="queueExercisePdf(item)" :src="queueExercisePdf(item)" :title="`Ejercicio optativo ${index + 1}`" />
-                    <div v-else class="document-exercise-no-pdf"><v-icon icon="mdi-file-pdf-box" size="30" /><span>PDF pendiente</span></div>
-                  </div>
-                  <footer>{{ conceptLabel(exerciseForQueue(item)) }}</footer>
-                </article>
-              </div>
-              <div v-else class="document-queue-empty compact"><v-icon icon="mdi-source-branch" size="36" /><span>Suelta aquí al menos dos ejercicios optativos.</span></div>
-            </div>
+            </aside>
           </section>
         </div>
 
         <div v-else class="document-preview-step" :class="{ 'document-preview-with-code': showDocumentCode }">
           <div class="document-preview-display-toolbar">
+            <v-btn
+              prepend-icon="mdi-refresh"
+              size="small"
+              rounded="pill"
+              variant="text"
+              :loading="isCompiling"
+              :disabled="isCompiling || !selectedTemplate"
+              @click="compileDocument(true)"
+            >Recompilar</v-btn>
             <v-btn
               :prepend-icon="showDocumentCode ? 'mdi-code-tags-check' : 'mdi-code-tags'"
               size="small"
@@ -979,8 +2092,62 @@ defineExpose({
               @click="showDocumentCode = !showDocumentCode"
             >{{ showDocumentCode ? 'Ocultar código' : 'Mostrar código' }}</v-btn>
           </div>
-          <v-alert v-if="compileError" type="error" variant="tonal" density="compact" class="document-compile-error">{{ compileError }}</v-alert>
           <div class="document-preview-layout">
+            <aside class="document-preview-selector" aria-label="Documentos generados">
+              <article v-if="workflowDocumentSummary.group || workflowDocumentSummary.items.length" class="document-preview-summary">
+                <header>
+                  <div>
+                    <span>Grupo</span>
+                    <strong>{{ workflowDocumentSummary.group || 'Sin grupo' }}</strong>
+                  </div>
+                  <small v-if="workflowDocumentSummary.studentCount !== null">
+                    <v-icon icon="mdi-account-multiple-outline" size="14" />
+                    {{ workflowDocumentSummary.studentCount }} {{ workflowDocumentSummary.studentCount === 1 ? 'alumno' : 'alumnos' }}
+                  </small>
+                </header>
+                <dl v-if="workflowDocumentSummary.items.length">
+                  <div v-for="item in workflowDocumentSummary.items" :key="item.key">
+                    <dt><v-icon :icon="item.icon" size="14" />{{ item.label }}</dt>
+                    <dd>{{ item.value }}</dd>
+                  </div>
+                </dl>
+              </article>
+              <strong>Documentos generados</strong>
+              <div
+                v-for="template in selectedTemplates"
+                :key="template.key"
+                class="document-preview-selector-item"
+                :class="{ active: selectedPreviewTemplateKey === template.key }"
+              >
+                <button type="button" class="document-preview-select" @click="selectPreviewTemplate(template.key)">
+                  <v-icon icon="mdi-file-pdf-box" size="18" />
+                  <span>{{ template.nombre || template.metadata.name }}</span>
+                </button>
+                <span class="document-preview-actions">
+                  <v-btn
+                    icon="mdi-download"
+                    size="x-small"
+                    density="comfortable"
+                    variant="text"
+                    rounded="circle"
+                    aria-label="Descargar documento"
+                    :disabled="!previewEntryForTemplate(template.key)"
+                    @click.stop="downloadGeneratedDocument(previewEntryForTemplate(template.key))"
+                  />
+                  <v-btn
+                    icon="mdi-printer-outline"
+                    size="x-small"
+                    density="comfortable"
+                    variant="text"
+                    rounded="circle"
+                    aria-label="Imprimir documento"
+                    :disabled="!previewEntryForTemplate(template.key)"
+                    @click.stop="printGeneratedDocument(previewEntryForTemplate(template.key))"
+                  />
+                </span>
+              </div>
+            </aside>
+            <div class="document-preview-render">
             <DocumentCodeEditor
               v-if="showDocumentCode"
               :model-value="documentCode"
@@ -989,11 +2156,39 @@ defineExpose({
               @compile="compileDocument"
             />
             <DocumentPdfPreview :src="previewUrl" />
+            </div>
           </div>
         </div>
       </div>
+      <v-snackbar
+        v-model="compileErrorVisible"
+        location="bottom"
+        color="error"
+        :timeout="-1"
+        multi-line
+        class="document-compile-snackbar"
+      >
+        <div class="document-compile-snackbar-message">{{ compileError }}</div>
+        <template #actions>
+          <v-btn variant="text" size="small" @click="copyCompileError">Copiar</v-btn>
+          <v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar error" @click="compileErrorVisible = false" />
+        </template>
+      </v-snackbar>
     </section>
   </div>
+  <v-dialog v-model="documentDeleteDialog" max-width="430" persistent>
+    <v-card>
+      <v-card-title>Eliminar documento</v-card-title>
+      <v-card-text>
+        ¿Seguro que quieres eliminar «{{ documentDeleteTarget ? documentCardTitle(documentDeleteTarget) : '' }}»? Se borrarán también sus PDFs almacenados.
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" :disabled="isDeletingDocument" @click="documentDeleteDialog = false">Cancelar</v-btn>
+        <v-btn color="error" variant="flat" :loading="isDeletingDocument" @click="deleteDocument">Eliminar</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 </template>
 
 <style scoped>
@@ -1016,6 +2211,7 @@ defineExpose({
 .document-library-empty strong { color: #34577f; }
 .document-library-empty span { font-size: .78rem; }
 .document-viewer { width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+.document-viewer-layout { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); overflow: hidden; }
 
 .document-workflow { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-rows: 76px minmax(0, 1fr); overflow: hidden; }
 .document-stepper { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0 8%; border-bottom: 1px solid #d7e1ed; background: #fff; list-style: none; }
@@ -1032,7 +2228,7 @@ defineExpose({
 .document-stepper li.complete .document-step-number { border-color: #6b94c9; background: #e6effa; color: #315f97; }
 .document-step-content { min-width: 0; min-height: 0; overflow: hidden; }
 
-.document-template-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); overflow: hidden; }
+.document-template-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(0, 1.35fr) minmax(220px, .8fr) minmax(280px, 1fr); overflow: hidden; }
 .document-template-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-content: start; gap: 12px; padding: 14px; overflow: auto; }
 .document-template-empty { display: flex; min-height: 220px; align-items: center; justify-content: center; grid-column: 1 / -1; flex-direction: column; gap: 9px; padding: 30px; border: 1px dashed #cfdbea; border-radius: 16px; background: rgba(255, 255, 255, .65); color: #71859d; text-align: center; }
 .document-template-empty strong { color: #385b82; }
@@ -1044,6 +2240,14 @@ defineExpose({
 .document-template-card span { color: #778ba3; font-size: .76rem; line-height: 1.4; }
 .document-template-card.selected { border-color: #3e75ba; box-shadow: 0 0 0 2px rgba(62, 117, 186, .15); }
 .document-template-selected { position: absolute; top: 12px; right: 12px; color: #3e75ba; }
+.document-template-queue { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 10px; padding: 14px; border-left: 1px solid #d8e2ed; border-right: 1px solid #d8e2ed; background: #f5f8fc; overflow: auto; }
+.document-template-queue > header { display: flex; align-items: center; gap: 8px; color: #315981; font-size: .78rem; }
+.document-template-queue-list { display: flex; flex-direction: column; gap: 8px; }
+.document-template-queue-card { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px; border: 1px solid #bfd0e4; border-radius: 10px; background: #fff; box-shadow: 0 2px 7px rgba(25, 54, 91, .06); }
+.document-template-queue-card div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.document-template-queue-card strong { overflow: hidden; color: #31557e; font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+.document-template-queue-card span { overflow: hidden; color: #7c8da2; font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
+.document-template-queue-empty { display: flex; min-height: 150px; align-items: center; justify-content: center; flex-direction: column; gap: 8px; padding: 18px; border: 1px dashed #bfd0e4; border-radius: 12px; color: #7d8fa5; font-size: .72rem; text-align: center; }
 .document-fields-pane { display: flex; min-height: 0; align-items: stretch; justify-content: flex-start; flex-direction: column; gap: 12px; padding: 18px; border-left: 1px solid #d8e2ed; overflow: auto; background: #fff; }
 .document-fields-pane :deep(.v-input) { flex: 0 0 auto; }
 .document-fields-pane.empty { align-items: center; justify-content: center; color: #7d8fa5; text-align: center; font-size: .78rem; }
@@ -1052,24 +2256,34 @@ defineExpose({
 .document-fields-heading span { color: #7e8fa4; font-size: .69rem; }
 
 .document-curriculum-step { width: 100%; height: 100%; }
-.document-exercise-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); overflow: hidden; }
+.document-exercise-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 142px; overflow: hidden; }
 .document-matches-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border-right: 1px solid #d8e2ed; }
 .document-exercise-toolbar { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-bottom: 1px solid #dbe4ef; background: #fff; }
 .document-exercise-toolbar .v-text-field { flex: 1; }
 .document-exercise-toolbar > span { color: #74879e; font-size: .7rem; font-weight: 700; white-space: nowrap; }
 .document-matches-scroll { flex: 1 1 auto; min-height: 0; padding: 9px; overflow: auto; }
 .document-matches-grid { width: 100%; }
-.document-exercise-card { width: 100%; min-width: 0; overflow: hidden; border: 1px solid #d3deeb; border-radius: 13px; background: #fff; box-shadow: 0 2px 8px rgba(27, 56, 91, .07); cursor: grab; }
+.document-exercise-card { width: 100%; min-width: 0; overflow: hidden; border: 1px solid #d3deeb; border-radius: 13px; background: #fff; cursor: grab; }
 .document-exercise-card:active { cursor: grabbing; }
-.document-exercise-card > header { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 8px 5px 10px; background: #eaf1fa; color: #3b5779; font-size: .68rem; font-weight: 800; }
-.document-exercise-add-actions { display: flex; align-items: center; gap: 5px; }
+.document-exercise-card > .document-exercise-card-header { display: flex; min-height: 29px; flex-direction: column; padding: 0; background: #eaf1fa; color: #3b5779; font-size: .64rem; font-weight: 800; }
+.document-exercise-card-identity { display: flex; min-width: 0; min-height: 29px; align-items: center; gap: 6px; padding: 3px 5px 3px 9px; }
+.document-exercise-card-identity > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-exercise-add-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 1px; margin-left: auto; }
+.document-exercise-add-actions :deep(.v-btn) { width: 25px; height: 25px; box-shadow: none !important; }
+.document-exercise-card-header :deep(.exercise-variant-bar) { width: 100%; border-top: 1px solid #d4e0ed; border-bottom: 0; background: #f3f7fc; }
 .document-exercise-card-pdf { overflow: hidden; background: #fff; }
+.document-exercise-card-thumbnail { display: block; width: 100%; height: auto; margin: 0; }
 .document-exercise-card-pdf :deep(.exercise-pdf-preview) { min-height: 155px; }
 .document-exercise-card-pdf :deep(.exercise-pdf-preview.exercise-pdf-preview-loaded) { min-height: 0; }
 .document-exercise-no-pdf { display: flex; min-height: 155px; align-items: center; justify-content: center; flex-direction: column; color: #7d8da2; font-size: .72rem; }
-.document-exercise-card > footer { padding: 7px 9px; color: #5a6f8a; font-size: .67rem; line-height: 1.35; }
+.document-exercise-card > footer { padding: 5px 8px; color: #5a6f8a; font-size: .6rem; line-height: 1.25; }
+.document-exercise-concepts { overflow: hidden; border-top: 1px solid #dfe7f0; background: #f7f9fc; text-overflow: ellipsis; white-space: nowrap; }
+.document-exercise-authors { display: flex; min-width: 0; min-height: 27px; align-items: center; gap: 6px; border-top: 1px solid #e1e7ef; background: #fff; color: #718198 !important; font-size: .56rem !important; }
+.document-exercise-authors > span:not(.v-spacer) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-exercise-authors strong { color: #3e5878; font-weight: 800; }
 .document-exercises-empty { display: flex; flex: 1; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: #73859c; }
-.document-queue-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow-x: hidden; overflow-y: auto; background: #f4f7fb; }
+.document-queue-pane { display: contents; }
+.document-queue-content { grid-column: 2; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; background: #f4f7fb; }
 .document-queue-section { display: flex; min-width: 0; flex: 0 0 auto; flex-direction: column; overflow: visible; }
 .document-required-section { background: #f7faff; }
 .document-optional-section { background: #fbf8fd; }
@@ -1085,9 +2299,23 @@ defineExpose({
 .document-queue-order { display: inline-flex; width: 25px; height: 25px; align-items: center; justify-content: center; border-radius: 50%; background: #3f72b7; color: #fff; font-size: .7rem; font-weight: 800; }
 .document-queue-order.optional { background: #a25091; }
 .document-queue-card :deep(.exercise-variant-bar) { border-inline: 0; border-radius: 0; }
+.document-queue-sections { display: grid; border-top: 1px solid #dfe7f0; border-bottom: 1px solid #dfe7f0; background: #f9fbfe; }
+.document-queue-section { min-width: 0; overflow: hidden; border-top: 1px solid #dfe7f0; }
+.document-queue-section:first-child { border-top: 0; }
+.document-queue-metric-row { display: grid; min-height: 29px; align-items: center; grid-template-columns: 32px 1fr 1fr; gap: 5px; padding: 3px 7px; border-top: 1px solid #e8edf4; }
+.document-queue-metric-row:first-child { border-top: 0; }
+.document-queue-metric-row > strong { color: #416185; font-size: .62rem; }
+.document-queue-metric-row label { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 3px; color: #77899f; font-size: .49rem; font-weight: 750; text-transform: uppercase; }
+.document-queue-metric-row input { width: 58px; height: 23px; padding: 0 5px; border: 1px solid #c9d6e5; border-radius: 5px; outline: 0; background: #fff; color: #31557e; font: inherit; font-size: .64rem; text-align: center; }
+.document-queue-metric-row input:focus { border-color: #4b7fbc; box-shadow: 0 0 0 2px rgba(75,127,188,.13); }
+.document-queue-metric-row input:disabled { border-color: transparent; background: #e9eff6; color: #60758f; opacity: 1; }
+.document-queue-metric-main { background: #edf3fa; }
 .document-queue-card-pdf { overflow: hidden; background: #fff; }
 .document-queue-card-pdf :deep(.exercise-pdf-preview) { min-height: 135px; }
 .document-queue-card-pdf :deep(.exercise-pdf-preview.exercise-pdf-preview-loaded) { min-height: 0; }
+.document-queue-apartado .document-queue-metric-row { background: #f5f8fc; }
+.document-queue-apartado .document-queue-card-pdf :deep(.exercise-pdf-preview) { min-height: 92px; }
+.document-exercise-no-pdf.compact { min-height: 76px; gap: 4px; font-size: .6rem; }
 .document-queue-card > footer { min-height: 31px; padding: 6px 8px; color: #5a6f8a; font-size: .62rem; line-height: 1.35; }
 .document-optional-divider { display: grid; min-height: 48px; align-items: center; grid-template-columns: minmax(132px, auto) auto minmax(0, 1fr); gap: 10px; padding: 6px 12px; border-top: 1px solid #d7e1ed; border-bottom: 1px solid #d7e1ed; background: #fff; }
 .document-optional-divider > div { display: flex; align-items: baseline; gap: 8px; color: #734b76; }
@@ -1104,17 +2332,136 @@ defineExpose({
 .document-queue-empty.compact { min-height: 0; padding: 14px; }
 .document-queue-empty strong { color: #3c5d81; }
 .document-queue-empty span { font-size: .7rem; }
+.document-tool-queue-card { border-color: #b9cce2; background: #f8fbff; }
+.document-tool-obligatorios { border-color: #9bb9d8; background: #edf5ff; }
+.document-tool-optativos { border-color: #d0afd0; background: #fbf1fb; }
+.document-tool-salto-pagina { border-color: #c9b993; background: #fff9ed; }
+.document-tool-card.document-tool-obligatorios { border-color: #9bb9d8; background: #edf5ff; color: #315f97; }
+.document-tool-card.document-tool-optativos { border-color: #d0afd0; background: #fbf1fb; color: #86517e; }
+.document-tool-card.document-tool-salto-pagina { border-color: #c9b993; background: #fff9ed; color: #876b2f; }
+.document-tool-queue-header.document-tool-obligatorios { background: #e2effd; color: #315f97; }
+.document-tool-queue-header.document-tool-optativos { background: #f6e6f5; color: #86517e; }
+.document-tool-queue-header.document-tool-salto-pagina { background: #fff1cf; color: #876b2f; }
+.document-tool-card.document-tool-obligatorios,
+.document-tool-card.document-tool-optativos,
+.document-tool-card.document-tool-salto-pagina {
+  border-color: #244f88;
+  background: #315f97;
+  color: #fff;
+  box-shadow: 0 3px 9px rgba(30, 65, 102, .2);
+}
+.document-tool-queue-header.document-tool-obligatorios,
+.document-tool-queue-header.document-tool-optativos,
+.document-tool-queue-header.document-tool-salto-pagina {
+  background: #315f97;
+  color: #fff;
+}
+.document-tool-queue-card.document-tool-obligatorios,
+.document-tool-queue-card.document-tool-optativos,
+.document-tool-queue-card.document-tool-salto-pagina {
+  border-color: #244f88;
+  background: #315f97;
+  color: #fff;
+}
+.document-tool-queue-card {
+  border-color: #244f88;
+  background: #315f97;
+  color: #fff;
+}
+.document-tool-queue-card > header {
+  background: #315f97;
+}
+.document-tool-queue-card > header strong,
+.document-tool-queue-card .document-tool-queue-body,
+.document-tool-queue-card .document-tool-queue-body span {
+  color: #fff;
+}
+.document-tool-queue-card .document-tool-queue-body {
+  color: rgba(255,255,255,.88);
+}
+.document-tool-card.document-tool-obligatorios span,
+.document-tool-card.document-tool-optativos span,
+.document-tool-card.document-tool-salto-pagina span {
+  color: rgba(255,255,255,.82);
+}
+.document-tool-choice {
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.document-tool-choice button {
+  color: rgba(255,255,255,.88);
+  border: 1px solid rgba(255,255,255,.52);
+}
+.document-tool-choice button:hover {
+  background: rgba(255,255,255,.16);
+}
+.document-tool-choice button.selected {
+  border-color: #dce9f8;
+  background: #dce9f8;
+  color: #244f88;
+  box-shadow: 0 1px 4px rgba(9, 29, 55, .24);
+}
+.document-tool-choice button:focus-visible {
+  box-shadow: 0 0 0 2px rgba(255,255,255,.62);
+}
+.document-tool-remove {
+  color: rgba(255,255,255,.82) !important;
+}
+.document-tool-remove:hover {
+  background: rgba(255,255,255,.14) !important;
+  color: #ffd7d7 !important;
+}
+.document-tool-disabled { opacity: .55; }
+.document-tool-queue-header { min-height: 34px; color: #315f97; }
+.document-tool-queue-body { display: grid; gap: 8px; padding: 10px 9px; color: #5d7592; font-size: .66rem; line-height: 1.35; }
+.document-tool-queue-body p { margin: 0; }
+.document-tool-choice { display: inline-flex; align-items: center; justify-self: end; gap: 4px; width: fit-content; padding: 0; border: 0; background: transparent; }
+.document-tool-choice button { display: inline-flex; width: 25px; height: 25px; align-items: center; justify-content: center; padding: 0; border: 1px solid rgba(255,255,255,.52); border-radius: 50%; outline: 0; background: transparent; color: rgba(255,255,255,.88); font: inherit; font-size: .68rem; font-weight: 800; cursor: pointer; }
+.document-tool-choice button:hover { background: rgba(255,255,255,.16); }
+.document-tool-choice button.selected { border-color: #dce9f8; background: #dce9f8; color: #244f88; box-shadow: 0 1px 4px rgba(9, 29, 55, .24); }
+.document-tool-choice button:focus-visible { box-shadow: 0 0 0 2px rgba(255,255,255,.62); }
+.document-tool-choice span { max-width: 145px; padding: 3px 5px; color: rgba(255,255,255,.84); font-size: .62rem; }
+.document-tools-pane { grid-column: 3; min-width: 0; padding: 8px; border-left: 1px solid #d8e2ed; background: #eef3f9; overflow: auto; }
+.document-tools-pane > header { display: flex; align-items: center; gap: 6px; padding: 5px 3px 9px; border-bottom: 1px solid #d3dfec; color: #315981; font-size: .72rem; }
+.document-tools-list { display: grid; gap: 8px; padding-top: 8px; }
+.document-tool-card { display: flex; min-width: 0; align-items: center; flex-direction: column; gap: 5px; padding: 10px 6px; border: 1px solid #c7d6e7; border-radius: 10px; background: #fff; color: #315f97; text-align: center; cursor: grab; box-shadow: 0 2px 6px rgba(30, 65, 102, .06); }
+.document-tool-card:active { cursor: grabbing; }
+.document-tool-card strong { font-size: .68rem; }
+.document-tool-card span { color: #74879e; font-size: .6rem; line-height: 1.3; }
 
 .document-preview-step { position: relative; display: grid; width: 100%; height: 100%; min-height: 0; grid-template-rows: 43px minmax(0, 1fr); overflow: hidden; }
 .document-preview-display-toolbar { display: flex; align-items: center; justify-content: flex-end; padding: 5px 10px; border-bottom: 1px solid #d7e1ed; background: #fff; }
-.document-preview-layout { min-width: 0; min-height: 0; overflow: hidden; }
-.document-preview-with-code .document-preview-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); }
-.document-preview-with-code .document-pdf-preview { border-left: 1px solid #cbd7e5; }
+.document-preview-layout { display: grid; min-width: 0; min-height: 0; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); overflow: hidden; }
+.document-preview-selector { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 8px; padding: 12px; border-right: 1px solid #d8e2ed; background: #f4f7fb; overflow: auto; }
+.document-preview-summary { overflow: hidden; border: 1px solid #c4d5e8; border-radius: 12px; background: #fff; color: #315981; box-shadow: 0 4px 12px rgba(43, 76, 118, .08); }
+.document-preview-summary header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 11px; background: linear-gradient(135deg, #315f97, #477ebd); color: #fff; }
+.document-preview-summary header div { min-width: 0; }
+.document-preview-summary header span { display: block; margin-bottom: 1px; color: #cfe0f3; font-size: .54rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.document-preview-summary header strong { display: block; overflow: hidden; font-size: .85rem; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.document-preview-summary header small { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 4px 7px; border: 1px solid rgba(255,255,255,.28); border-radius: 999px; background: rgba(255,255,255,.14); color: #fff; font-size: .58rem; font-weight: 750; white-space: nowrap; }
+.document-preview-summary dl { display: grid; gap: 0; margin: 0; padding: 5px 10px 7px; }
+.document-preview-summary dl > div { display: grid; min-width: 0; grid-template-columns: 76px minmax(0, 1fr); align-items: baseline; gap: 7px; padding: 6px 1px; border-bottom: 1px solid #e4ebf3; }
+.document-preview-summary dl > div:last-child { border-bottom: 0; }
+.document-preview-summary dt { display: inline-flex; align-items: center; gap: 4px; color: #7b8ea6; font-size: .57rem; font-weight: 750; }
+.document-preview-summary dd { min-width: 0; margin: 0; overflow: hidden; color: #385a80; font-size: .65rem; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
+.document-preview-selector > strong { padding: 2px 4px 7px; color: #315981; font-size: .76rem; }
+.document-preview-selector-item { display: flex; min-width: 0; align-items: center; gap: 2px; padding: 3px 4px 3px 6px; border: 1px solid #d2deeb; border-radius: 10px; background: #fff; color: #557292; }
+.document-preview-selector-item.active { border-color: #3e75ba; background: #e8f0fb; color: #28588f; box-shadow: 0 0 0 2px rgba(62,117,186,.12); }
+.document-preview-select { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 7px; padding: 7px 3px; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; font-size: .72rem; text-align: left; cursor: pointer; }
+.document-preview-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-preview-actions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 0; }
+.document-preview-actions .v-btn { color: currentColor; }
+.document-preview-render { min-width: 0; min-height: 0; overflow: hidden; }
+.document-preview-with-code .document-preview-render { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); }
+.document-preview-with-code .document-preview-render .document-pdf-preview { border-left: 1px solid #cbd7e5; }
 .document-compile-error { position: absolute; z-index: 4; top: 53px; right: 12px; left: 12px; max-height: 38%; overflow: auto; }
+.document-compile-snackbar-message { max-width: min(70vw, 920px); max-height: 28vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem; line-height: 1.35; }
 
 @media (max-width: 900px) {
   .document-stepper { padding-inline: 2%; }
-  .document-template-step { grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr); }
-  .document-exercise-step { grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); }
+  .document-template-step { grid-template-columns: minmax(0, 1.15fr) minmax(190px, .8fr) minmax(250px, 1fr); }
+  .document-exercise-step { grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr) 124px; }
 }
 </style>

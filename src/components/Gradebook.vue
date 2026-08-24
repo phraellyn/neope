@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { deleteStudentIdentities, loadStudentIdentities, saveStudentIdentities } from '../services/localStudentIdentity'
+import { computed, onMounted, ref, watch } from 'vue'
+import { deleteStudentIdentitiesForGroup, loadStudentIdentitiesForGroup, saveStudentIdentities } from '../services/localStudentIdentity'
+import { showAppErrorToast } from '../composables/useAppErrorToast'
 
 const props = defineProps({
   group: { type: Object, required: true },
@@ -14,12 +15,6 @@ const emit = defineEmits(['dirty-change', 'validity-change', 'autosave-request',
 const STUDENT_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz123456789'
 const MAX_STUDENTS = 50
 const RESULT_COLUMN_MIN_WIDTH = 72
-
-function identityGroupIds(group) {
-  if (!group) return []
-  const legacyId = [group.nombre, group.asignatura, group.aula, group.color].join('|')
-  return [...new Set([group.id, legacyId].filter(Boolean))]
-}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -58,6 +53,9 @@ function normalizeGroup(group) {
     evaluaciones: {
       estructura: (group.evaluaciones?.estructura || legacyItems).map(normalizeNode),
       resultados: group.evaluaciones?.resultados ? clone(group.evaluaciones.resultados) : {},
+      pesos: group.evaluaciones?.pesos && typeof group.evaluaciones.pesos === 'object'
+        ? clone(group.evaluaciones.pesos)
+        : {},
     },
   }
 }
@@ -75,11 +73,19 @@ const touchDrag = ref(null)
 const dragPreview = ref(null)
 const identityLoading = ref(true)
 const identityError = ref('')
+watch(identityError, (message) => {
+  if (message) showAppErrorToast(message)
+})
 const removedStudentIds = new Set()
 const deleteGroupDialog = ref(false)
 const pendingDeleteGroup = ref(null)
 const editNodeDialog = ref(false)
 const editNodeForm = ref({ id: null, nombre: '', nombreCorto: '' })
+const weightDialog = ref(false)
+const weightDialogTitle = ref('')
+const weightDialogParentId = ref(null)
+const weightDialogNodes = ref([])
+const weightDialogWeights = ref({})
 const suppressTitleClick = ref(false)
 let revision = 0
 
@@ -420,10 +426,54 @@ function numericResult(studentId, itemId) {
 }
 
 function groupMean(studentId, group) {
-  const values = descendantItemIds(group).map((id) => numericResult(studentId, id)).filter((value) => value !== null)
-  if (!values.length) return ''
-  const mean = values.reduce((sum, value) => sum + value, 0) / values.length
-  return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(mean)
+  const value = weightedNodeMean(studentId, group)
+  return value === null ? '' : new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(value)
+}
+
+function weightedNodeMean(studentId, node) {
+  if (!node) return null
+  if (node.type === 'item') return numericResult(studentId, node.id)
+  const weights = localGroup.value.evaluaciones.pesos?.[node.id] || {}
+  const values = node.children.map((child) => ({
+    value: weightedNodeMean(studentId, child),
+    weight: weights[child.id] === undefined ? 1 : Math.max(0, Number(weights[child.id]) || 0),
+  })).filter((entry) => entry.value !== null && entry.weight > 0)
+  if (!values.length) return null
+  const totalWeight = values.reduce((sum, entry) => sum + entry.weight, 0)
+  return values.reduce((sum, entry) => sum + entry.value * entry.weight, 0) / totalWeight
+}
+
+function canConfigureWeights(node) {
+  const location = findNode(node?.id)
+  return Boolean(node && (node.type === 'group' || (node.type === 'item' && !location?.parent)))
+}
+
+function openWeightDialog(node) {
+  if (props.disabled || !canConfigureWeights(node)) return
+  const location = findNode(node.id)
+  if (!location) return
+  const nodes = node.type === 'group'
+    ? node.children
+    : location.nodes.slice(0, location.index + 1)
+  if (!nodes.length) return
+  const parentId = node.type === 'group' ? node.id : '__root__'
+  const savedWeights = localGroup.value.evaluaciones.pesos?.[parentId] || {}
+  weightDialogTitle.value = node.type === 'group' ? `Pesos de ${node.nombre}` : `Pesos de ${node.nombreCorto || node.nombre}`
+  weightDialogParentId.value = parentId
+  weightDialogNodes.value = nodes
+  weightDialogWeights.value = Object.fromEntries(nodes.map((child) => [child.id, savedWeights[child.id] === undefined ? 100 : Math.max(0, Number(savedWeights[child.id]) || 0)]))
+  weightDialog.value = true
+}
+
+function saveWeightDialog() {
+  if (!weightDialogParentId.value) return
+  if (!localGroup.value.evaluaciones.pesos || typeof localGroup.value.evaluaciones.pesos !== 'object') localGroup.value.evaluaciones.pesos = {}
+  localGroup.value.evaluaciones.pesos[weightDialogParentId.value] = Object.fromEntries(
+    weightDialogNodes.value.map((node) => [node.id, Math.max(0, Number(weightDialogWeights.value[node.id]) || 0)]),
+  )
+  weightDialog.value = false
+  markDirty()
+  if (!props.configurationMode) emit('autosave-request', { includeIdentities: false })
 }
 
 function toggleGroup(group) {
@@ -653,7 +703,7 @@ async function persistLocalIdentities() {
 
 async function finalizeIdentityDeletions() {
   const ids = [...removedStudentIds]
-  await deleteStudentIdentities(localGroup.value.id, ids)
+  await deleteStudentIdentitiesForGroup(localGroup.value, ids)
   ids.forEach((id) => removedStudentIds.delete(id))
 }
 
@@ -672,7 +722,7 @@ onMounted(async () => {
   identityLoading.value = true
   identityError.value = ''
   try {
-    const storedIdentities = await loadStudentIdentities(identityGroupIds(localGroup.value))
+    const storedIdentities = await loadStudentIdentitiesForGroup(localGroup.value)
     students.value.forEach((student) => {
       const localIdentity = storedIdentities.get(student.id)
       Object.assign(student, localIdentity || {})
@@ -701,9 +751,6 @@ defineExpose({
 
 <template>
   <div class="gradebook" :class="{ 'gradebook-disabled': disabled, 'gradebook-configuration': configurationMode }">
-    <v-alert v-if="identityError" type="error" variant="tonal" density="compact" class="gradebook-local-error">
-      {{ identityError }}
-    </v-alert>
     <div class="gradebook-scroller">
       <table class="gradebook-table" :style="tableStyle">
         <colgroup>
@@ -749,12 +796,16 @@ defineExpose({
                 <template v-if="cell.kind === 'group'">
                   <span
                     class="gradebook-header-label"
+                    :class="{ 'gradebook-header-label-configurable': configurationMode && canConfigureWeights(cell.node) }"
                     @pointerdown.stop="startPointerDrag($event, cell.node, cell.label)"
                     @pointermove.stop="movePointerDrag($event)"
                     @pointerup.stop="endPointerDrag()"
                     @pointercancel.stop="cancelPointerDrag()"
                     @click.stop="openNodeEditDialog(cell.node)"
                   >{{ cell.label }}</span>
+                  <button v-if="configurationMode && canConfigureWeights(cell.node)" type="button" class="gradebook-weight-settings" :aria-label="`Configurar pesos de ${cell.title}`" @click.stop="openWeightDialog(cell.node)">
+                    <v-icon icon="mdi-tune-variant" size="14" />
+                  </button>
                   <button type="button" class="gradebook-collapse" :aria-label="cell.node.colapsado ? `Desplegar ${cell.title}` : `Colapsar ${cell.title}`" @click.stop="toggleGroup(cell.node)">
                     <v-icon :icon="cell.node.colapsado ? 'mdi-chevron-right' : 'mdi-chevron-down'" size="16" />
                   </button>
@@ -765,12 +816,16 @@ defineExpose({
                 <template v-else-if="cell.kind === 'item'">
                   <span
                     class="gradebook-header-label"
+                    :class="{ 'gradebook-header-label-configurable': configurationMode && canConfigureWeights(cell.node) }"
                     @pointerdown.stop="startPointerDrag($event, cell.node, cell.label)"
                     @pointermove.stop="movePointerDrag($event)"
                     @pointerup.stop="endPointerDrag()"
                     @pointercancel.stop="cancelPointerDrag()"
                     @click.stop="openNodeEditDialog(cell.node)"
                   >{{ cell.label }}</span>
+                  <button v-if="configurationMode && canConfigureWeights(cell.node)" type="button" class="gradebook-weight-settings" :aria-label="`Configurar pesos de ${cell.title}`" @click.stop="openWeightDialog(cell.node)">
+                    <v-icon icon="mdi-tune-variant" size="14" />
+                  </button>
                   <button v-if="configurationMode" type="button" class="gradebook-column-remove" :aria-label="`Eliminar ${cell.title}`" @click.stop="removeItem(cell.node.id)">
                     <v-icon icon="mdi-close" size="14" />
                   </button>
@@ -895,6 +950,23 @@ defineExpose({
           <v-spacer />
           <v-btn variant="text" @click="editNodeDialog = false">Cancelar</v-btn>
           <v-btn color="primary" variant="flat" :disabled="!editNodeForm.nombre.trim() || !editNodeForm.nombreCorto.trim()" @click="saveNodeEdit">Guardar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="weightDialog" max-width="560">
+      <v-card>
+        <v-card-title class="px-6 pt-5">{{ weightDialogTitle }}</v-card-title>
+        <v-card-text class="gradebook-weight-form px-6 pb-2">
+          <div v-for="node in weightDialogNodes" :key="node.id" class="gradebook-weight-row">
+            <div class="gradebook-weight-label" :title="node.nombre">{{ node.nombreCorto || node.nombre }}</div>
+            <v-slider v-model="weightDialogWeights[node.id]" min="0" max="100" step="5" color="primary" hide-details thumb-label="always" />
+          </div>
+        </v-card-text>
+        <v-card-actions class="px-6 pb-5">
+          <v-spacer />
+          <v-btn variant="text" @click="weightDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" variant="flat" @click="saveWeightDialog">Guardar</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

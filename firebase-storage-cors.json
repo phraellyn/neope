@@ -2,7 +2,10 @@
   {
     "origin": [
       "https://neope.web.app",
-      "https://neope-9e229.web.app"
+      "https://neope-9e229.web.app",
+      "http://localhost:5177",
+      "http://127.0.0.1:5177",
+      "http://192.168.1.11:5177"
     ],
     "method": [
       "GET",

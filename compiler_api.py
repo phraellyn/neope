@@ -1,11 +1,15 @@
 from io import BytesIO
+import base64
+import binascii
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
+import requests
 from werkzeug.utils import secure_filename
 
 
@@ -15,6 +19,9 @@ CORS(app)
 PREAMBLES_DIR = Path('/app/preambles')
 OUTPUT_DIR = Path('/app/output')
 COMPILE_TIMEOUT_SECONDS = 30
+ASSET_DOWNLOAD_TIMEOUT_SECONDS = 10
+MAX_ASSET_BYTES = 5 * 1024 * 1024
+ALLOWED_ASSET_HOSTS = {'firebasestorage.googleapis.com', 'storage.googleapis.com'}
 
 PREAMBLES_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,6 +56,47 @@ def compilation_error_excerpt(output, log):
     start = max(0, error_index - 2)
     end = min(len(lines), error_index + 14)
     return '\n'.join(lines[start:end])
+
+
+def write_compile_assets(workdir, assets):
+    """Escribe recursos binarios en el directorio temporal de compilación."""
+    if not isinstance(assets, dict):
+        return
+    for raw_name, payload in assets.items():
+        name = secure_filename(str(raw_name or ''))
+        if not name or name != str(raw_name) or not isinstance(payload, dict):
+            continue
+        encoded = payload.get('data')
+        if isinstance(encoded, str):
+            try:
+                decoded = base64.b64decode(encoded, validate=True)
+                if len(decoded) <= MAX_ASSET_BYTES:
+                    (workdir / name).write_bytes(decoded)
+            except (ValueError, binascii.Error):
+                pass
+            continue
+
+        url = payload.get('url')
+        if not isinstance(url, str) or urlparse(url).scheme != 'https' or urlparse(url).hostname not in ALLOWED_ASSET_HOSTS:
+            continue
+        try:
+            response = requests.get(url, stream=True, timeout=ASSET_DOWNLOAD_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            if urlparse(response.url).hostname not in ALLOWED_ASSET_HOSTS:
+                continue
+            content_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower()
+            if not (content_type.startswith('image/') or content_type == 'application/pdf'):
+                continue
+            content = bytearray()
+            for chunk in response.iter_content(64 * 1024):
+                content.extend(chunk)
+                if len(content) > MAX_ASSET_BYTES:
+                    content.clear()
+                    break
+            if content:
+                (workdir / name).write_bytes(content)
+        except requests.RequestException:
+            continue
 
 
 @app.get('/v1/preambles')
@@ -129,6 +177,7 @@ def compile_latex():
         }), 404
 
     preamble = preamble_path.read_text(encoding='utf-8')
+    assets = data.get('assets') or {}
     document = f'{preamble}\n\\begin{{document}}\n{code}\n\\end{{document}}\n'
 
     try:
@@ -137,6 +186,7 @@ def compile_latex():
             tex_path = workdir / 'document.tex'
             pdf_path = workdir / 'document.pdf'
             log_path = workdir / 'document.log'
+            write_compile_assets(workdir, assets)
             tex_path.write_text(document, encoding='utf-8')
 
             result = subprocess.run(

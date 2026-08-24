@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { loadStudentIdentities } from '../services/localStudentIdentity'
+import { loadStudentIdentitiesForGroup } from '../services/localStudentIdentity'
 
 const props = defineProps({
   group: { type: Object, required: true },
@@ -19,7 +19,7 @@ let roomObserver
 let revision = 0
 
 const students = computed(() => Array.isArray(localGroup.value.alumnos) ? localGroup.value.alumnos : [])
-const layout = computed(() => ({ rows: 4, cols: 5, aisles: [], ...(localGroup.value.aula || {}) }))
+const layout = computed(() => ({ rows: 4, cols: 5, aisles: [], ...(localGroup.value.disposicion || {}) }))
 const seatCount = computed(() => Number(layout.value.rows) * Number(layout.value.cols))
 const seats = computed(() => Array.from({ length: seatCount.value }, (_, index) => layout.value.asientos?.[index] || null))
 const assigned = computed(() => new Set(seats.value.filter(Boolean)))
@@ -63,9 +63,7 @@ function studentFlagStyle(id) {
 }
 async function loadLocalIdentities() {
   try {
-    const group = localGroup.value
-    const legacyId = [group.nombre, group.asignatura, group.aula, group.color].join('|')
-    localIdentities.value = await loadStudentIdentities([...new Set([group.id, legacyId].filter(Boolean))])
+    localIdentities.value = await loadStudentIdentitiesForGroup(localGroup.value)
   } catch (error) {
     localIdentities.value = new Map()
     console.error('Error al cargar las identidades locales del aula:', error)
@@ -80,7 +78,7 @@ function applyLayout() {
   const rows = Math.max(1, Math.min(12, Number(layoutDraft.value.rows) || 1))
   const cols = Math.max(1, Math.min(12, Number(layoutDraft.value.cols) || 1))
   const old = seats.value
-  localGroup.value.aula = { rows, cols, aisles: [...layoutDraft.value.aisles], asientos: old.slice(0, rows * cols) }
+  localGroup.value.disposicion = { rows, cols, aisles: [...layoutDraft.value.aisles], asientos: old.slice(0, rows * cols) }
   layoutDialog.value = false
   markDirty()
 }
@@ -91,7 +89,7 @@ function assign(studentId, index) {
   const displaced = next[index]
   if (previous >= 0) next[previous] = displaced || null
   next[index] = studentId
-  localGroup.value.aula = { ...layout.value, asientos: next }
+  localGroup.value.disposicion = { ...layout.value, asientos: next }
   markDirty()
 }
 function onDrop(index) {
@@ -103,7 +101,7 @@ function onDropWell() {
   if (!dragSource.value) return
   const next = seats.value.map((id) => id === dragSource.value ? null : id)
   if (next.some((id, index) => id !== seats.value[index])) {
-    localGroup.value.aula = { ...layout.value, asientos: next }
+    localGroup.value.disposicion = { ...layout.value, asientos: next }
     markDirty()
   }
   dragSource.value = null

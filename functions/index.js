@@ -1,5 +1,24 @@
 import { defineSecret } from 'firebase-functions/params'
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https'
+import { onDocumentCreated } from 'firebase-functions/v2/firestore'
+import { initializeApp } from 'firebase-admin/app'
+import { getFirestore } from 'firebase-admin/firestore'
+import { getStorage } from 'firebase-admin/storage'
+import { randomUUID } from 'node:crypto'
+import { codeForCompiler, compilationArtifacts, sourceHash } from './exerciseCompilation.js'
+import { curriculumPromptContext } from './curriculumContext.js'
+import {
+  hasLegacyDisplayMathDelimiters,
+  hasTrailingInfoCommand,
+  normalizeDisplayMathDelimiters,
+  splitAlignedRows,
+  splitOverloadedCompactRows,
+} from './solutionLayout.js'
+
+initializeApp()
+
+const adminDb = getFirestore()
+const adminStorage = getStorage()
 
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
 const compilerOrigin = 'http://51.170.57.25:5000'
@@ -81,9 +100,421 @@ export const compilerProxy = onRequest({
   }
 })
 
+function compilationTarget(exercise, variationIndex = null) {
+  if (variationIndex === null) return exercise
+  return Array.isArray(exercise.variaciones) ? exercise.variaciones[variationIndex] : null
+}
+
+function compilationAssets(exercise = {}) {
+  return Object.fromEntries((Array.isArray(exercise.archivos) ? exercise.archivos : [])
+    .filter((file) => file?.compilerName && file?.url)
+    .map((file) => [file.compilerName, { url: file.url }]))
+}
+
+function compilationContext(preambleName, assets) {
+  const assetSignature = Object.entries(assets).sort(([left], [right]) => left.localeCompare(right))
+  return JSON.stringify({ preambleName, assets: assetSignature })
+}
+
+async function compileExerciseArtifact(artifact, preambleName, assets) {
+  const upstream = await fetch(`${compilerOrigin}/v1/compile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      code: artifact.compilerCode || codeForCompiler(artifact.code, artifact.profile),
+      preamble_name: preambleName,
+      assets,
+    }),
+    signal: AbortSignal.timeout(115_000),
+  })
+  if (!upstream.ok) {
+    const responseText = await upstream.text()
+    let details = {}
+    try {
+      details = JSON.parse(responseText)
+    } catch {
+      // Algunos errores de infraestructura llegan como texto plano o HTML.
+    }
+    const compilerDetails = details.log || details.message || responseText.trim()
+      || `El compilador ha respondido con HTTP ${upstream.status}.`
+    throw new Error(`Vista ${artifact.key}:\n${compilerDetails}`)
+  }
+
+  const pdfBuffer = Buffer.from(await upstream.arrayBuffer())
+  const pageMetrics = pdfFirstPageMetrics(pdfBuffer)
+  const bucket = adminStorage.bucket()
+  const file = bucket.file(artifact.storagePath)
+  const downloadToken = randomUUID()
+  await file.save(pdfBuffer, {
+    resumable: false,
+    contentType: 'application/pdf',
+    metadata: {
+      cacheControl: 'private, max-age=31536000, immutable',
+      metadata: {
+        firebaseStorageDownloadTokens: downloadToken,
+        sourceHash: artifact.sourceHash,
+        ...(pageMetrics ? {
+          pageWidth: String(pageMetrics.width),
+          pageHeight: String(pageMetrics.height),
+          pageAspectRatio: String(pageMetrics.aspectRatio),
+        } : {}),
+      },
+    },
+  })
+  return {
+    storagePath: artifact.storagePath,
+    downloadUrl: `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(artifact.storagePath)}?alt=media&token=${downloadToken}`,
+    sourceHash: artifact.sourceHash,
+    revision: artifact.revision,
+    updatedAt: new Date().toISOString(),
+    ...(pageMetrics || {}),
+  }
+}
+
+function pdfFirstPageMetrics(buffer) {
+  const source = buffer.toString('latin1')
+  const boxes = [...source.matchAll(/\/(?:CropBox|MediaBox)\s*\[\s*(-?(?:\d+(?:\.\d*)?|\.\d+))\s+(-?(?:\d+(?:\.\d*)?|\.\d+))\s+(-?(?:\d+(?:\.\d*)?|\.\d+))\s+(-?(?:\d+(?:\.\d*)?|\.\d+))\s*\]/g)]
+  for (const box of boxes) {
+    const [, left, bottom, right, top] = box.map(Number)
+    const width = Math.abs(right - left)
+    const height = Math.abs(top - bottom)
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) continue
+    return {
+      width: Math.round(width * 1000) / 1000,
+      height: Math.round(height * 1000) / 1000,
+      aspectRatio: Math.round((width / height) * 1_000_000) / 1_000_000,
+    }
+  }
+  return null
+}
+
+function applyArtifactReferences(target, references) {
+  const updated = structuredClone(target)
+  if (!updated.pdf || typeof updated.pdf !== 'object') updated.pdf = { statement: null, solved: null }
+
+  for (const [key, reference] of references) {
+    if (key === 'pdf.statement') updated.pdf.statement = reference
+    else if (key === 'pdf.solved') updated.pdf.solved = reference
+    else if (key === 'statement.pdf' && updated.statement) updated.statement.pdf = reference
+    else if (key === 'workedSolution.pdf' && updated.workedSolution) updated.workedSolution.pdf = reference
+    else {
+      const match = key.match(/^parts\.([^.]+)\.(statement|workedSolution)\.pdf$/)
+      if (!match) continue
+      const part = updated.parts?.find((candidate) => candidate.id === match[1])
+      if (part?.[match[2]]) part[match[2]].pdf = reference
+    }
+  }
+
+  if (!updated.workedSolution?.latex?.trim()) {
+    if (updated.workedSolution) updated.workedSolution.pdf = null
+  }
+  for (const part of updated.parts || []) {
+    if (!part.workedSolution?.latex?.trim() && part.workedSolution) part.workedSolution.pdf = null
+  }
+  const hasSolutions = Boolean(updated.workedSolution?.latex?.trim()
+    || (updated.parts || []).some((part) => part.workedSolution?.latex?.trim()))
+  if (!hasSolutions) updated.pdf.solved = null
+  return updated
+}
+
+function pdfStoragePaths(target = {}) {
+  const paths = new Set()
+  const add = (reference) => {
+    if (reference?.storagePath) paths.add(reference.storagePath)
+  }
+  add(target.pdf?.statement)
+  add(target.pdf?.solved)
+  add(target.statement?.pdf)
+  add(target.answer?.pdf)
+  add(target.workedSolution?.pdf)
+  for (const part of target.parts || []) {
+    add(part.statement?.pdf)
+    add(part.answer?.pdf)
+    add(part.workedSolution?.pdf)
+  }
+  return paths
+}
+
+async function deleteStoragePaths(paths) {
+  const bucket = adminStorage.bucket()
+  await Promise.all([...new Set(paths)].map(async (storagePath) => {
+    if (!storagePath) return
+    try {
+      await bucket.file(storagePath).delete({ ignoreNotFound: true })
+    } catch (error) {
+      console.warn('Exercise PDF cleanup failed', { storagePath, error })
+    }
+  }))
+}
+
+export const saveExerciseThumbnail = onCall({
+  region: 'europe-west1',
+  timeoutSeconds: 30,
+  memory: '256MiB',
+  invoker: 'public',
+  enforceAppCheck: true,
+}, async (request) => {
+  const exerciseId = String(request.data?.exerciseId || '').trim()
+  const sourceUrl = String(request.data?.sourceUrl || '').trim()
+  const encodedImage = String(request.data?.imageBase64 || '')
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(exerciseId) || !sourceUrl || !encodedImage) {
+    throw new HttpsError('invalid-argument', 'Faltan datos de la miniatura del ejercicio.')
+  }
+
+  const image = Buffer.from(encodedImage, 'base64')
+  if (!image.length || image.length > 500_000) {
+    throw new HttpsError('invalid-argument', 'La miniatura supera el tamaño permitido.')
+  }
+
+  const exerciseReference = adminDb.collection('ejercicios').doc(exerciseId)
+  const snapshot = await exerciseReference.get()
+  if (!snapshot.exists) throw new HttpsError('not-found', 'El ejercicio no existe.')
+  const exercise = snapshot.data() || {}
+  const currentSourceUrl = exercise.pdf?.statement?.downloadUrl
+    || exercise.pdf?.statement?.url
+    || exercise.pdf?.enunciado
+    || ''
+  if (currentSourceUrl !== sourceUrl) {
+    throw new HttpsError('failed-precondition', 'El PDF cambió antes de guardar la miniatura.')
+  }
+
+  const storagePath = `ejercicios/${exerciseId}/miniaturas/enunciado_${Date.now()}_${randomUUID()}.webp`
+  const downloadToken = randomUUID()
+  const bucket = adminStorage.bucket()
+  await bucket.file(storagePath).save(image, {
+    resumable: false,
+    contentType: 'image/webp',
+    metadata: {
+      cacheControl: 'public,max-age=31536000,immutable',
+      metadata: { firebaseStorageDownloadTokens: downloadToken },
+    },
+  })
+
+  const thumbnail = {
+    url: `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(storagePath)}?alt=media&token=${downloadToken}`,
+    storagePath,
+    sourceUrl,
+    width: Math.max(0, Number(request.data?.width) || 0),
+    height: Math.max(0, Number(request.data?.height) || 0),
+    aspectRatio: Math.max(0, Number(request.data?.aspectRatio) || 0),
+    createdAt: new Date().toISOString(),
+  }
+  const previousPath = exercise.preview?.enunciado?.storagePath
+  await exerciseReference.update({ 'preview.enunciado': thumbnail })
+  if (previousPath && previousPath !== storagePath) await deleteStoragePaths([previousPath])
+  return thumbnail
+})
+
+export const queueExerciseCompilation = onCall({
+  region: 'europe-west1',
+  timeoutSeconds: 30,
+  invoker: 'public',
+  enforceAppCheck: true,
+}, async (request) => {
+  const exerciseId = String(request.data?.exerciseId || '').trim()
+  const rawVariationIndex = request.data?.variationIndex
+  const variationIndex = Number.isInteger(rawVariationIndex) && rawVariationIndex >= 0 ? rawVariationIndex : null
+  const mode = request.data?.mode === 'full' ? 'full' : 'selective'
+  const preambleName = String(request.data?.preambleName || 'ejercicio.tex').trim()
+  if (!exerciseId) throw new HttpsError('invalid-argument', 'Falta el identificador del ejercicio.')
+
+  const exerciseReference = adminDb.collection('ejercicios').doc(exerciseId)
+  const snapshot = await exerciseReference.get()
+  if (!snapshot.exists) throw new HttpsError('not-found', 'El ejercicio no existe.')
+  const exercise = snapshot.data()
+  const target = compilationTarget(exercise, variationIndex)
+  if (!target || Number(target.schemaVersion || exercise.schemaVersion) < 3) {
+    throw new HttpsError('failed-precondition', 'El ejercicio todavía no utiliza el modelo estructurado.')
+  }
+
+  const revision = Number(target.revision) || 1
+  const jobReference = adminDb.collection('compileJobs').doc()
+  const now = new Date().toISOString()
+  await jobReference.set({
+    exerciseId,
+    variationIndex,
+    revision,
+    mode,
+    preambleName,
+    status: 'queued',
+    attempts: 0,
+    requestedAt: now,
+    startedAt: null,
+    completedAt: null,
+    error: null,
+  })
+
+  if (variationIndex === null) {
+    await exerciseReference.update({
+      'compilation.requestedRevision': revision,
+      'compilation.status': 'queued',
+      'compilation.requestedAt': now,
+      'compilation.error': null,
+    })
+  } else {
+    const variations = [...(exercise.variaciones || [])]
+    variations[variationIndex] = {
+      ...target,
+      compilation: {
+        ...(target.compilation || {}),
+        requestedRevision: revision,
+        status: 'queued',
+        requestedAt: now,
+        error: null,
+      },
+    }
+    await exerciseReference.update({ variaciones: variations })
+  }
+  return { jobId: jobReference.id, revision, status: 'queued' }
+})
+
+export const processExerciseCompilation = onDocumentCreated({
+  document: 'compileJobs/{jobId}',
+  region: 'europe-west1',
+  timeoutSeconds: 540,
+  memory: '1GiB',
+  maxInstances: 2,
+  retry: false,
+}, async (event) => {
+  const jobReference = event.data?.ref
+  const job = event.data?.data()
+  if (!jobReference || !job || job.status !== 'queued') return
+  const exerciseReference = adminDb.collection('ejercicios').doc(job.exerciseId)
+  const startedAt = new Date().toISOString()
+  const uploadedPaths = []
+  await jobReference.update({ status: 'compiling', attempts: Number(job.attempts) + 1, startedAt })
+
+  try {
+    const exerciseSnapshot = await exerciseReference.get()
+    if (!exerciseSnapshot.exists) throw new Error('El ejercicio ya no existe.')
+    const exercise = exerciseSnapshot.data()
+    const target = compilationTarget(exercise, job.variationIndex)
+    if (!target || Number(target.revision) !== Number(job.revision)) {
+      await jobReference.update({ status: 'obsolete', completedAt: new Date().toISOString() })
+      return
+    }
+
+    if (job.variationIndex === null) {
+      await exerciseReference.update({ 'compilation.status': 'compiling' })
+    }
+
+    const assets = compilationAssets(exercise)
+    const context = compilationContext(job.preambleName, assets)
+    const artifacts = compilationArtifacts(target, job.exerciseId, job.revision).map((artifact) => {
+      const compilerCode = codeForCompiler(artifact.code, artifact.profile)
+      return {
+        ...artifact,
+        compilerCode,
+        revision: job.revision,
+        sourceHash: sourceHash(compilerCode, context),
+      }
+    })
+    const pendingArtifacts = job.mode === 'full'
+      ? artifacts
+      : artifacts.filter((artifact) => (
+        !artifact.current?.storagePath || artifact.current.sourceHash !== artifact.sourceHash
+      ))
+
+    const references = new Map()
+    for (const artifact of pendingArtifacts) {
+      const reference = await compileExerciseArtifact(artifact, job.preambleName, assets)
+      references.set(artifact.key, reference)
+      uploadedPaths.push(reference.storagePath)
+    }
+
+    let pathsToDelete = []
+    const published = await adminDb.runTransaction(async (transaction) => {
+      const latestSnapshot = await transaction.get(exerciseReference)
+      if (!latestSnapshot.exists) return false
+      const latest = latestSnapshot.data()
+      const latestTarget = compilationTarget(latest, job.variationIndex)
+      if (!latestTarget || Number(latestTarget.revision) !== Number(job.revision)) return false
+      const updatedTarget = applyArtifactReferences(latestTarget, references)
+      const nextPaths = pdfStoragePaths(updatedTarget)
+      pathsToDelete = [
+        ...(latestTarget.pendingStorageCleanup || []),
+        ...[...pdfStoragePaths(latestTarget)].filter((path) => !nextPaths.has(path)),
+      ].filter((path) => !nextPaths.has(path))
+      updatedTarget.pendingStorageCleanup = []
+      const completedAt = new Date().toISOString()
+      if (job.variationIndex === null) {
+        transaction.update(exerciseReference, {
+          ...updatedTarget,
+          compilation: {
+            ...(latest.compilation || {}),
+            requestedRevision: job.revision,
+            readyRevision: job.revision,
+            status: 'ready',
+            completedAt,
+            error: null,
+          },
+        })
+      } else {
+        const variations = [...(latest.variaciones || [])]
+        variations[job.variationIndex] = {
+          ...updatedTarget,
+          compilation: {
+            ...(updatedTarget.compilation || {}),
+            requestedRevision: job.revision,
+            readyRevision: job.revision,
+            status: 'ready',
+            completedAt,
+            error: null,
+          },
+        }
+        transaction.update(exerciseReference, { variaciones: variations })
+      }
+      transaction.update(jobReference, { status: 'ready', completedAt, error: null })
+      return true
+    })
+    if (!published) {
+      await deleteStoragePaths(uploadedPaths)
+      await jobReference.update({ status: 'obsolete', completedAt: new Date().toISOString() })
+      return
+    }
+    await deleteStoragePaths(pathsToDelete)
+  } catch (error) {
+    const message = error?.message || 'No se ha podido compilar el ejercicio.'
+    console.error('Background exercise compilation failed', { jobId: event.params.jobId, error })
+    await deleteStoragePaths(uploadedPaths)
+    const completedAt = new Date().toISOString()
+    await jobReference.update({ status: 'error', completedAt, error: message })
+    if (job.variationIndex === null) {
+      const snapshot = await exerciseReference.get()
+      if (snapshot.exists && Number(snapshot.data()?.revision) === Number(job.revision)) {
+        await exerciseReference.update({
+          'compilation.status': 'error',
+          'compilation.completedAt': completedAt,
+          'compilation.error': message,
+        })
+      }
+    } else {
+      const snapshot = await exerciseReference.get()
+      if (snapshot.exists) {
+        const latest = snapshot.data()
+        const variations = [...(latest.variaciones || [])]
+        const target = variations[job.variationIndex]
+        if (target && Number(target.revision) === Number(job.revision)) {
+          variations[job.variationIndex] = {
+            ...target,
+            compilation: {
+              ...(target.compilation || {}),
+              status: 'error',
+              completedAt,
+              error: message,
+            },
+          }
+          await exerciseReference.update({ variaciones: variations })
+        }
+      }
+    }
+  }
+})
+
 const aiModels = Object.freeze({
   'openai/gpt-5-mini': { reasoningEffort: 'minimal', label: 'GPT-5 Mini' },
   'google/gemini-3-flash-preview': { reasoningEffort: 'minimal', label: 'Gemini 3 Flash' },
+  'google/gemini-3.7-flash': { reasoningEffort: 'low', label: 'Gemini 3.7 Flash' },
   'openai/gpt-5.6-luna': { reasoningEffort: 'minimal', label: 'GPT-5.6 Luna' },
   'openai/gpt-5.6-terra': { reasoningEffort: 'minimal', label: 'GPT-5.6 Terra' },
   'openai/gpt-5.6-sol': { reasoningEffort: 'minimal', label: 'GPT-5.6 Sol' },
@@ -145,32 +576,40 @@ const exerciseAnalysisResponseFormat = {
 
 const analysisSystemPrompt = String.raw`Analiza un ejercicio de Matemáticas de Secundaria o Bachillerato diseñado por un profesor. No redactes una variación ni LaTeX: extrae una estrategia de diseño para crear después una variante pedagógicamente sustancial.
 
-Identifica la estructura matemática esencial, las destrezas evaluadas, la dificultad, el esquema de solución y los elementos que deben preservarse. Propón un plan de transformación que cambie de manera estructural el objeto, la restricción, la magnitud, la representación o la pregunta, sin reducir la dificultad ni convertirlo en un simple cambio de datos. El nuevo ejercicio deberá poder resolverse con un esquema de razonamiento comparable, pero no ser clónico del original.`
+Identifica la estructura matemática esencial, las destrezas evaluadas, la dificultad, el esquema de solución y los elementos que deben preservarse. Propón un plan de transformación que cambie de manera estructural el objeto, la restricción, la magnitud, la representación o la pregunta, sin reducir la dificultad ni convertirlo en un simple cambio de datos. El nuevo ejercicio deberá poder resolverse con un esquema de razonamiento comparable, pero no ser clónico del original.
+
+Si recibes un MARCO CURRICULAR OBLIGATORIO, úsalo como límite estricto al analizar la dificultad, los prerrequisitos y el plan de transformación.`
 
 const systemPrompt = String.raw`Eres un profesor de Matemáticas de Secundaria y Bachillerato que redacta ejercicios rigurosos en LaTeX.
 
 Genera UNA variación pedagógicamente sustancial del ejercicio recibido. Debe evaluar los mismos conceptos y destrezas, conservar dificultad y extensión comparables, pero cambiar de manera razonable los datos, el enfoque, la representación o lo que se pide. No te limites a sustituir números.
 
+Si el usuario incluye un MARCO CURRICULAR OBLIGATORIO, respétalo estrictamente: el nuevo ejercicio no puede requerir conocimientos o métodos de cursos posteriores, aunque pudieran simplificar la resolución.
+
 Contrato obligatorio de salida:
-- Devuelve exclusivamente un fragmento LaTeX compilable: sin Markdown, sin explicaciones, sin preámbulo y sin \begin{document} ni \end{document}.
-- Respeta exactamente los comandos y la estructura indicados en el contrato que acompaña al ejercicio: \ej, \M, \ap, \p, \info, \begin{apartados} y los demás que estén presentes. No los conviertas en texto ordinario. Si el contrato fija el contenido de \info, respétalo literalmente.
+- Devuelve exclusivamente el ejercicio LaTeX completo como formato de intercambio con Neope: sin Markdown, sin explicaciones, sin preámbulo y sin \begin{document} ni \end{document}. Neope descompondrá después el resultado en enunciado general, apartados, respuestas, resoluciones e información; no devuelvas JSON, rutas de Storage ni referencias a PDF.
+- Conserva la estructura indicada en el contrato que acompaña al ejercicio: \ej, \ap, \info, el entorno de apartados y los demás comandos estructurales presentes. No los conviertas en texto ordinario. Si el contrato fija el contenido de \info, respétalo literalmente.
+- Los comandos \M{...}, \P{...}, \p{...}, \T{...} y \t{...} son proyecciones de campos estructurados gestionados por Neope: consérvalos literalmente, en la misma posición y con el mismo valor; no recalcules, redistribuyas ni inventes puntuaciones o tiempos. Conserva también literalmente cada comentario de identidad «% neope:part id=...» y no intercambies esos identificadores entre apartados.
 - Ignora por completo los comandos heredados \sol y \lsol: no los copies, no los generes y no añadas \soluciones. Las soluciones solo se conservan si aparecen explícitamente dentro de \begin{solucion} ... \end{solucion}.
-- Antes de responder, comprueba mentalmente que todas las variables están definidas, los datos son compatibles, cada apartado tiene respuesta y las puntuaciones suman de forma coherente.
+- Antes de responder, comprueba mentalmente que todas las variables están definidas, los datos son compatibles y cada apartado tiene respuesta. No modifiques metadatos estructurados para corregir o cuadrar puntuaciones.
 - En cualquier solución de geometría vectorial que conserves o generes, no hagas álgebra con puntos: usa vectores posición respecto de un origen, por ejemplo \Vec{OB}=\Vec{OA}+\Vec{AB}, y no B=A+\Vec{AB}.
 - Si el ejercicio pide razonar a partir de una gráfica o figura, trata la gráfica como la única fuente de información: no uses ni menciones la expresión analítica, parámetros, coordenadas de control o comandos internos de TikZ/pgfplots, salvo que estén mostrados explícitamente al alumno. Toda afirmación de la solución debe poder inferirse visualmente de la gráfica proporcionada.
 - Conserva todas las barras invertidas, equilibra llaves y entornos, y usa & únicamente dentro de pmatrix, matrizp, matrix, array, aligned, align o tabular.
 - Si hay un entorno solucion, reescribe una solución completa y correcta para los nuevos datos; si no lo hay, no inventes soluciones.
-- Si el ejercicio usa el entorno \begin{apartadosc}...\end{apartadosc}, cuando conserves o generes soluciones sustitúyelo en la salida completa por \begin{apartados}...\end{apartados}: las soluciones necesitan el ancho completo de la columna y no deben quedar repartidas en dos columnas estrechas.
+- Conserva exactamente el entorno de apartados del original, incluido \begin{apartadosc}...\end{apartadosc}. La aplicación generará una copia temporal en una sola columna únicamente al compilar la versión resuelta; no hagas esa sustitución en el código devuelto.
 - Las reglas de diseño de 8 cm se aplican SOLO dentro de \begin{solucion}...\end{solucion}; no alteres el enunciado para adaptarte a ellas. En cada solución deja una línea en blanco antes de \begin{solucion}, usa matrizp, detp y sistemap en lugar de matrices estándar, compón las cadenas largas con aligned solo cuando lo necesiten y no pongas dos matrices compactas en una misma fila de aligned. Si la solución incluye una figura, sigue las mismas reglas de composición con TikZ. No uses nunca \begin{center} ni \end{center} dentro de una solución: para centrar un tikzpicture usa \noindent\hfill antes y \hfill\mbox{}\par después. Todo símbolo o comando matemático debe estar dentro de $...$ o de $$...$$; en particular, no escribas \text, \mathrm, \frac, \sqrt, ^, _ ni variables matemáticas en texto normal. Comprueba que cada $ tiene su pareja antes de responder. En problemas de geometría o modelización espacial que describan una construcción, transformación o relación entre figuras, el TikZ explicativo es obligatorio.
 - Evita copiar literalmente el enunciado original y las variaciones anteriores.`
 
 const solutionSystemPrompt = String.raw`Eres un profesor de Matemáticas de Secundaria y Bachillerato. Incorpora al ejercicio recibido una solución completa, rigurosa y pedagógica.
 
+Si el usuario incluye un MARCO CURRICULAR OBLIGATORIO, ajusta vocabulario, profundidad y método de resolución a ese curso. No uses técnicas de cursos posteriores cuando exista un procedimiento correcto propio del nivel indicado.
+
 Contrato obligatorio de salida:
-- Devuelve exclusivamente el EJERCICIO COMPLETO como fragmento LaTeX compilable: sin Markdown, sin explicaciones externas, sin preámbulo y sin \begin{document} ni \end{document}. Conserva el enunciado, comandos, apartados y puntuaciones; añade solamente las soluciones y coloca \info al final según la regla indicada por el usuario.
+- Devuelve exclusivamente el EJERCICIO COMPLETO como formato de intercambio LaTeX con Neope: sin Markdown, sin explicaciones externas, sin preámbulo y sin \begin{document} ni \end{document}. Neope descompondrá después el resultado en campos estructurados; no devuelvas JSON, rutas de Storage ni referencias a PDF.
+- Conserva literalmente el enunciado y su estructura. Los comandos \M{...}, \P{...}, \p{...}, \T{...} y \t{...} son proyecciones de campos gestionados por Neope: no cambies sus valores ni su posición. Conserva también literalmente cada comentario «% neope:part id=...». Añade solamente las soluciones y coloca \info al final según la regla indicada por el usuario.
 - Ignora por completo \sol, \lsol y \soluciones: no los copies ni los generes.
-- Si el ejercicio tiene apartados (\ap), añade exactamente un entorno \begin{solucion} ... \end{solucion} completo después del contenido de CADA apartado y antes del siguiente \ap o de \end{apartados}. Si no hay \ap, añade un único entorno \begin{solucion} ... \end{solucion} al final del ejercicio, antes de \info.
-- Si el enunciado usa \begin{apartadosc}...\end{apartadosc}, cambia ambos delimitadores a \begin{apartados}...\end{apartados} en el ejercicio resuelto completo. Nunca redactes las soluciones dentro de dos columnas estrechas.
+- Si el ejercicio tiene apartados (\ap), añade exactamente un entorno \begin{solucion} ... \end{solucion} completo después del contenido de CADA apartado y antes del siguiente \ap o del cierre del entorno de apartados original. Si no hay \ap, añade un único entorno \begin{solucion} ... \end{solucion} al final del ejercicio, antes de \info.
+- Conserva exactamente \begin{apartadosc}...\end{apartadosc} si aparece en el enunciado. La aplicación sustituirá esos delimitadores solo en la copia temporal destinada a compilar el PDF resuelto; el código fuente devuelto debe mantener el entorno original.
 - Aunque haya muchos apartados o cada uno incluya un dibujo TikZ largo, no agrupes las soluciones al final ni omitas ninguna: cuenta los comandos \ap del enunciado y coloca exactamente una solución inmediatamente después de cada uno.
 - Deja siempre una línea en blanco real entre el final del enunciado o apartado y cada \begin{solucion}. Es decir, debe haber dos saltos de línea antes de iniciar ese entorno; no basta con una nueva línea sangrada.
 - Resuelve todos los apartados con cálculos, justificaciones y resultados correctos. No dejes marcadores pendientes ni afirmaciones sin justificar.
@@ -223,34 +662,6 @@ function stripLegacySolutionCommands(text) {
   return `${result}${text.slice(cursor)}`.replace(/\n{3,}/g, '\n\n').trim()
 }
 
-function forceSingleColumnSolvedSections(text) {
-  return text
-    .replace(/\\begin\s*\{apartadosc\}/g, '\\begin{apartados}')
-    .replace(/\\end\s*\{apartadosc\}/g, '\\end{apartados}')
-}
-
-function splitAlignedRows(body) {
-  const rows = []
-  const tokenPattern = /\\begin\s*\{[^}]+\}|\\end\s*\{[^}]+\}|\\\\/g
-  let nestedDepth = 0
-  let rowStart = 0
-
-  for (const token of body.matchAll(tokenPattern)) {
-    if (token[0] === '\\\\') {
-      if (nestedDepth === 0) {
-        rows.push(body.slice(rowStart, token.index))
-        rowStart = token.index + token[0].length
-      }
-    } else if (token[0].startsWith('\\begin')) {
-      nestedDepth += 1
-    } else {
-      nestedDepth = Math.max(0, nestedDepth - 1)
-    }
-  }
-  rows.push(body.slice(rowStart))
-  return rows
-}
-
 function removeBlankLinesInsideAligned(text) {
   return text.replace(/\\begin\s*\{aligned\}([\s\S]*?)\\end\s*\{aligned\}/g, (match, body) => (
     `\\begin{aligned}${body.replace(/\r?\n[ \t]*(?:\r?\n[ \t]*)+/g, '\n')}\\end{aligned}`
@@ -296,15 +707,28 @@ function infoContent(text) {
   return match?.[1]?.trim() || ''
 }
 
+function scoreMetadata(text) {
+  return [...String(text || '').matchAll(/\\(M|P|p|T|t)\s*\{([^{}]*)\}/g)]
+    .map((match) => `${match[1]}:${match[2].trim()}`)
+}
+
+function partMarkerIds(text) {
+  return [...String(text || '').matchAll(/^[ \t]*%[ \t]*neope:part[ \t]+id=([A-Za-z0-9_-]+)/gm)]
+    .map((match) => match[1])
+}
+
 function validateLatexVariation(original, variation, expectedInfo = '') {
   const issues = []
   const requiredPatterns = [
     ['\\ej', /\\ej\b/g],
     ['\\M', /\\M\s*\{/g],
+    ['\\T', /\\T\s*\{/g],
     ['\\ap', /\\ap\b/g],
     ['\\p', /\\p\s*\{/g],
+    ['\\t', /\\t\s*\{/g],
     ['\\info', /\\info\s*\{/g],
     ['apartados', /\\begin\s*\{apartados\}/g],
+    ['apartadosc', /\\begin\s*\{apartadosc\}/g],
     ['solucion', /\\begin\s*\{solucion\}/g],
   ]
 
@@ -315,6 +739,18 @@ function validateLatexVariation(original, variation, expectedInfo = '') {
     if (variationCount !== originalCount) {
       issues.push(`Debe conservar ${originalCount} aparición(es) de ${label}; contiene ${variationCount}.`)
     }
+  }
+
+  const originalScores = scoreMetadata(original)
+  const generatedScores = scoreMetadata(variation)
+  if (originalScores.join('|') !== generatedScores.join('|')) {
+    issues.push('Debe conservar literalmente y en el mismo orden los valores de puntuación y tiempo gestionados por Neope.')
+  }
+
+  const originalPartIds = partMarkerIds(original)
+  const generatedPartIds = partMarkerIds(variation)
+  if (originalPartIds.join('|') !== generatedPartIds.join('|')) {
+    issues.push('Debe conservar literalmente los identificadores % neope:part de cada apartado.')
   }
 
   if (expectedInfo && countMatches(original, /\\info\s*\{/g) && !variation.includes(`\\info{${expectedInfo}}`)) {
@@ -373,12 +809,12 @@ function validateSolvedExercise(original, solvedExercise, expectedInfo) {
     issues.push('El ejercicio resuelto debe contener una única orden \\info.')
   }
   if (partCount) {
-    const solvedParts = [...solvedExercise.matchAll(/\\ap\b([\s\S]*?)(?=\\ap\b|\\end\s*\{apartados\})/g)]
+    const solvedParts = [...solvedExercise.matchAll(/\\ap\b([\s\S]*?)(?=\\ap\b|\\end\s*\{apartadosc?\})/g)]
     if (solvedParts.length !== partCount || solvedParts.some((part) => !/\\begin\s*\{solucion\}[\s\S]*?\\end\s*\{solucion\}/.test(part[1]))) {
       issues.push('Cada apartado debe contener su propio entorno solucion antes del siguiente apartado.')
     }
   }
-  if (/\\\[|\\\]/.test(solvedExercise)) {
+  if (hasLegacyDisplayMathDelimiters(solvedExercise)) {
     issues.push('Usa $$ ... $$ en lugar de \\[ ... \\].')
   }
   const generatedSolutions = [...solvedExercise.matchAll(/\\begin\s*\{solucion\}([\s\S]*?)\\end\s*\{solucion\}/g)]
@@ -400,7 +836,7 @@ function validateSolvedExercise(original, solvedExercise, expectedInfo) {
   if (overloadedMatrixRow) {
     issues.push('Una fila de aligned no puede contener dos matrices o determinantes compactos.')
   }
-  if (!new RegExp(`\\\\info\\s*\\{${expectedInfo.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\}\\s*$`).test(solvedExercise.trim())) {
+  if (!hasTrailingInfoCommand(solvedExercise, expectedInfo)) {
     issues.push('\\info debe ser el último comando del ejercicio.')
   }
 
@@ -451,6 +887,7 @@ export const generateExerciseVariation = onCall({
     : []
   const model = typeof request.data?.model === 'string' ? request.data.model : 'google/gemini-3-flash-preview'
   const experimental = request.data?.experimental === true
+  const curriculumContext = curriculumPromptContext(request.data?.curriculum)
 
   if (!enunciado || enunciado.length > 60_000) {
     throw new HttpsError('invalid-argument', 'El enunciado es obligatorio y no puede superar 60.000 caracteres.')
@@ -458,7 +895,7 @@ export const generateExerciseVariation = onCall({
   if (!Object.hasOwn(aiModels, model)) {
     throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
   }
-  const exerciseForGeneration = stripLegacySolutionCommands(enunciado)
+  const exerciseForGeneration = normalizeDisplayMathDelimiters(stripLegacySolutionCommands(enunciado))
   const modelLabel = aiModels[model].label
 
   try {
@@ -466,6 +903,7 @@ export const generateExerciseVariation = onCall({
       model,
       inputCharacters: exerciseForGeneration.length,
       previousVariations: variaciones.length,
+      curriculumSubjectId: request.data?.curriculum?.subjectId || null,
     })
     const solutionEnvironmentCount = countMatches(exerciseForGeneration, /\\begin\s*\{solucion\}/g)
     const solutionRequirement = solutionEnvironmentCount
@@ -480,10 +918,13 @@ export const generateExerciseVariation = onCall({
     const structureSummary = [
       ['\\ej', /\\ej\b/g],
       ['\\M', /\\M\s*\{/g],
+      ['\\T', /\\T\s*\{/g],
       ['\\ap', /\\ap\b/g],
       ['\\p', /\\p\s*\{/g],
+      ['\\t', /\\t\s*\{/g],
       ['\\info', /\\info\s*\{/g],
       ['apartados', /\\begin\s*\{apartados\}/g],
+      ['apartadosc', /\\begin\s*\{apartadosc\}/g],
     ].map(([name, pattern]) => `${name}: ${countMatches(exerciseForGeneration, pattern)}`).join(', ')
     let experimentalStrategy = ''
     if (experimental) {
@@ -501,7 +942,7 @@ export const generateExerciseVariation = onCall({
           reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
           messages: [
             { role: 'system', content: analysisSystemPrompt },
-            { role: 'user', content: exerciseForGeneration },
+            { role: 'user', content: [curriculumContext, 'EJERCICIO BASE:', exerciseForGeneration].filter(Boolean).join('\n\n') },
           ],
           response_format: exerciseAnalysisResponseFormat,
           provider: { require_parameters: true, data_collection: 'deny' },
@@ -518,6 +959,7 @@ export const generateExerciseVariation = onCall({
       experimentalStrategy = `ANÁLISIS DIDÁCTICO DEL EJERCICIO BASE:\n- Núcleo: ${analysis.core}\n- Destrezas: ${analysis.skills.join('; ')}\n- Dificultad: ${analysis.difficulty}\n- Esquema de solución: ${analysis.solutionOutline}\n- Elementos que deben mantenerse: ${analysis.invariants.join('; ')}\n\nPLAN OBLIGATORIO DE TRANSFORMACIÓN ESTRUCTURAL:\n${analysis.transformationPlan}\n\nNo hagas un cambio cosmético ni solo numérico. Aplica ese plan y comprueba que el resultado sea claramente distinto al original, pero de dificultad y extensión comparables.`
     }
     const originalRequest = [
+      curriculumContext,
       `ETIQUETAS: ${tags.length ? tags.join(', ') : 'sin etiquetas'}`,
       `CONTRATO DE ESTRUCTURA: ${structureSummary}. Conserva exactamente esas cantidades cuando sean mayores que cero.`,
       solutionRequirement,
@@ -598,7 +1040,7 @@ ${variation?.enunciado || ''}`
         throw new HttpsError('internal', 'La IA terminó sin generar el ejercicio. Prueba de nuevo o selecciona otro modelo.')
       }
 
-      variation.enunciado = forceSingleColumnSolvedSections(compactAlignedChains(stripLegacySolutionCommands(variation.enunciado.trim())))
+      variation.enunciado = splitOverloadedCompactRows(normalizeDisplayMathDelimiters(compactAlignedChains(stripLegacySolutionCommands(variation.enunciado.trim()))))
       validationIssues = validateLatexVariation(exerciseForGeneration, variation.enunciado, expectedInfo)
       if (experimental && !variation.enunciado.includes(`\\info{${expectedInfo}}`)) {
         validationIssues.push(`La variación experimental debe terminar con \\info{${expectedInfo}}.`)
@@ -651,6 +1093,7 @@ export const generateExerciseSolution = onCall({
   const model = typeof request.data?.model === 'string' ? request.data.model : 'google/gemini-3-flash-preview'
   const previousAttempt = typeof request.data?.previousAttempt === 'string' ? request.data.previousAttempt.trim().slice(0, 60_000) : ''
   const compileError = typeof request.data?.compileError === 'string' ? request.data.compileError.trim().slice(0, 2_000) : ''
+  const curriculumContext = curriculumPromptContext(request.data?.curriculum)
 
   if (!enunciado || enunciado.length > 60_000) {
     throw new HttpsError('invalid-argument', 'El enunciado es obligatorio y no puede superar 60.000 caracteres.')
@@ -662,10 +1105,14 @@ export const generateExerciseSolution = onCall({
     throw new HttpsError('failed-precondition', 'Esta variante ya tiene una solución.')
   }
 
-  const exerciseForSolution = stripLegacySolutionCommands(enunciado)
+  const exerciseForSolution = normalizeDisplayMathDelimiters(stripLegacySolutionCommands(enunciado))
   const expectedInfo = infoContent(exerciseForSolution) || `Generado por ${aiModels[model].label}`
   try {
-    console.info('OpenRouter solution request started', { model, inputCharacters: exerciseForSolution.length })
+    console.info('OpenRouter solution request started', {
+      model,
+      inputCharacters: exerciseForSolution.length,
+      curriculumSubjectId: request.data?.curriculum?.subjectId || null,
+    })
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -681,7 +1128,7 @@ export const generateExerciseSolution = onCall({
           { role: 'system', content: solutionSystemPrompt },
           {
             role: 'user',
-            content: `REGLA OBLIGATORIA PARA \\info: usa exactamente \\info{${expectedInfo}} y sitúalo como último comando del ejercicio.\n\nEJERCICIO A RESOLVER:\n\n${exerciseForSolution}${previousAttempt ? `\n\nINTENTO ANTERIOR NO COMPILABLE: corrige este intento, conservando el enunciado y su solución matemática, pero reescribiendo el LaTeX defectuoso. No expliques el error; devuelve solamente el ejercicio completo compilable.\nERROR DEL COMPILADOR:\n${compileError || 'Error de sintaxis LaTeX.'}\n\nINTENTO A REPARAR:\n${previousAttempt}` : ''}`,
+            content: `${curriculumContext ? `${curriculumContext}\n\n` : ''}REGLA OBLIGATORIA PARA \\info: usa exactamente \\info{${expectedInfo}} y sitúalo como último comando del ejercicio.\n\nEJERCICIO A RESOLVER:\n\n${exerciseForSolution}${previousAttempt ? `\n\nINTENTO ANTERIOR NO COMPILABLE: corrige este intento, conservando el enunciado y su solución matemática, pero reescribiendo el LaTeX defectuoso. No expliques el error; devuelve solamente el ejercicio completo compilable.\nERROR DEL COMPILADOR:\n${compileError || 'Error de sintaxis LaTeX.'}\n\nINTENTO A REPARAR:\n${previousAttempt}` : ''}`,
           },
         ],
         response_format: solutionResponseFormat,
@@ -707,7 +1154,7 @@ export const generateExerciseSolution = onCall({
 
     const content = choiceContent(payload.choices?.[0])
     let solvedExercise = content
-      ? forceSingleColumnSolvedSections(compactAlignedChains(stripLegacySolutionCommands(JSON.parse(content)?.enunciado?.trim() || '')))
+      ? splitOverloadedCompactRows(normalizeDisplayMathDelimiters(compactAlignedChains(stripLegacySolutionCommands(JSON.parse(content)?.enunciado?.trim() || ''))))
       : ''
     if (!solvedExercise) {
       throw new HttpsError('internal', 'La IA terminó sin generar el ejercicio resuelto.')
@@ -721,6 +1168,7 @@ export const generateExerciseSolution = onCall({
       || latexIssues.includes('Todos los delimitadores $ de modo matemático deben estar emparejados.')
       || latexIssues.some((issue) => issue.includes('Cada apartado debe contener su propio entorno solucion'))
       || latexIssues.some((issue) => issue.includes('Debe haber una solución por apartado'))
+      || latexIssues.some((issue) => issue.includes('Debe conservar') && issue.includes('apartadosc'))
     if (needsLayoutRepair) {
       console.info('OpenRouter solution layout repair started', { model })
       const repairResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -739,7 +1187,7 @@ export const generateExerciseSolution = onCall({
               role: 'system',
               content: String.raw`Eres el corrector final y maquetador profesional de ejercicios de Matemáticas. Devuelve el ejercicio LaTeX completo que recibes, preservando literalmente el enunciado, sus datos, dibujos, resultados y la orden final \info.
 
-Corrige también la estructura obligatoria de las soluciones: cuenta los comandos \ap del enunciado y coloca exactamente un entorno \begin{solucion}...\end{solucion} después de cada apartado, antes del siguiente \ap o de \end{apartados}. No agrupes soluciones al final, no omitas apartados y no dejes un apartado sin solución. Si aparece \begin{apartadosc} o \end{apartadosc}, cámbialos por \begin{apartados} y \end{apartados}.
+Corrige también la estructura obligatoria de las soluciones: cuenta los comandos \ap del enunciado y coloca exactamente un entorno \begin{solucion}...\end{solucion} después de cada apartado, antes del siguiente \ap o del cierre del entorno de apartados. No agrupes soluciones al final, no omitas apartados y no dejes un apartado sin solución. Conserva exactamente \begin{apartadosc}...\end{apartadosc} si aparece en el original; la aplicación hará una sustitución temporal solo al compilar el PDF resuelto. Conserva literalmente, en su posición y sin recalcular, todos los comandos \M{...}, \P{...}, \p{...}, \T{...}, \t{...} y comentarios «% neope:part id=...»: son metadatos estructurados gestionados por Neope.
 
 Solo corrige la composición para una columna útil de 8 cm: dentro de aligned nunca pueden aparecer dos matrices, determinantes o sistemas en una misma fila; reescribe los productos largos mediante nombres intermedios y una sola matriz resultado por fila. Conserva los entornos compactos matrizp, detp y sistemap. Dentro de solucion no uses center, figure ni flotantes: si hay tikzpicture, céntralo con \noindent\hfill antes y \hfill\mbox{}\par después. Todo comando matemático debe estar dentro de $...$ o $$...$$ y cada $ debe estar emparejado, también dentro de TikZ. Devuelve solo LaTeX, sin Markdown.`,
             },
@@ -760,7 +1208,7 @@ ${solvedExercise}` },
       const repairPayload = await repairResponse.json().catch(() => ({}))
       const repairContent = repairResponse.ok ? choiceContent(repairPayload.choices?.[0]) : ''
       const repairedExercise = repairContent
-        ? forceSingleColumnSolvedSections(compactAlignedChains(stripLegacySolutionCommands(JSON.parse(repairContent)?.enunciado?.trim() || '')))
+        ? splitOverloadedCompactRows(normalizeDisplayMathDelimiters(compactAlignedChains(stripLegacySolutionCommands(JSON.parse(repairContent)?.enunciado?.trim() || ''))))
         : ''
       if (repairedExercise) {
         solvedExercise = repairedExercise

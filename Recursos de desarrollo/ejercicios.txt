@@ -1,0 +1,402 @@
+EDITOR DE EJERCICIOS LATEX
+==========================
+
+1. OBJETIVO
+-----------
+
+El editor permite modificar directamente el código LaTeX de un ejercicio, pero la fuente de verdad persistente no será ese código completo. Firestore guardará el ejercicio descompuesto en segmentos con significado propio: enunciado, respuesta breve, resolución desarrollada y apartados.
+
+Cuando se abra un ejercicio, Neope reconstruirá un código LaTeX canónico a partir de esos datos. Cuando el usuario lo modifique, la aplicación analizará el código para identificar qué segmentos han cambiado.
+
+La separación estructurada es necesaria porque los ejercicios pueden reutilizarse y transformarse al crear documentos. Una plantilla podrá decidir qué comandos y entornos representa y, por tanto, qué partes del ejercicio aparecen en el documento final.
+
+La retrocompatibilidad con los ejercicios actuales no es prioritaria mientras el proyecto permanezca en desarrollo.
+
+
+2. TERMINOLOGÍA
+---------------
+
+Se utilizarán estos nombres en el modelo:
+
+- statement: enunciado del ejercicio o apartado.
+- answer: resultado o respuesta breve. Es el contenido que se reconstruirá dentro de \lsol{...} o \sol{...}.
+- workedSolution: resolución completa y explicada. Es el contenido incluido dentro de \begin{solucion} ... \end{solucion}.
+- points: puntuación asignada.
+- durationMinutes: tiempo estimado en minutos.
+- parts: apartados del ejercicio.
+- info: contenido del comando \info{...}.
+
+No se guardará si una respuesta utiliza \lsol o \sol. El comando se deducirá de su posición:
+
+- Ejercicio sin apartados: \lsol.
+- Primer apartado: \lsol.
+- Segundo apartado y siguientes: \sol.
+
+Si se reordenan los apartados, Neope reasignará automáticamente estos comandos al reconstruir el código.
+
+
+3. EJEMPLO DE CÓDIGO RECONSTRUIDO
+----------------------------------
+
+\ej\P{2,5}\T{12}\\Enunciado del ejercicio
+\begin{solucion}
+Desarrollo general del ejercicio.
+\end{solucion}
+\begin{apartados}
+  \ap\p{1}\t{5} Enunciado del primer apartado
+    \lsol{Respuesta breve del primer apartado}
+  \begin{solucion}
+  Resolución explicada del primer apartado.
+  \end{solucion}
+
+  \ap\p{1,5}\t{7} Enunciado del segundo apartado
+    \sol{Respuesta breve del segundo apartado}
+  \begin{solucion}
+  Resolución explicada del segundo apartado.
+  \end{solucion}
+\end{apartados}
+\info{Metadatos del ejercicio}
+
+El código completo anterior solo existirá como representación editable. No se guardará como fuente principal en Firestore.
+
+
+4. MODELO PERSISTENTE ORIENTATIVO
+---------------------------------
+
+exercises/{exerciseId}: {
+  ownerId,
+  visibility: "private" | "public",
+
+  revision,
+
+  statement: {
+    latex,
+    pdf: PdfReference | null
+  },
+
+  answer: {
+    latex,
+    pdf: PdfReference | null
+  } | null,
+
+  workedSolution: {
+    latex,
+    pdf: PdfReference | null
+  } | null,
+
+  points,
+  durationMinutes,
+
+  partsEnvironment: "apartados" | "apartadosc" | null,
+
+  parts: [
+    {
+      id,
+      statement: {
+        latex,
+        pdf: PdfReference | null
+      },
+      answer: {
+        latex,
+        pdf: PdfReference | null
+      } | null,
+      workedSolution: {
+        latex,
+        pdf: PdfReference | null
+      } | null,
+      points,
+      durationMinutes
+    }
+  ],
+
+  pdf: {
+    statement: PdfReference | null,
+    solved: PdfReference | null
+  },
+
+  info,
+
+  compilation: {
+    requestedRevision,
+    readyRevision,
+    status: "ready" | "outdated" | "queued" | "compiling" | "error",
+    requestedAt,
+    completedAt,
+    error
+  },
+
+  createdAt,
+  updatedAt
+}
+
+Este esquema describe únicamente la parte relacionada con la edición y compilación LaTeX. Los contenidos curriculares, archivos adjuntos, variantes y demás metadatos del ejercicio podrán vivir en campos independientes del mismo documento.
+
+
+5. REFERENCIAS A PDF
+--------------------
+
+Los campos PDF no contienen el archivo. Todos apuntan a Firebase Storage.
+
+Se guardará la ruta canónica de Storage en lugar de depender exclusivamente de una URL de descarga:
+
+PdfReference: {
+  storagePath,
+  sourceHash,
+  revision,
+  updatedAt
+}
+
+- storagePath: ubicación del archivo en Firebase Storage.
+- sourceHash: huella del contenido exacto utilizado para generar el PDF.
+- revision: revisión del ejercicio a la que pertenece.
+- updatedAt: fecha de generación.
+
+La URL de descarga se resolverá desde la aplicación cuando sea necesaria.
+
+Rutas orientativas:
+
+ejercicios/{exerciseId}/revisions/{revision}/statement.pdf
+ejercicios/{exerciseId}/revisions/{revision}/solved.pdf
+ejercicios/{exerciseId}/revisions/{revision}/parts/{partId}/statement.pdf
+ejercicios/{exerciseId}/revisions/{revision}/parts/{partId}/answer.pdf
+ejercicios/{exerciseId}/revisions/{revision}/parts/{partId}/worked-solution.pdf
+
+Las rutas versionadas evitan que la caché muestre un archivo anterior y permiten conservar el último PDF válido mientras se genera el nuevo.
+
+
+6. ESTADO TEMPORAL DEL EDITOR
+-----------------------------
+
+Los indicadores de edición no se guardarán en Firestore. Solo vivirán en la sesión del editor:
+
+editorState: {
+  dirtySegments: Set<SegmentId>,
+  structureChanged,
+  ambiguousStructure,
+  lastValidModel,
+  draftLatex
+}
+
+Ejemplos de identificadores de segmento:
+
+exercise.statement
+exercise.answer
+exercise.workedSolution
+part:{partId}.statement
+part:{partId}.answer
+part:{partId}.workedSolution
+
+El editor podrá analizar y marcar cambios mientras se escribe, pero nunca compilará automáticamente.
+
+
+7. IDENTIFICADORES ESTABLES DE APARTADO
+---------------------------------------
+
+Cada apartado tendrá un ID estable. Al reconstruir el LaTeX se podrán insertar comentarios internos:
+
+\begin{apartados}
+  % neope:part id=a7F3kP
+  \ap Enunciado del primer apartado
+
+  % neope:part id=q9Lm2R
+  \ap Enunciado del segundo apartado
+\end{apartados}
+
+Los comentarios no afectan a LaTeX. CodeMirror podrá ocultarlos o plegarlos visualmente para que no molesten al usuario.
+
+Estos identificadores permiten distinguir con seguridad entre editar, mover, crear y eliminar un apartado. Si el usuario elimina los comentarios, Neope intentará reconstruir la correspondencia. Si esta resulta ambigua, aplicará la política de recompilación completa descrita más adelante.
+
+
+8. ANALIZADOR LATEX
+-------------------
+
+La estructura no se analizará mediante expresiones regulares aisladas. Se utilizará un parser limitado al dialecto LaTeX que necesita Neope.
+
+El parser deberá reconocer al menos:
+
+- \ej, \P, \T, \ap, \p, \t e \info.
+- \lsol y \sol.
+- Los entornos solucion, apartados y apartadosc.
+- Llaves equilibradas y comandos anidados.
+- Entornos LaTeX anidados dentro de los segmentos, incluidos matrices, cases, aligned, TikZ y otros contenidos que no deben confundirse con la estructura del ejercicio.
+
+Mientras se escribe, el LaTeX puede quedar temporalmente incompleto. En ese estado se conservarán el borrador y el último modelo válido, pero no se actualizará Firestore ni se creará ningún trabajo de compilación.
+
+
+9. POLÍTICA DE CAMBIOS ESTRUCTURALES
+------------------------------------
+
+- Editar un segmento conserva su ID y marca únicamente ese segmento.
+- Reordenar apartados conserva sus IDs y modifica solo el orden.
+- Añadir un apartado crea un ID nuevo.
+- Eliminar un apartado lo retira del modelo. Sus PDFs se eliminarán de Storage después de que la nueva revisión se haya guardado y compilado correctamente.
+- Mover contenido entre apartados marca como modificados los segmentos de origen y destino.
+- Cambiar apartados por apartadosc, o a la inversa, modifica partsEnvironment.
+- Los PDFs individuales no se recompilan por un simple cambio de orden o de partsEnvironment si su contenido no ha cambiado.
+- Los PDFs completos sí se consideran afectados por cualquier cambio de orden, estructura, puntuación, duración o entorno de apartados que pueda alterar el documento final.
+
+La versión de enunciado completo conservará apartadosc cuando ese sea el entorno elegido. La versión resuelta podrá sustituirlo por apartados exclusivamente durante la compilación, para que las resoluciones no queden restringidas a columnas demasiado estrechas. Esta transformación no modificará el valor persistido de partsEnvironment.
+
+
+10. AMBIGÜEDAD Y ERRORES
+------------------------
+
+Neope no mostrará diálogos ni obligará al usuario a resolver correspondencias estructurales.
+
+- Si el análisis identifica los cambios con seguridad, se preparará una compilación selectiva.
+- Si el código es válido pero existe cualquier ambigüedad, se reconstruirá la estructura y se recompilarán silenciosamente todos los segmentos y los dos PDFs completos.
+- Si el código no puede analizarse o LaTeX no compila, se mantendrá el borrador en el editor, no se sustituirán los datos persistidos por una estructura parcial y se mostrará únicamente el error normal de validación o compilación.
+
+Regla general:
+
+Neope optimiza cuando está seguro; cuando no lo está, recompila todo silenciosamente.
+
+
+10.1. PERFILES INTERNOS DE RENDERIZADO
+---------------------------------------
+
+La compilación de vistas previas no reutilizará una única envoltura LaTeX para todos los PDF. Neope aplicará tres perfiles internos, no editables y no persistidos en Firestore:
+
+- segment: compone únicamente el enunciado de un segmento y, cuando corresponda, su workedSolution. No incluye \ej, \ap, puntuaciones, respuestas breves, contadores ni entornos de apartados. Mantiene una anchura útil de 8,5 cm y un margen exterior de 2,5 mm.
+- statement: compone el ejercicio completo sin answer ni workedSolution. Conserva el entorno partsEnvironment elegido por el usuario, incluido apartadosc.
+- solved: compone el ejercicio completo con answer y workedSolution. Si partsEnvironment es apartadosc, utiliza apartados solo para esta compilación, sin modificar el dato persistido.
+
+Los tres perfiles comparten el preámbulo ejercicio.tex para disponer de la misma tipografía, colores, comandos matemáticos, TikZ y recursos adjuntos. Los perfiles controlan únicamente la estructura del cuerpo que se envía al compilador.
+
+La aplicación mantendrá \ej en los PDF completos. No lo sustituirá por \refstepcounter{ejercicio}, pues la propia plantilla define el comportamiento de \ej dentro del entorno ejercicios.
+
+
+11. BOTÓN GUARDAR
+-----------------
+
+Guardar debe ser una operación rápida.
+
+Al pulsarlo:
+
+1. Se analiza el último borrador válido.
+2. Se actualizan en Firestore la estructura, los contenidos, puntuaciones, tiempos y demás metadatos.
+3. Se incrementa revision cuando el contenido persistente ha cambiado.
+4. Los PDFs afectados quedan marcados como desactualizados.
+5. La interfaz confirma el guardado sin esperar ninguna compilación ni subida a Storage.
+
+Guardar nunca inicia una compilación.
+
+Si el borrador no es estructuralmente válido, no puede sustituir al modelo persistido porque el código completo no se guarda como fuente de verdad. El borrador podrá conservarse localmente para evitar que el usuario pierda su trabajo.
+
+
+12. BOTÓN RECOMPILAR
+--------------------
+
+La compilación siempre será iniciada explícitamente por el usuario.
+
+Al pulsar Recompilar:
+
+1. Se aplican y guardan primero los cambios pendientes, igual que con Guardar.
+2. Se calcula el plan de compilación.
+3. Se crea un trabajo de compilación asociado a la revisión guardada.
+4. La interfaz deja de esperar y permite continuar trabajando.
+5. El trabajo se ejecuta en segundo plano fuera del navegador.
+
+Si el análisis es inequívoco, el plan incluye los segmentos modificados y los PDFs completos afectados. Si hay ambigüedad, el plan es una recompilación completa.
+
+Los hashes de los segmentos y de los PDFs permiten detectar qué artefactos siguen siendo válidos incluso si el usuario guardó, cerró la aplicación y volvió más tarde, ya que dirtySegments no persiste.
+
+
+13. COMPILACIÓN EN SEGUNDO PLANO
+--------------------------------
+
+La compilación no se ejecutará como una promesa dependiente de la pestaña del navegador. Debe continuar aunque el usuario cambie de pantalla, cierre la aplicación o pierda temporalmente la conexión.
+
+Arquitectura orientativa:
+
+1. La aplicación guarda la revisión en Firestore.
+2. Una Firebase Function crea o registra un trabajo en una cola.
+3. Un trabajador llama al servicio Docker de LaTeX.
+4. El trabajador compila los artefactos solicitados en archivos temporales.
+5. Si las compilaciones terminan correctamente, sube los PDFs a rutas versionadas de Storage.
+6. Antes de actualizar las referencias, comprueba que la revisión del ejercicio no ha cambiado.
+7. Actualiza Firestore con las nuevas referencias y marca la compilación como ready.
+8. Elimina o programa la limpieza de los artefactos que ya no se utilizan.
+
+Trabajo orientativo:
+
+compileJobs/{jobId}: {
+  exerciseId,
+  revision,
+  mode: "selective" | "full",
+  segments: [SegmentId],
+  status: "queued" | "compiling" | "ready" | "error",
+  attempts,
+  requestedAt,
+  startedAt,
+  completedAt,
+  error
+}
+
+El trabajo debe ser idempotente: repetirlo no puede crear inconsistencias ni referencias duplicadas.
+
+
+14. CONTROL DE CONCURRENCIA
+---------------------------
+
+Cada trabajo compila una revisión concreta.
+
+Ejemplo:
+
+- Se solicita la compilación de la revisión 18.
+- Mientras se ejecuta, el usuario guarda la revisión 19.
+- El trabajador termina la revisión 18.
+- Antes de publicar el resultado, comprueba que la revisión actual ya es la 19.
+- No sustituye las referencias actuales con resultados obsoletos.
+
+Los archivos generados por trabajos obsoletos se eliminarán o quedarán sujetos a una política automática de limpieza.
+
+Nunca se borrará el último PDF válido antes de que su sustituto haya sido generado, subido y registrado correctamente.
+
+
+15. ESTADO EN LA INTERFAZ
+-------------------------
+
+El usuario podrá continuar trabajando durante la compilación.
+
+- Después de Guardar: mostrar brevemente que los datos se han guardado.
+- Después de Recompilar: indicar En cola y después Compilando.
+- Mientras se genera un PDF nuevo: mantener visible el último PDF válido con un indicador discreto de que se está actualizando.
+- Al finalizar: sustituir automáticamente la referencia por la nueva versión.
+- Si falla: conservar el último PDF válido y mostrar el error de compilación con las herramientas habituales de cerrar y copiar.
+
+Los estados del proceso no requerirán confirmaciones ni bloquearán la edición.
+
+
+16. LIMPIEZA DE STORAGE
+-----------------------
+
+La limpieza siempre se realizará después de publicar con éxito la nueva revisión.
+
+Se podrán eliminar en segundo plano:
+
+- PDFs de apartados eliminados.
+- Revisiones antiguas que ya no sean necesarias.
+- Artefactos de trabajos obsoletos o fallidos.
+- Archivos temporales de compilación.
+
+Conviene conservar al menos el último conjunto completo válido hasta que la siguiente revisión esté lista.
+
+
+17. DECISIONES CERRADAS
+-----------------------
+
+- El código LaTeX completo se reconstruye y no es la fuente de verdad persistente.
+- Firestore guarda los segmentos estructurados.
+- Todos los PDFs viven en Firebase Storage.
+- Firestore guarda rutas de Storage y metadatos de generación.
+- answer representa la respuesta breve; workedSolution representa el desarrollo completo.
+- No se persiste la elección entre \lsol y \sol; se deduce de la posición.
+- Los flags de edición pertenecen exclusivamente al estado local del editor.
+- No existe compilación automática.
+- Guardar no compila.
+- Recompilar guarda y encola un proceso en segundo plano.
+- Los cambios inequívocos permiten compilación selectiva.
+- Cualquier ambigüedad provoca una recompilación completa sin preguntar al usuario.
+- Los resultados obsoletos nunca sustituyen una revisión más reciente.
+- El último PDF válido permanece disponible hasta que su sustituto esté listo.

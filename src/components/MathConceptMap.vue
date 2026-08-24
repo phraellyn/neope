@@ -34,19 +34,28 @@ const fitMargin = 54
 const rootId = 'matematicas'
 const branchColors = ['#3569b8', '#078b57', '#f07818', '#d94432', '#6958c7', '#b43f86', '#168ca2']
 const courseSubjects = mathCurriculum.map((row, index) => ({ ...row, color: branchColors[index % branchColors.length] }))
+const isAppleTouchDevice = /iPad|iPhone|iPod/.test(navigator.userAgent || '')
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+const prefersTouchRendering = isAppleTouchDevice
+  || window.matchMedia?.('(pointer: coarse)').matches
 
 const mapHost = ref(null)
 const svgElement = ref(null)
 const contentGroup = ref(null)
+const mathOverlayViewbox = ref(null)
 const editingId = ref(null)
 const selectedIds = ref([])
 const touchState = ref(null)
 let suppressNextClick = false
 let lastTouch = { id: null, time: 0 }
 let zoomBehavior
+let overlayResizeObserver
+let currentZoomTransform = zoomIdentity
 
 const assignmentMode = computed(() => props.configurationMode && Boolean(props.activeSubjectId))
 const conceptSelectionMode = computed(() => props.selectionMode && Boolean(props.activeSubjectId))
+const lightweightRendering = computed(() => prefersTouchRendering || props.configurationMode)
+const effectiveFitMargin = computed(() => prefersTouchRendering ? 18 : fitMargin)
 const subjectIdSet = computed(() => new Set(props.subjectNodeIds))
 const exerciseSelectedIdSet = computed(() => new Set(props.selectedNodeIds))
 const visibleNodes = computed(() => {
@@ -76,7 +85,7 @@ const hierarchyRoot = computed(() => {
 const levelCount = computed(() => Math.max(1, hierarchyRoot.value.height))
 const ringWidth = computed(() => ((outerRadius - innerRadius) / levelCount.value) * radialIncrementScale)
 const fullMapRadius = computed(() => innerRadius + levelCount.value * ringWidth.value)
-const fittedScale = computed(() => Math.min(1, (Math.min(width, height) / 2 - fitMargin) / fullMapRadius.value))
+const fittedScale = computed(() => Math.min(1, (Math.min(width, height) / 2 - effectiveFitMargin.value) / fullMapRadius.value))
 
 const segments = computed(() => hierarchyRoot.value.descendants()
   .filter((node) => node.depth > 0)
@@ -341,10 +350,57 @@ function mathLabelBox(entry) {
   if (entry.angular) {
     const point = pointOnCircle(angle, radius)
     const rotation = degrees > 90 && degrees < 270 ? degrees + 180 : degrees
-    return { width, height, transform: `translate(${point.x}, ${point.y}) rotate(${rotation})` }
+    return {
+      width,
+      height,
+      x: -width / 2,
+      y: -height / 2,
+      transform: `translate(${point.x} ${point.y}) rotate(${rotation})`,
+    }
   }
-  const rotation = degrees >= 180 ? 180 : 0
-  return { width, height, transform: `rotate(${degrees - 90}) translate(${radialArea.radius}, 0) rotate(${rotation})` }
+  const point = pointOnCircle(angle, radialArea.radius)
+  const rotation = degrees - 90 + (degrees >= 180 ? 180 : 0)
+  return {
+    width,
+    height,
+    x: -width / 2,
+    y: -height / 2,
+    transform: `translate(${point.x} ${point.y}) rotate(${rotation})`,
+  }
+}
+
+function mathOverlayStyle(entry) {
+  const box = mathLabelBox(entry)
+  const { angle, radius } = segmentMetrics(entry.segment)
+  const radialArea = radialLabelArea(entry.segment)
+  const degrees = angle * 180 / Math.PI
+  const point = pointOnCircle(angle, entry.angular ? radius : radialArea.radius)
+  const rotation = entry.angular
+    ? (degrees > 90 && degrees < 270 ? degrees + 180 : degrees)
+    : degrees - 90 + (degrees >= 180 ? 180 : 0)
+  return {
+    left: `${centerX + point.x - box.width / 2}px`,
+    top: `${centerY + point.y - box.height / 2}px`,
+    width: `${box.width}px`,
+    height: `${box.height}px`,
+    transform: `rotate(${rotation}deg)`,
+    fontSize: `${entry.fontSize}px`,
+  }
+}
+
+function syncMathOverlayTransform(transform = currentZoomTransform) {
+  if (!prefersTouchRendering || !mathOverlayViewbox.value || !svgElement.value || !mapHost.value) return
+  currentZoomTransform = transform
+  const svgBounds = svgElement.value.getBoundingClientRect()
+  const hostBounds = mapHost.value.getBoundingClientRect()
+  const baseScale = Math.min(svgBounds.width / width, svgBounds.height / height)
+  const renderedWidth = width * baseScale
+  const renderedHeight = height * baseScale
+  const alignmentX = props.fitAlignment === 'bottom-right' ? svgBounds.width - renderedWidth : (svgBounds.width - renderedWidth) / 2
+  const alignmentY = props.fitAlignment === 'bottom-right' ? svgBounds.height - renderedHeight : (svgBounds.height - renderedHeight) / 2
+  const left = svgBounds.left - hostBounds.left + alignmentX + transform.x * baseScale
+  const top = svgBounds.top - hostBounds.top + alignmentY + transform.y * baseScale
+  mathOverlayViewbox.value.style.transform = `translate(${left}px, ${top}px) scale(${baseScale * transform.k})`
 }
 
 const curvedLabelPaths = computed(() => labelEntries.value
@@ -599,10 +655,11 @@ function fitView() {
   if (!svgElement.value || !zoomBehavior) return
   const scale = fittedScale.value
   const mapRadius = fullMapRadius.value
+  const margin = effectiveFitMargin.value
   const translation = props.fitAlignment === 'bottom-right'
     ? {
-        x: width - fitMargin - scale * (centerX + mapRadius),
-        y: height - fitMargin - scale * (centerY + mapRadius),
+        x: width - margin - scale * (centerX + mapRadius),
+        y: height - margin - scale * (centerY + mapRadius),
       }
     : {
         x: centerX * (1 - scale),
@@ -662,13 +719,23 @@ onMounted(() => {
   const svg = select(svgElement.value)
   zoomBehavior = zoom()
     .scaleExtent([0.35, 3.4])
-    .on('zoom', (event) => select(contentGroup.value).attr('transform', event.transform))
+    .on('start', () => mapHost.value?.classList.add('math-concept-map-transforming'))
+    .on('zoom', (event) => {
+      select(contentGroup.value).attr('transform', event.transform)
+      syncMathOverlayTransform(event.transform)
+    })
+    .on('end', () => mapHost.value?.classList.remove('math-concept-map-transforming'))
   svg.call(zoomBehavior)
   svg.on('dblclick.zoom', null)
+  if (prefersTouchRendering) {
+    overlayResizeObserver = new ResizeObserver(() => syncMathOverlayTransform())
+    overlayResizeObserver.observe(svgElement.value)
+  }
   fitView()
 })
 
 onBeforeUnmount(() => {
+  overlayResizeObserver?.disconnect()
   if (svgElement.value && zoomBehavior) select(svgElement.value).on('.zoom', null)
 })
 
@@ -684,6 +751,7 @@ defineExpose({ fitView })
       'math-concept-map-configuring': configurationMode,
       'math-concept-map-assigning': assignmentMode,
       'math-concept-map-selecting': conceptSelectionMode,
+      'math-concept-map-lightweight': lightweightRendering,
     }"
   >
     <div
@@ -748,7 +816,7 @@ defineExpose({ fitView })
 
       <g ref="contentGroup">
         <g :transform="`translate(${centerX}, ${centerY})`">
-          <g class="sunburst-segments" filter="url(#sunburst-shadow)">
+          <g class="sunburst-segments" :filter="lightweightRendering ? undefined : 'url(#sunburst-shadow)'">
             <path
               v-for="segment in segments"
               :key="segment.node.data.id"
@@ -808,13 +876,13 @@ defineExpose({ fitView })
             </text>
           </g>
 
-          <g class="sunburst-math-labels" :class="{ 'sunburst-math-labels-editable': configurationMode }">
+          <g v-if="!prefersTouchRendering" class="sunburst-math-labels" :class="{ 'sunburst-math-labels-editable': configurationMode }">
             <foreignObject
               v-for="entry in mathLabelEntries"
               v-show="editingId !== entry.segment.node.data.id"
               :key="`math-${entry.segment.node.data.id}`"
-              :x="-mathLabelBox(entry).width / 2"
-              :y="-mathLabelBox(entry).height / 2"
+              :x="mathLabelBox(entry).x"
+              :y="mathLabelBox(entry).y"
               :width="mathLabelBox(entry).width"
               :height="mathLabelBox(entry).height"
               :transform="mathLabelBox(entry).transform"
@@ -952,6 +1020,26 @@ defineExpose({ fitView })
       </g>
     </svg>
 
+    <div v-if="prefersTouchRendering" class="sunburst-html-math-overlay">
+      <div ref="mathOverlayViewbox" class="sunburst-html-math-viewbox">
+        <div
+          v-for="entry in mathLabelEntries"
+          v-show="editingId !== entry.segment.node.data.id"
+          :key="`html-math-${entry.segment.node.data.id}`"
+          class="sunburst-html-math-label"
+          :class="{
+            'sunburst-label-subject-excluded': assignmentMode && !subjectIdSet.has(entry.segment.node.data.id),
+            'sunburst-math-label-exercise-selected': conceptSelectionMode && exerciseSelectedIdSet.has(entry.segment.node.data.id),
+            'sunburst-html-math-label-editable': configurationMode,
+          }"
+          :style="mathOverlayStyle(entry)"
+          @click.stop="handleLabelClick(entry.segment)"
+        >
+          <div class="sunburst-math-label-inner" v-html="entry.html" />
+        </div>
+      </div>
+    </div>
+
     <div v-if="showHint" class="math-concept-map-hint">
       <v-icon icon="mdi-cursor-default-click-outline" size="16" />
       <span v-if="conceptSelectionMode">Clic para seleccionar uno o varios conceptos · doble clic para ampliar</span>
@@ -1006,6 +1094,11 @@ svg:active { cursor: grabbing; }
 .sunburst-math-label-exercise-selected .sunburst-math-label-inner { color: #fff; }
 .sunburst-math-label-inner :deep(.katex) { color: inherit; font-size: 1em; }
 .sunburst-math-label-inner :deep(.katex-display) { margin: 0; }
+.sunburst-html-math-overlay { position: absolute; z-index: 2; inset: 0; overflow: hidden; pointer-events: none; }
+.sunburst-html-math-viewbox { position: absolute; top: 0; left: 0; width: 1800px; height: 1300px; transform-origin: 0 0; }
+.sunburst-html-math-label { position: absolute; display: flex; align-items: center; justify-content: center; overflow: hidden; color: #fff; text-align: center; font-weight: 720; line-height: 1.08; transform-origin: center; }
+.sunburst-html-math-label-editable { cursor: text; pointer-events: auto; }
+.math-concept-map-assigning .sunburst-html-math-label-editable { cursor: pointer; }
 .sunburst-edit-overlay { overflow: visible; }
 .sunburst-edit-field { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; padding: 5px 9px; border: 2px solid #fff; border-radius: 12px; outline: 0; background: #244f88; box-shadow: 0 5px 16px rgba(25,55,95,.25); color: #fff; text-align: center; font-size: 15px; font-weight: 720; line-height: 1.05; overflow-wrap: anywhere; }
 .sunburst-center { fill: #fff; stroke: #19375f; stroke-width: 6; filter: url(#sunburst-shadow); }
@@ -1044,5 +1137,23 @@ svg:active { cursor: grabbing; }
 .sunburst-group-control path { stroke: #176b4a; }
 .sunburst-group-control:hover circle { fill: #dff5e9; stroke: #176b4a; }
 .math-concept-map-disabled .sunburst-control { cursor: wait; opacity: .5; pointer-events: none; }
+.math-concept-map-lightweight .sunburst-center,
+.math-concept-map-lightweight .sunburst-segment,
+.math-concept-map-lightweight .sunburst-count,
+.math-concept-map-lightweight .sunburst-control,
+.math-concept-map-transforming .sunburst-segment,
+.math-concept-map-transforming .sunburst-count,
+.math-concept-map-transforming .sunburst-control {
+  filter: none !important;
+}
+.math-concept-map-transforming .sunburst-segment,
+.math-concept-map-transforming .sunburst-control circle {
+  transition: none !important;
+}
+.math-concept-map-lightweight .curriculum-map { backdrop-filter: none; }
 .math-concept-map-hint { position: absolute; right: 16px; bottom: 14px; display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid #e2e9f4; border-radius: 999px; background: rgba(255,255,255,.88); color: #71809a; font-size: .7rem; font-weight: 600; pointer-events: none; }
+@media (pointer: coarse) {
+  .curriculum-map { top: 6px; left: 6px; max-width: calc(100% - 12px); }
+  .math-concept-map-hint { right: 6px; bottom: 6px; }
+}
 </style>

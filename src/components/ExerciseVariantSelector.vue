@@ -85,14 +85,20 @@ const emit = defineEmits(['update:modelValue'])
 }
 
 .exercise-variant-bar-compact {
-  min-height: 30px;
-  gap: 5px;
-  padding: 3px 8px;
+  min-height: 27px;
+  gap: 4px;
+  padding: 2px 8px;
 }
 
 .exercise-variant-bar-compact .exercise-variant-option {
-  width: 21px;
-  height: 21px;
-  font-size: .64rem;
+  width: 19px;
+  height: 19px;
+  font-size: .6rem;
+}
+
+.exercise-variant-bar-compact .exercise-variant-option:hover,
+.exercise-variant-bar-compact .exercise-variant-option:focus-visible {
+  box-shadow: none;
+  transform: none;
 }
 </style>

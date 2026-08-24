@@ -17,12 +17,13 @@ const firebaseConfig = {
 // Reutiliza la instancia durante las recargas en desarrollo.
 export const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig)
 
-const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APP_CHECK_KEY
+const environment = import.meta.env || {}
+const appCheckSiteKey = environment.VITE_FIREBASE_APP_CHECK_KEY
 export const isAppCheckConfigured = Boolean(appCheckSiteKey)
 
 if (appCheckSiteKey) {
-  const debugToken = import.meta.env.VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN
-  if (import.meta.env.DEV && debugToken) {
+  const debugToken = environment.VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN
+  if (environment.DEV && debugToken) {
     // Vite expone las variables de entorno como cadenas. Firebase necesita el
     // booleano true para generar un token de depuración automáticamente.
     globalThis.FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken === 'true' ? true : debugToken

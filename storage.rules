@@ -1,0 +1,25 @@
+rules_version = '2';
+
+// DESARROLLO TEMPORAL — NO APTO PARA PRODUCCIÓN.
+//
+// Mantiene el mismo límite temporal que las reglas de Firestore. Antes de
+// producción debe sustituirse por permisos vinculados a request.auth.uid.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function temporaryDevelopmentAccess() {
+      return request.time < timestamp.date(2026, 8, 21);
+    }
+
+    match /ejercicios/{path=**} {
+      allow read, write: if temporaryDevelopmentAccess();
+    }
+
+    match /documentos/{path=**} {
+      allow read, write: if temporaryDevelopmentAccess();
+    }
+
+    match /teachers/{path=**} {
+      allow read, write: if temporaryDevelopmentAccess();
+    }
+  }
+}

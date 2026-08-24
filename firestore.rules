@@ -1,0 +1,39 @@
+rules_version = '2';
+
+// DESARROLLO TEMPORAL — NO APTO PARA PRODUCCIÓN.
+//
+// Permite probar únicamente las colecciones que usa Neope antes de que exista
+// autenticación. Caduca el 21 de septiembre de 2026: sustituir estas reglas por
+// reglas basadas en `request.auth` antes de esa fecha o de cualquier despliegue
+// público posterior.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function temporaryDevelopmentAccess() {
+      return request.time < timestamp.date(2026, 9, 21);
+    }
+
+    match /teachers/{document=**} {
+      allow read, write: if temporaryDevelopmentAccess();
+    }
+
+    match /grupos/{document=**} {
+      allow read, write: if temporaryDevelopmentAccess();
+    }
+
+    match /ejercicios/{document=**} {
+      allow read, write: if temporaryDevelopmentAccess();
+    }
+
+    match /plantillas/{document=**} {
+      allow read, write: if temporaryDevelopmentAccess();
+    }
+
+    match /documentos/{document=**} {
+      allow read, write: if temporaryDevelopmentAccess();
+    }
+
+    match /especialidades/{document=**} {
+      allow read, write: if temporaryDevelopmentAccess();
+    }
+  }
+}

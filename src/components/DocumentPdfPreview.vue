@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import modernPdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import legacyPdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
+import { showAppErrorToast } from '../composables/useAppErrorToast'
 
 const props = defineProps({
   src: { type: String, default: '' },
@@ -19,6 +20,7 @@ const supportsModernPdfJs = typeof Promise.withResolvers === 'function'
 const useLegacyPdfJs = isAppleTouchDevice || isSafari || !supportsModernPdfJs
 const pdfSource = computed(() => {
   if (!import.meta.env.DEV) return props.src
+  if (!['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)) return props.src
   try {
     const url = new URL(props.src)
     if (url.hostname !== 'firebasestorage.googleapis.com') return props.src
@@ -120,6 +122,7 @@ async function renderDocument() {
     if (version !== renderVersion || error?.name === 'RenderingCancelledException') return
     console.error('No se ha podido renderizar el documento:', error)
     errorMessage.value = 'No se ha podido mostrar el PDF.'
+    showAppErrorToast(`${errorMessage.value}\n${error?.message || ''}`.trim())
     isLoading.value = false
   }
 }
@@ -169,11 +172,6 @@ watch(container, (element) => {
     <div v-if="isLoading" class="document-pdf-status">
       <v-progress-circular indeterminate color="primary" size="30" width="3" />
       <span>Preparando documento…</span>
-    </div>
-    <div v-else-if="errorMessage" class="document-pdf-status document-pdf-error">
-      <v-icon icon="mdi-file-alert-outline" size="34" />
-      <span>{{ errorMessage }}</span>
-      <a :href="src" target="_blank" rel="noopener">Abrir PDF</a>
     </div>
     <div v-else-if="!src" class="document-pdf-status document-pdf-empty">
       <v-icon icon="mdi-file-pdf-box" size="48" color="primary" />

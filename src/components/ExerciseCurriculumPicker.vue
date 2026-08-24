@@ -11,6 +11,7 @@ const props = defineProps({
   nodes: { type: Array, required: true },
   subjectSelections: { type: Object, default: () => ({}) },
   exerciseCounts: { type: Object, default: () => ({}) },
+  readonly: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue'])
@@ -19,6 +20,7 @@ const selectedSubject = computed(() => mathSubjects.find((subject) => subject.id
 const allowedNodeIds = computed(() => props.subjectSelections[props.modelValue.subjectId] || [])
 
 function updateSubject(subjectId) {
+  if (props.readonly) return
   const subject = mathSubjects.find((item) => item.id === subjectId)
   emit('update:modelValue', {
     course: subject?.course || null,
@@ -29,6 +31,7 @@ function updateSubject(subjectId) {
 }
 
 function updateConcepts(conceptIds) {
+  if (props.readonly) return
   const allowed = new Set(allowedNodeIds.value)
   emit('update:modelValue', {
     course: props.modelValue.course || null,
@@ -39,6 +42,7 @@ function updateConcepts(conceptIds) {
 }
 
 function updateCompetencial(competencial) {
+  if (props.readonly) return
   emit('update:modelValue', {
     course: props.modelValue.course || null,
     subjectId: props.modelValue.subjectId || null,
@@ -49,7 +53,7 @@ function updateCompetencial(competencial) {
 </script>
 
 <template>
-  <div class="exercise-curriculum-picker">
+  <div class="exercise-curriculum-picker" :class="{ 'exercise-curriculum-picker-readonly': readonly }">
     <MathConceptMap
       class="exercise-curriculum-map"
       :nodes="nodes"
@@ -69,6 +73,7 @@ function updateCompetencial(competencial) {
       class="exercise-competency-control"
       :class="{ 'exercise-competency-control-active': Boolean(modelValue.competencial) }"
       :aria-pressed="Boolean(modelValue.competencial)"
+      :disabled="readonly"
       @click="updateCompetencial(!modelValue.competencial)"
     >Competencial</button>
   </div>
@@ -131,4 +136,6 @@ function updateCompetencial(competencial) {
   color: #fff;
   opacity: 1;
 }
+
+.exercise-curriculum-picker-readonly .exercise-competency-control { cursor: default; }
 </style>

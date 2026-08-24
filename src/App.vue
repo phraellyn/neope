@@ -1,11 +1,26 @@
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, writeBatch } from 'firebase/firestore'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import {
+  collection,
+  deleteDoc,
+  doc,
+  documentId,
+  getDoc,
+  getDocs,
+  limit as firestoreLimit,
+  onSnapshot,
+  orderBy,
+  query as firestoreQuery,
+  setDoc,
+  startAfter,
+  updateDoc,
+  writeBatch,
+} from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { deleteObject, getDownloadURL, listAll, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import { Decoration, EditorView, keymap, ViewPlugin } from '@codemirror/view'
 import { autocompletion } from '@codemirror/autocomplete'
 import { indentWithTab } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
@@ -16,13 +31,47 @@ import 'katex/dist/katex.min.css'
 import { db, functions, isAppCheckConfigured, storage } from './services/firebase'
 import MasonryGrid from './components/MasonryGrid.vue'
 import ExerciseCurriculumPicker from './components/ExerciseCurriculumPicker.vue'
+import ExerciseVariantSelector from './components/ExerciseVariantSelector.vue'
 import MathConceptMap from './components/MathConceptMap.vue'
 import DocumentCreator from './components/DocumentCreator.vue'
 import Gradebook from './components/Gradebook.vue'
 import Classroom from './components/Classroom.vue'
 import StudentDetail from './components/StudentDetail.vue'
+import AppErrorToast from './components/AppErrorToast.vue'
 import { mathSubjects, normalizeHierarchySelection } from './data/mathCurriculum'
 import { saveStudentIdentities } from './services/localStudentIdentity'
+import { normalizeDisplayMathDelimiters } from './utils/latexNormalization'
+import { showAppErrorToast } from './composables/useAppErrorToast'
+import {
+  DEVELOPMENT_TEACHER_ID,
+  currentAcademicYear,
+  loadGroupsForTeacher,
+  loadNonTeachingSchedule,
+  loadStudentsForGroup,
+  migrateLegacyGroups,
+  saveGroup,
+  saveGroupMetadata,
+  saveNonTeachingSchedule,
+} from './services/groupRepository'
+import {
+  aggregateExerciseStructure,
+  analyzeExerciseLatex,
+  buildExerciseLatex,
+  buildExercisePartLatex,
+  exerciseDocumentStructure,
+  exercisePdfStoragePaths,
+  exerciseStructureFromDocument,
+  mergeExerciseStructure,
+  parseExerciseLatex,
+  pdfReferenceUrl,
+  pdfReferenceAspectRatio,
+} from './utils/exerciseStructure'
+import {
+  compactExerciseConceptLabel,
+  exerciseStatementText,
+  exerciseVersion,
+  exerciseVersionAuthors,
+} from './utils/exerciseCardMetadata'
 
 const ExercisePdfPreview = defineAsyncComponent(() => import('./components/ExercisePdfPreview.vue'))
 
@@ -45,11 +94,17 @@ const calendarMode = ref('week')
 const shownMonth = ref(new Date())
 const currentTime = ref(new Date())
 const scheduleConfigMode = ref(false)
+const courseCalendarConfigMode = ref(false)
 const scheduleDialog = ref(false)
+const scheduleDeleteDialog = ref(false)
+const courseCalendarDialog = ref(false)
 const selectedSlot = ref(null)
+const selectedCourseCalendarDate = ref('')
 const scheduleBlocks = ref([])
-const careerCourses = ref([])
+const schoolCalendar = ref({ types: [], days: {} })
+const teacherGroups = ref([])
 const selectedCareerGroupId = ref(null)
+const isLoadingSelectedGroup = ref(false)
 const gradebookRef = ref(null)
 const gradebookDirty = ref(false)
 const gradebookValid = ref(true)
@@ -59,10 +114,19 @@ const groupView = ref('evaluation')
 const selectedStudentDetail = ref(null)
 const studentDetailConfigurationMode = ref(false)
 const scheduleForm = ref(emptyScheduleForm())
-const selectedSchedulePreset = ref(null)
+const scheduleClipboard = ref(null)
+const selectedCourseCalendarPreset = ref(null)
+const courseCalendarForm = ref(emptyCourseCalendarForm())
 const isSavingSchedule = ref(false)
 const firestoreError = ref('')
-const teacherDocument = doc(db, 'teachers', 'test')
+const teacherDocument = doc(db, 'teachers', DEVELOPMENT_TEACHER_ID)
+const teacherProfile = ref({ centros: [] })
+const teacherProfileEditing = ref(false)
+const teacherProfileEditingCenterId = ref(null)
+const isSavingTeacherProfile = ref(false)
+const teacherProfileError = ref('')
+const profileImageInput = ref(null)
+const profileImageTarget = ref(null)
 const exercises = ref([])
 const selectedExerciseId = ref(null)
 const exerciseEditor = ref(emptyExercise())
@@ -71,6 +135,8 @@ const exerciseSearchQuery = ref('')
 const exerciseSearchCurriculum = ref(emptyCurriculum())
 const exerciseSearchCurriculumDialog = ref(false)
 const isLoadingExercises = ref(false)
+const isLoadingMoreExercises = ref(false)
+const hasMoreExercises = ref(true)
 const isSavingExercise = ref(false)
 const isDeletingExercise = ref(false)
 const exerciseDeleteDialog = ref(false)
@@ -80,13 +146,17 @@ const isGeneratingSolution = ref(false)
 const isDeletingSolution = ref(false)
 const variationProgressText = ref('')
 const selectedExerciseVersion = ref(0)
+const exerciseSearchVersions = ref({})
 const exerciseEditorTab = ref('code')
+const exerciseContentTarget = ref(null)
 const exerciseAttachmentInput = ref(null)
 const isUploadingExerciseFiles = ref(false)
+const isGeneratingPartSolution = ref(null)
 const sessionUploadedAttachmentPaths = new Set()
 const pendingDeletedAttachments = []
 const aiModelOptions = Object.freeze([
   { title: 'Gemini 3 Flash', value: 'google/gemini-3-flash-preview', subtitle: 'Predeterminado · rápido y fiable' },
+  { title: 'Gemini 3.7 Flash', value: 'google/gemini-3.7-flash', subtitle: 'Nueva generación · rápido y preciso' },
   { title: 'GPT-5 Mini', value: 'openai/gpt-5-mini', subtitle: 'Equilibrio entre coste y calidad' },
   { title: 'GPT-5.6 Luna', value: 'openai/gpt-5.6-luna', subtitle: 'Premium · rápida y estructurada' },
   { title: 'GPT-5.6 Terra', value: 'openai/gpt-5.6-terra', subtitle: 'Premium · razonamiento equilibrado' },
@@ -104,19 +174,46 @@ const isEditingTemplate = ref(false)
 const isLoadingTemplates = ref(false)
 const isSavingTemplate = ref(false)
 const templatesError = ref('')
+
+;[
+  mathConceptsError,
+  teacherProfileError,
+  exercisesError,
+  templatesError,
+  firestoreError,
+  exerciseDeleteError,
+].forEach((source) => watch(source, (message) => {
+  if (message) showAppErrorToast(message)
+}))
 const templateEditorHost = ref(null)
 const templateFileInput = ref(null)
 let templateCodeEditor
 const compilerBaseUrl = '/compiler-api/v1'
 const selectedPreamble = ref('')
 const exercisePreviewTab = ref('statement')
+const exercisePreviewMode = ref('segmented')
 const compilerError = ref('')
+const exerciseCompilerErrorSnackbar = computed({
+  get: () => Boolean(compilerError.value && exerciseView.value === 'edit'),
+  set: (visible) => {
+    if (!visible) compilerError.value = ''
+  },
+})
 const isCompiling = ref(false)
+const exerciseCompilationStatus = ref('ready')
+let stopExerciseCompilationWatch = null
+const exerciseCompilationListWatches = new Map()
 const documentCreatorRef = ref(null)
 const isCompilingDocument = ref(false)
 const documentSearchQuery = ref('')
+const documentsTab = ref('documents')
 const documentWorkflow = ref({ mode: 'library', step: 0, canContinue: false, canGoBack: false, canSave: false, isSaving: false })
 const mathSubjectsById = new Map(mathSubjects.map((subject) => [subject.id, subject]))
+const isAppleTouchDevice = /iPad|iPhone|iPod/.test(navigator.userAgent || '')
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+const exerciseBatchSize = isAppleTouchDevice ? 6 : 9
+let lastExerciseDocument = null
+let exerciseScrollFrame = 0
 
 const monthLabel = computed(() => new Intl.DateTimeFormat('es-ES', { month: 'long', year: 'numeric' }).format(shownMonth.value))
 const activeMathSubjectNodeIds = computed(() => (
@@ -155,24 +252,24 @@ function getMonthDays(date) {
 }
 const calendarDays = computed(() => getMonthDays(shownMonth.value))
 const academicMonths = computed(() => {
-  const startYear = shownMonth.value.getMonth() >= 8 ? shownMonth.value.getFullYear() : shownMonth.value.getFullYear() - 1
+  const startYear = shownMonth.value.getMonth() >= 7 ? shownMonth.value.getFullYear() : shownMonth.value.getFullYear() - 1
   return Array.from({ length: 10 }, (_, index) => new Date(startYear, 8 + index, 1))
 })
 
 const filteredExercises = computed(() => {
-  const search = exerciseSearchQuery.value.trim().toLocaleLowerCase('es')
+  const search = String(exerciseSearchQuery.value || '').trim().toLocaleLowerCase('es')
   const filters = exerciseSearchCurriculum.value
+  const terminalFilterIds = terminalConceptIds(filters.conceptIds)
   return exercises.value.filter((exercise) => {
     const matchesSearch = !search
-      || exercise.enunciado.toLocaleLowerCase('es').includes(search)
-      || exerciseCurriculumLabel(exercise).toLocaleLowerCase('es').includes(search)
+      || exerciseStatementText(exercise).toLocaleLowerCase('es').includes(search)
     if (!matchesSearch) return false
     if (filters.course && exercise.curriculum.course !== filters.course) return false
     if (filters.subjectId && exercise.curriculum.subjectId !== filters.subjectId) return false
     if (filters.competencial && !exercise.curriculum.competencial) return false
-    if (filters.conceptIds.length) {
+    if (terminalFilterIds.length) {
       const closure = exerciseConceptClosure(exercise.curriculum.conceptIds)
-      if (!filters.conceptIds.some((id) => closure.has(id))) return false
+      if (!terminalFilterIds.some((id) => closure.has(id))) return false
     }
     return true
   })
@@ -201,57 +298,286 @@ const activeExerciseVersion = computed(() => selectedExerciseVersion.value === 0
   ? exerciseEditor.value
   : exerciseEditor.value.variaciones[selectedExerciseVersion.value - 1] || exerciseEditor.value)
 const activeExerciseCode = computed(() => activeExerciseVersion.value.enunciado || '')
+const activeExerciseStructure = computed(() => activeExerciseVersion.value.structure || parseExerciseLatex(activeExerciseCode.value))
+const activeExerciseHasSections = computed(() => activeExerciseStructure.value.apartados.length > 0)
 const compiledPdfUrl = computed(() => activeExerciseVersion.value.previewPdf?.enunciado || activeExerciseVersion.value.pdf?.enunciado || '')
 const compiledSolutionPdfUrl = computed(() => activeExerciseVersion.value.previewPdf?.resuelto || activeExerciseVersion.value.pdf?.resuelto || '')
+const activeCompletePdfUrl = computed(() => exercisePreviewTab.value === 'solution' ? compiledSolutionPdfUrl.value : compiledPdfUrl.value)
+const segmentedExercisePreview = computed(() => activeExerciseHasSections.value && exercisePreviewMode.value === 'segmented')
 const hasLatexChanges = computed(() => activeExerciseCode.value !== (activeExerciseVersion.value.renderedLatex || ''))
 const activeExercisePdfUrl = computed(() => exercisePreviewTab.value === 'statement'
   ? compiledPdfUrl.value
   : compiledSolutionPdfUrl.value)
+const exerciseCompilationLabel = computed(() => ({
+  outdated: 'Cambios sin compilar',
+  queued: 'En cola',
+  compiling: 'Compilando',
+  error: 'Error de compilación',
+}[exerciseCompilationStatus.value] || 'PDF actualizado'))
 const selectedTemplate = computed(() => templates.value.find((template) => template.id === selectedTemplateId.value) || null)
 const preambleOptions = computed(() => templates.value.filter((template) => template.archivo))
 
-const courseOptions = computed(() => uniqueScheduleValues('course'))
-const subjectOptions = computed(() => uniqueScheduleValues('subject'))
-const classroomOptions = computed(() => uniqueScheduleValues('classroom'))
+const scheduleSubjectOptions = Object.freeze(mathSubjects.map((subject) => ({
+  title: `${subject.course} — ${subject.title}`,
+  value: subject.id,
+  course: subject.course,
+  subject: subject.title,
+})))
+const filteredScheduleSubjectOptions = computed(() => {
+  const course = scheduleCourseLevel(scheduleForm.value.course)
+  if (!course) return scheduleSubjectOptions
+  return scheduleSubjectOptions
+    .filter((option) => option.course === course)
+    .map((option) => ({ ...option, title: option.subject }))
+})
+const scheduleSegmentTypeOptions = Object.freeze([
+  { title: 'Actividad complementaria', value: 'actividad-complementaria', color: '#2F6F4E' },
+  { title: 'Guardia', value: 'guardia', color: '#B85C1E' },
+  { title: 'Apoyo a Guardia', value: 'apoyo-guardia', color: '#806A00' },
+  { title: 'Reunión de Departamento', value: 'reunion-departamento', color: '#315F94' },
+  { title: 'Reunión de Tutores', value: 'reunion-tutores', color: '#674C8F' },
+])
+const canSaveScheduleBlock = computed(() => (
+  scheduleForm.value.course.trim()
+    ? Boolean(scheduleForm.value.subjectId)
+    : Boolean(scheduleForm.value.nonTeachingKind)
+))
 const hasSelectedScheduleBlock = computed(() => selectedSlot.value
   && Boolean(scheduleBlock(selectedSlot.value.dayIndex, selectedSlot.value.moduleIndex)))
-const schedulePresets = computed(() => {
-  const uniqueBlocks = new Map()
-  scheduleBlocks.value.forEach((block) => {
-    const key = block.groupId || [block.course, block.subject, block.classroom, block.color].join('|')
-    if (!uniqueBlocks.has(key)) {
-      uniqueBlocks.set(key, {
-        groupId: block.groupId,
-        course: block.course,
-        subject: block.subject,
-        classroom: block.classroom,
-        color: block.color,
-        title: [block.course, block.subject, block.classroom].filter(Boolean).join(' · '),
-      })
-    }
-  })
-  return [...uniqueBlocks.values()]
+const scheduleSubjectColors = Object.freeze({
+  '1eso-matematicas': '#E8F0FB',
+  '2eso-matematicas': '#D8E5F7',
+  '3eso-matematicas': '#C5D8F0',
+  '4eso-matematicas-a': '#AEC8E7',
+  '4eso-matematicas-b': '#9AB8DC',
+  '1bto-matematicas-i': '#7FA5D1',
+  '1bto-matematicas-ccss-i': '#6F96C5',
+  '2bto-matematicas-ii': '#557FB4',
+  '2bto-matematicas-ccss-ii': '#416C9F',
 })
-const colorOptions = [
-  { title: 'Azul cielo', value: '#DCEBFF' },
-  { title: 'Turquesa', value: '#D8F3EF' },
-  { title: 'Verde menta', value: '#DDF4EA' },
-  { title: 'Verde lima', value: '#E7F5C9' },
-  { title: 'Amarillo', value: '#FFF1C9' },
-  { title: 'Naranja', value: '#FFE2C2' },
-  { title: 'Coral', value: '#FFE2DD' },
-  { title: 'Rosa', value: '#FCE0EE' },
-  { title: 'Lila', value: '#ECE4FF' },
-  { title: 'Gris', value: '#E6EAF0' },
+const schoolCalendarColorOptions = [
+  { title: 'Día libre', value: '#BFE88D' },
+  { title: 'Vacaciones', value: '#BFE88D' },
+  { title: 'No lectivo', value: '#F2A36F' },
+  { title: 'Evaluación', value: '#D7B4E3' },
+  { title: 'Festivo', value: '#FFF0A8' },
 ]
 
+const academicCalendarYear = computed(() => {
+  const first = academicMonths.value[0]
+  return `${first.getFullYear()}-${first.getFullYear() + 1}`
+})
+const academicCalendarCourseOptions = computed(() => teacherGroups.value
+  .filter((group) => group.asignatura)
+  .map((group) => ({
+    title: [group.nombre, group.asignatura].filter(Boolean).join(' · '),
+    value: group.id,
+  }))
+  .filter((item, index, items) => items.findIndex((candidate) => candidate.value === item.value) === index))
+const courseCalendarPresets = computed(() => schoolCalendar.value.types || [])
+
+function emptyCourseCalendarForm() {
+  return { typeId: null, color: '#E7F5C9', lectivo: true, mensaje: '', cursos: [] }
+}
+
+function normalizeSchoolCalendar(value) {
+  const types = Array.isArray(value?.types) ? value.types.map((type) => ({
+    id: type.id || createGroupId(),
+    color: type.color || '#E7F5C9',
+    lectivo: type.lectivo !== false,
+    mensaje: String(type.mensaje || ''),
+    cursos: Array.isArray(type.cursos) ? [...type.cursos] : [],
+  })) : []
+  const validIds = new Set(types.map((type) => type.id))
+  const days = Object.fromEntries(Object.entries(value?.days || {}).filter(([, typeId]) => validIds.has(typeId)))
+  return { types, days }
+}
+
+function academicCalendarKey(month, day) {
+  if (!day) return ''
+  const date = new Date(month.getFullYear(), month.getMonth(), day)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function academicCalendarEntry(month, day) {
+  const typeId = schoolCalendar.value.days?.[academicCalendarKey(month, day)]
+  return (schoolCalendar.value.types || []).find((type) => type.id === typeId) || null
+}
+
+function schoolCalendarEntryForDate(date) {
+  if (!date) return null
+  const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  const typeId = schoolCalendar.value.days?.[key]
+  return (schoolCalendar.value.types || []).find((type) => type.id === typeId) || null
+}
+
+function schoolCalendarWeekendEntry(date) {
+  return date && (date.getDay() === 0 || date.getDay() === 6)
+    ? { color: '#BFE88D', lectivo: false, mensaje: '', cursos: [] }
+    : null
+}
+
+function displayedSchoolCalendarEntry(date) {
+  return schoolCalendarEntryForDate(date) || schoolCalendarWeekendEntry(date)
+}
+
+function calendarTypeCourses(entry) {
+  if (!entry?.cursos?.length) return ''
+  return entry.cursos.map((id) => academicCalendarCourseOptions.value.find((course) => course.value === id)?.title || id).join(', ')
+}
+
+function academicCalendarDayStyle(month, day) {
+  if (!day) return undefined
+  const entry = displayedSchoolCalendarEntry(new Date(month.getFullYear(), month.getMonth(), day))
+  return entry ? { backgroundColor: entry.color, '--academic-day-color': entry.color } : undefined
+}
+
+function openCourseCalendarDialog(month, day) {
+  if (!courseCalendarConfigMode.value || !day) return
+  const clickedDate = new Date(month.getFullYear(), month.getMonth(), day)
+  if (clickedDate.getDay() === 0 || clickedDate.getDay() === 6) return
+  const key = academicCalendarKey(month, day)
+  const entry = academicCalendarEntry(month, day)
+  selectedCourseCalendarDate.value = key
+  selectedCourseCalendarPreset.value = null
+  courseCalendarForm.value = entry ? { ...entry, cursos: [...(entry.cursos || [])] } : emptyCourseCalendarForm()
+  courseCalendarDialog.value = true
+}
+
+function applyCourseCalendarPreset(preset) {
+  if (!preset) return
+  courseCalendarForm.value = {
+    ...preset,
+    typeId: preset.id,
+    cursos: [...(preset.cursos || [])],
+  }
+}
+
+async function saveCourseCalendarDay() {
+  if (!selectedCourseCalendarDate.value || !courseCalendarForm.value.color) return
+  const form = courseCalendarForm.value
+  const typeId = form.typeId || createGroupId()
+  const type = {
+    id: typeId,
+    color: form.color,
+    lectivo: form.lectivo !== false,
+    mensaje: String(form.mensaje || '').trim(),
+    cursos: [...new Set(form.cursos || [])],
+  }
+  const previous = schoolCalendar.value
+  const types = [...(previous.types || []).filter((item) => item.id !== typeId), type]
+  const days = { ...(previous.days || {}), [selectedCourseCalendarDate.value]: typeId }
+  schoolCalendar.value = { types, days }
+  try {
+    await setDoc(teacherDocument, { calendariosEscolares: { [academicCalendarYear.value]: schoolCalendar.value } }, { merge: true })
+    courseCalendarDialog.value = false
+  } catch (error) {
+    schoolCalendar.value = previous
+    firestoreError.value = 'No se ha podido guardar la configuración del calendario escolar.'
+    console.error('Error al guardar calendario escolar:', error)
+  }
+}
+
+async function clearCourseCalendarDay() {
+  if (!selectedCourseCalendarDate.value) return
+  const previous = schoolCalendar.value
+  const days = { ...(previous.days || {}) }
+  delete days[selectedCourseCalendarDate.value]
+  schoolCalendar.value = { ...previous, days }
+  try {
+    await setDoc(teacherDocument, { calendariosEscolares: { [academicCalendarYear.value]: schoolCalendar.value } }, { merge: true })
+    courseCalendarDialog.value = false
+  } catch (error) {
+    schoolCalendar.value = previous
+    firestoreError.value = 'No se ha podido limpiar el día del calendario escolar.'
+    console.error('Error al limpiar día del calendario escolar:', error)
+  }
+}
+
 function emptyScheduleForm() {
-  return { groupId: null, course: '', subject: '', classroom: '', color: null }
+  return { id: null, type: 'nonTeaching', nonTeachingKind: null, groupId: null, course: '', subjectId: null, subject: '', classroom: '', color: null }
+}
+
+function scheduleSubjectId(course, subject) {
+  const normalizedCourse = String(course || '').trim().replace(/\s+[A-Z]$/u, '')
+  const normalizedSubject = String(subject || '').trim()
+  return mathSubjects.find((candidate) => (
+    candidate.course === normalizedCourse && candidate.title === normalizedSubject
+  ))?.id || null
+}
+
+function scheduleCourseLevel(groupName) {
+  const normalizedGroup = String(groupName || '').toLocaleUpperCase('es').replace(/\s+/gu, '')
+  if (!normalizedGroup) return null
+  return [...new Set(mathSubjects.map((subject) => subject.course))]
+    .find((course) => normalizedGroup.startsWith(course.toLocaleUpperCase('es').replace(/\s+/gu, ''))) || null
+}
+
+function updateScheduleCourse(groupName) {
+  const course = scheduleCourseLevel(groupName)
+  if (!String(groupName || '').trim()) {
+    selectScheduleSubject(null)
+    return
+  }
+  scheduleForm.value.type = 'teaching'
+  scheduleForm.value.nonTeachingKind = null
+  if (!course || !scheduleForm.value.subjectId) return
+  const selectedSubject = mathSubjectsById.get(scheduleForm.value.subjectId)
+  if (selectedSubject?.course !== course) selectScheduleSubject(null)
+}
+
+function selectScheduleSubject(subjectId) {
+  const selectedSubject = mathSubjectsById.get(subjectId)
+  scheduleForm.value.subjectId = selectedSubject?.id || null
+  scheduleForm.value.subject = selectedSubject?.title || ''
+  scheduleForm.value.type = selectedSubject ? 'teaching' : 'nonTeaching'
+  scheduleForm.value.nonTeachingKind = selectedSubject ? null : scheduleForm.value.nonTeachingKind
+  scheduleForm.value.color = scheduleColorFor(scheduleForm.value)
+}
+
+function scheduleSegmentType(valueOrTitle) {
+  return scheduleSegmentTypeOptions.find((option) => (
+    option.value === valueOrTitle || option.title === valueOrTitle
+  )) || null
+}
+
+function selectScheduleSegmentType(segmentType) {
+  scheduleForm.value.nonTeachingKind = scheduleSegmentType(segmentType)?.value || null
+  scheduleForm.value.type = 'nonTeaching'
+  scheduleForm.value.subjectId = null
+  scheduleForm.value.subject = ''
+  scheduleForm.value.color = scheduleColorFor(scheduleForm.value)
+}
+
+function scheduleColorFor(block = {}) {
+  if (block.subjectId && scheduleSubjectColors[block.subjectId]) return scheduleSubjectColors[block.subjectId]
+  return scheduleSegmentType(block.nonTeachingKind)?.color
+    || scheduleSegmentType(block.course)?.color
+    || '#536273'
+}
+
+function scheduleTextColor(backgroundColor) {
+  const hex = String(backgroundColor || '').replace('#', '')
+  if (!/^[0-9a-f]{6}$/iu.test(hex)) return '#19375f'
+  const [red, green, blue] = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255)
+  const luminance = (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
+  return luminance < 0.56 ? '#ffffff' : '#19375f'
+}
+
+function scheduleCellStyle(block) {
+  if (!block) return undefined
+  return {
+    '--schedule-color': block.color,
+    '--schedule-text-color': scheduleTextColor(block.color),
+  }
 }
 
 function emptyExercise() {
+  const structure = parseExerciseLatex('')
   return {
     id: null,
+    schemaVersion: 3,
+    revision: 0,
     enunciado: '',
     tags: [],
     curriculum: emptyCurriculum(),
@@ -261,6 +587,9 @@ function emptyExercise() {
     variaciones: [],
     previewPdf: null,
     renderedLatex: '',
+    compilation: { status: 'ready', requestedRevision: 0, readyRevision: 0, error: null },
+    analysis: { valid: true, ambiguous: false },
+    structure,
   }
 }
 
@@ -281,17 +610,46 @@ function normalizeCurriculum(curriculum = {}) {
   }
 }
 
+function exerciseImageExtension(file = {}) {
+  const mimeExtensions = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'application/pdf': 'pdf',
+  }
+  if (mimeExtensions[file.type]) return mimeExtensions[file.type]
+  const sourceName = file.originalName || file.nombre || file.name || file.path || ''
+  const extension = sourceName.match(/\.([a-zA-Z0-9]+)(?:\?.*)?$/)?.[1]?.toLowerCase()
+  if (extension === 'jpeg') return 'jpg'
+  return ['png', 'jpg', 'pdf'].includes(extension) ? extension : ''
+}
+
 function normalizeExerciseFiles(files) {
+  const usedNames = new Set()
+  let nextNumber = 1
   return (Array.isArray(files) ? files : [])
     .filter((file) => file && typeof file.path === 'string' && typeof file.url === 'string')
-    .map((file) => ({
-      id: file.id || file.path,
-      nombre: file.nombre || file.name || file.path.split('/').at(-1),
-      path: file.path,
-      url: file.url,
-      type: file.type || 'application/octet-stream',
-      size: Number(file.size) || 0,
-    }))
+    .map((file) => {
+      let latexName = /^imagen[1-9]\d*$/.test(file.latexName || '') ? file.latexName : ''
+      if (!latexName || usedNames.has(latexName)) {
+        while (usedNames.has(`imagen${nextNumber}`)) nextNumber += 1
+        latexName = `imagen${nextNumber}`
+      }
+      usedNames.add(latexName)
+      nextNumber = Math.max(nextNumber, Number(latexName.slice(6)) + 1)
+      const extension = exerciseImageExtension(file) || 'png'
+      const compilerName = `${latexName}.${extension}`
+      return {
+        id: file.id || file.path,
+        nombre: compilerName,
+        originalName: file.originalName || file.nombre || file.name || file.path.split('/').at(-1),
+        latexName,
+        compilerName,
+        path: file.path,
+        url: file.url,
+        type: file.type || (extension === 'pdf' ? 'application/pdf' : `image/${extension === 'jpg' ? 'jpeg' : extension}`),
+        size: Number(file.size) || 0,
+      }
+    })
 }
 
 function emptyPdfPair() {
@@ -300,33 +658,124 @@ function emptyPdfPair() {
 
 function normalizePdfPair(pdf) {
   if (typeof pdf === 'string') return { enunciado: pdf, resuelto: null }
-  return { enunciado: pdf?.enunciado || '', resuelto: pdf?.resuelto || null }
+  return {
+    enunciado: pdfReferenceUrl(pdf?.statement || pdf?.enunciado),
+    resuelto: pdfReferenceUrl(pdf?.solved || pdf?.resuelto) || null,
+  }
+}
+
+function normalizePdfLayout(pdf) {
+  if (!pdf || typeof pdf !== 'object') return { enunciado: 0, resuelto: 0 }
+  return {
+    enunciado: pdfReferenceAspectRatio(pdf.statement || pdf.enunciado),
+    resuelto: pdfReferenceAspectRatio(pdf.solved || pdf.resuelto),
+  }
+}
+
+function normalizeExercisePreview(preview = {}) {
+  const raw = preview?.statement || preview?.enunciado || null
+  if (!raw) return { enunciado: null }
+  if (typeof raw === 'string') return { enunciado: { url: raw, sourceUrl: '' } }
+  return {
+    enunciado: {
+      url: raw.url || raw.downloadUrl || '',
+      storagePath: raw.storagePath || '',
+      sourceUrl: raw.sourceUrl || '',
+      width: Number(raw.width) || 0,
+      height: Number(raw.height) || 0,
+      aspectRatio: Number(raw.aspectRatio) || 0,
+    },
+  }
+}
+
+const pendingPdfMetricWrites = new Set()
+
+async function rememberExercisePdfMetrics(exercise, metrics = {}) {
+  const aspectRatio = Number(metrics.aspectRatio) || 0
+  const width = Number(metrics.width) || 0
+  const height = Number(metrics.height) || 0
+  if (!exercise?.id || aspectRatio <= 0) return
+  if (!exercise.pdfLayout) exercise.pdfLayout = { enunciado: 0, resuelto: 0 }
+  const alreadyStored = exercise.pdfLayout.enunciado > 0
+  exercise.pdfLayout.enunciado = aspectRatio
+  if (alreadyStored || width <= 0 || height <= 0 || pendingPdfMetricWrites.has(exercise.id)) return
+
+  pendingPdfMetricWrites.add(exercise.id)
+  try {
+    await updateDoc(doc(db, 'ejercicios', exercise.id), {
+      'pdf.statement.width': width,
+      'pdf.statement.height': height,
+      'pdf.statement.aspectRatio': aspectRatio,
+    })
+  } catch (error) {
+    console.warn('No se han podido guardar las dimensiones del PDF:', error)
+  } finally {
+    pendingPdfMetricWrites.delete(exercise.id)
+  }
 }
 
 function normalizeVariation(variation = {}) {
-  const pdf = normalizePdfPair(variation.pdf)
+  const structured = Number(variation.schemaVersion) >= 3 && variation.statement
+  const structure = structured
+    ? exerciseStructureFromDocument(variation)
+    : mergeExerciseStructure(parseExerciseLatex(variation.codigo || variation.latex || variation.enunciado || ''), variation)
+  const code = structured
+    ? buildExerciseLatex(structure, { preserveApartadosEnvironment: true })
+    : variation.codigo || variation.latex || variation.enunciado || ''
+  const pdf = normalizePdfPair(variation.pdf || {
+    enunciado: variation.pdfenunciadocompleto,
+    resuelto: variation.pdfsolucioncompleto,
+  })
+  const pdfLayout = normalizePdfLayout(variation.pdf)
   return {
-    enunciado: variation.enunciado || '',
+    ...variation,
+    enunciado: code,
     modelo: variation.modelo || '',
     pdf,
+    pdfLayout,
+    preview: normalizeExercisePreview(variation.preview),
+    structure: mergeExerciseStructure(structure, { ...variation, pdf }),
     previewPdf: null,
-    renderedLatex: pdf.enunciado ? variation.enunciado || '' : '',
+    renderedLatex: pdf.enunciado ? code : '',
+    analysis: { valid: true, ambiguous: false },
   }
 }
 
 function normalizeExercise(exercise) {
-  const pdf = normalizePdfPair(exercise.pdf)
+  const structured = Number(exercise.schemaVersion) >= 3 && exercise.statement
+  const sourceStructure = structured
+    ? exerciseStructureFromDocument(exercise)
+    : mergeExerciseStructure(parseExerciseLatex(exercise.codigo || exercise.latex || exercise.enunciado || ''), exercise)
+  const code = structured
+    ? buildExerciseLatex(sourceStructure, { preserveApartadosEnvironment: true })
+    : exercise.codigo || exercise.latex || exercise.enunciado || ''
+  const pdf = normalizePdfPair(exercise.pdf || {
+    enunciado: exercise.pdfenunciadocompleto,
+    resuelto: exercise.pdfsolucioncompleto,
+  })
+  const pdfLayout = normalizePdfLayout(exercise.pdf)
+  const structure = mergeExerciseStructure(sourceStructure, { ...exercise, pdf })
+  const curriculum = normalizeCurriculum({
+    ...exercise.curriculum,
+    conceptIds: structure.apartados.length
+      ? structure.contenidos
+      : structure.contenidos.length ? structure.contenidos : exercise.curriculum?.conceptIds,
+  })
   return {
     ...exercise,
-    enunciado: exercise.enunciado || '',
+    enunciado: code,
     tags: normalizeTags(exercise.tags),
-    curriculum: normalizeCurriculum(exercise.curriculum),
+    curriculum,
     archivos: normalizeExerciseFiles(exercise.archivos),
     pdf,
+    pdfLayout,
+    preview: normalizeExercisePreview(exercise.preview),
+    structure,
     solucionIA: Boolean(exercise.solucionIA),
     variaciones: Array.isArray(exercise.variaciones) ? exercise.variaciones.map(normalizeVariation) : [],
     previewPdf: null,
-    renderedLatex: pdf.enunciado ? exercise.enunciado || '' : '',
+    renderedLatex: pdf.enunciado ? code : '',
+    analysis: { valid: true, ambiguous: false },
   }
 }
 
@@ -345,6 +794,13 @@ function exerciseConceptClosure(conceptIds = []) {
   const closure = new Set()
   conceptIds.forEach((conceptId) => conceptAncestors(conceptId).forEach((id) => closure.add(id)))
   return closure
+}
+
+function terminalConceptIds(conceptIds = []) {
+  const selected = [...new Set(conceptIds)]
+  return selected.filter((id) => !selected.some((otherId) => (
+    otherId !== id && conceptAncestors(otherId).includes(id)
+  )))
 }
 
 function countExercisesByConcept(sourceExercises) {
@@ -393,6 +849,18 @@ function conceptSelectionLabel(conceptIds = []) {
   return [...prefix, `(${alternatives.join(' · ')})`].join(' · ')
 }
 
+function exerciseAiCurriculum() {
+  const curriculum = normalizeCurriculum(exerciseEditor.value?.curriculum)
+  if (!curriculum.subjectId) return null
+  return {
+    subjectId: curriculum.subjectId,
+    course: curriculum.course,
+    conceptPaths: terminalConceptIds(curriculum.conceptIds)
+      .map((conceptId) => conceptTitlePath(conceptId))
+      .filter((path) => path.length),
+  }
+}
+
 function exerciseCurriculumLabel(exercise) {
   const curriculum = normalizeCurriculum(exercise?.curriculum)
   const subject = mathSubjectsById.get(curriculum.subjectId)
@@ -408,8 +876,76 @@ function exerciseSubjectLabel(exercise) {
 }
 
 function exerciseConceptLabel(exercise) {
-  const concepts = conceptSelectionLabel(normalizeCurriculum(exercise?.curriculum).conceptIds)
-  return concepts || 'Sin conceptos'
+  return compactExerciseConceptLabel(
+    normalizeCurriculum(exercise?.curriculum).conceptIds,
+    mathConceptNodes.value,
+  )
+}
+
+function searchExerciseVersionIndex(exercise) {
+  const selected = Number(exerciseSearchVersions.value[exercise?.id]) || 0
+  return Math.min(Math.max(0, selected), exercise?.variaciones?.length || 0)
+}
+
+function setSearchExerciseVersion(exercise, version) {
+  if (!exercise?.id) return
+  exerciseSearchVersions.value[exercise.id] = Number(version) || 0
+}
+
+function searchExerciseVersion(exercise) {
+  return exerciseVersion(exercise, searchExerciseVersionIndex(exercise)) || exercise
+}
+
+function searchExercisePdf(exercise) {
+  return searchExerciseVersion(exercise)?.pdf?.enunciado || ''
+}
+
+function searchExercisePdfAspectRatio(exercise) {
+  return Number(searchExerciseVersion(exercise)?.pdfLayout?.enunciado) || 0
+}
+
+function searchExerciseThumbnail(exercise) {
+  const version = searchExerciseVersion(exercise)
+  const thumbnail = version?.preview?.enunciado
+  if (!thumbnail?.url) return ''
+  return !thumbnail.sourceUrl || thumbnail.sourceUrl === version?.pdf?.enunciado
+    ? thumbnail.url
+    : ''
+}
+
+const pendingExerciseThumbnailWrites = new Set()
+
+async function persistExerciseThumbnail(exercise, payload = {}) {
+  if (!exercise?.id || searchExerciseVersionIndex(exercise) !== 0 || !payload?.blob) return
+  const sourceUrl = searchExercisePdf(exercise)
+  if (!sourceUrl || payload.source !== sourceUrl || pendingExerciseThumbnailWrites.has(exercise.id)) return
+  pendingExerciseThumbnailWrites.add(exercise.id)
+  try {
+    const bytes = new Uint8Array(await payload.blob.arrayBuffer())
+    let binary = ''
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+    }
+    const callable = httpsCallable(functions, 'saveExerciseThumbnail')
+    const response = await callable({
+      exerciseId: exercise.id,
+      sourceUrl,
+      imageBase64: btoa(binary),
+      width: Number(payload.width) || 0,
+      height: Number(payload.height) || 0,
+      aspectRatio: Number(payload.aspectRatio) || searchExercisePdfAspectRatio(exercise),
+    })
+    const thumbnail = response.data
+    exercise.preview = { ...(exercise.preview || {}), enunciado: thumbnail }
+  } catch (error) {
+    console.error('No se ha podido guardar la miniatura del ejercicio:', error)
+  } finally {
+    pendingExerciseThumbnailWrites.delete(exercise.id)
+  }
+}
+
+function searchExerciseAuthors(exercise) {
+  return exerciseVersionAuthors(exercise, searchExerciseVersionIndex(exercise))
 }
 
 const conceptMathDelimiterPattern = /(\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\\\(([\s\S]+?)\\\)|\\\[([\s\S]+?)\\\])/g
@@ -462,24 +998,133 @@ async function syncExerciseConceptIndex(exerciseId, previousConceptIds = [], nex
   if (!existingBatch) await batch.commit()
 }
 
-function exerciseSolutionBadge(exercise) {
-  if (!exercise.pdf?.resuelto) {
-    return { label: 'Sin resolver', color: undefined, icon: 'mdi-file-document-outline' }
-  }
-  return exercise.solucionIA
-    ? { label: 'Resuelto por IA', color: 'secondary', icon: 'mdi-brain' }
-    : { label: 'Resuelto', color: 'success', icon: 'mdi-file-document-check-outline' }
-}
-
 function emptyTemplate() {
   return { id: null, nombre: '', descripcion: '', codigo: '', archivo: '' }
 }
 
-const documentTemplateMetadataGuide = `% neope:document {"name":"Examen","command":"logo","optionalCommand":"optativos"}
-% neope:field {"key":"subject","label":"Asignatura","argument":1,"type":"subject","placeholder":"Matemáticas II"}
-% neope:field {"key":"title","label":"Título","argument":2,"type":"text","placeholder":"Recuperación -- 2ª Evaluación"}
-% neope:field {"key":"date","label":"Fecha","argument":3,"type":"text","placeholder":"09 / 03 / 26"}
-% neope:field {"key":"course","label":"Curso y grupo","argument":4,"type":"course","placeholder":"2ºBTO A"}
+function emptyTeacherCenter() {
+  return { id: crypto.randomUUID(), curso: '', centro: '', descripcion: '', imagenes: [] }
+}
+
+function normalizeTeacherProfile(profile) {
+  const centros = Array.isArray(profile?.centros) ? profile.centros : []
+  return {
+    centros: centros.map((center) => ({
+      id: center.id || crypto.randomUUID(),
+      curso: String(center.curso || center.cursoAcademico || ''),
+      centro: String(center.centro || center.nombre || ''),
+      descripcion: String(center.descripcion || ''),
+      imagenes: Array.isArray(center.imagenes) ? center.imagenes.filter((image) => image?.url).map((image) => ({
+        id: image.id || crypto.randomUUID(),
+        nombre: image.nombre || 'Logo',
+        url: image.url,
+        path: image.path || '',
+      })) : [],
+    })),
+  }
+}
+
+function addTeacherCenter() {
+  teacherProfileEditing.value = true
+  const center = emptyTeacherCenter()
+  teacherProfile.value.centros.push(center)
+  teacherProfileEditingCenterId.value = center.id
+  teacherProfileError.value = ''
+}
+
+function isTeacherCenterEditing(center) {
+  return teacherProfileEditing.value && teacherProfileEditingCenterId.value === center.id
+}
+
+function editTeacherCenter(center) {
+  teacherProfileEditing.value = true
+  teacherProfileEditingCenterId.value = center.id
+}
+
+async function saveTeacherCenter(center) {
+  await saveTeacherProfile()
+  if (!teacherProfileError.value) {
+    teacherProfileEditingCenterId.value = null
+    teacherProfileEditing.value = false
+  }
+}
+
+function removeTeacherCenter(center) {
+  teacherProfile.value.centros = teacherProfile.value.centros.filter((item) => item.id !== center.id)
+  if (teacherProfileEditingCenterId.value === center.id) {
+    teacherProfileEditingCenterId.value = null
+    teacherProfileEditing.value = false
+  }
+  saveTeacherProfile()
+}
+
+function openProfileImagePicker(center) {
+  profileImageTarget.value = center
+  profileImageInput.value?.click()
+}
+
+async function uploadProfileImages(event) {
+  const center = profileImageTarget.value
+  const files = [...(event.target.files || [])]
+  event.target.value = ''
+  if (!center || !files.length) return
+  isSavingTeacherProfile.value = true
+  teacherProfileError.value = ''
+  try {
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue
+      const imageId = crypto.randomUUID()
+      const path = `teachers/test/profile/${center.id}/${imageId}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const reference = storageRef(storage, path)
+      await uploadBytes(reference, file, { contentType: file.type })
+      const url = await getDownloadURL(reference)
+      center.imagenes.push({ id: imageId, nombre: file.name, url, path })
+    }
+    await saveTeacherProfile()
+  } catch (error) {
+    teacherProfileError.value = 'No se han podido subir todas las imágenes.'
+    console.error('Error al subir imágenes del perfil:', error)
+  } finally {
+    isSavingTeacherProfile.value = false
+    profileImageTarget.value = null
+  }
+}
+
+async function removeProfileImage(center, image) {
+  center.imagenes = center.imagenes.filter((item) => item.id !== image.id)
+  if (image.path) {
+    try { await deleteObject(storageRef(storage, image.path)) } catch (error) { console.warn('No se pudo eliminar el logo anterior:', error) }
+  }
+  await saveTeacherProfile()
+}
+
+async function saveTeacherProfile() {
+  isSavingTeacherProfile.value = true
+  teacherProfileError.value = ''
+  try {
+    await setDoc(teacherDocument, { perfil: { centros: teacherProfile.value.centros } }, { merge: true })
+  } catch (error) {
+    teacherProfileError.value = 'No se ha podido guardar el perfil del profesor.'
+    console.error('Error al guardar el perfil del profesor:', error)
+  } finally {
+    isSavingTeacherProfile.value = false
+  }
+}
+
+async function toggleTeacherProfileEditing() {
+  if (!teacherProfileEditing.value) {
+    teacherProfileEditing.value = true
+    return
+  }
+  await saveTeacherProfile()
+  if (!teacherProfileError.value) teacherProfileEditing.value = false
+}
+
+const documentTemplateMetadataGuide = `% Añade los marcadores al final de las líneas donde se usan los argumentos:
+% \\newcommand{\\logo}[4]{
+%   \\textbf{#1} %% asignatura %%
+%   \\hfill #4 / #2 / #3 %% grupo, título, fecha %%
+% }
 
 `
 
@@ -491,8 +1136,28 @@ function preambleFileName(name) {
 
 function templateCodeForCompiler(code = '') {
   return code
-    .replace(/\\includegraphics\*?\s*(?:\[[^\]]*\]\s*)?\{[^{}]*\}/g, '')
-    .replace(/\\epsfig\s*\{[^{}]*\}/g, '')
+}
+
+function validateDocumentToolCommands(code = '') {
+  const expectedArguments = { obligatorios: 0, optativos: 2, salto: 0 }
+  const definitions = Object.fromEntries(Object.keys(expectedArguments).map((name) => [name, []]))
+  const commandPattern = /\\(?:newcommand|renewcommand|providecommand)\s*\{\s*\\(obligatorios|optativos|salto)\s*\}\s*(?:\[(\d+)\])?/g
+  const defPattern = /\\def\s*\\(obligatorios|optativos|salto)([^\{]*)\{/g
+
+  for (const match of code.matchAll(commandPattern)) {
+    definitions[match[1]].push(Number(match[2] || 0))
+  }
+  for (const match of code.matchAll(defPattern)) {
+    definitions[match[1]].push(new Set(match[2].match(/#\d/g) || []).size)
+  }
+
+  const duplicated = Object.entries(definitions).filter(([, arities]) => arities.length > 1).map(([name]) => `\\${name}`)
+  if (duplicated.length) return `Hay comandos de herramientas definidos más de una vez: ${duplicated.join(', ')}.`
+
+  const incompatible = Object.entries(definitions)
+    .filter(([name, arities]) => arities.length === 1 && arities[0] !== expectedArguments[name])
+    .map(([name, arities]) => `\\${name} debe tener ${expectedArguments[name]} argumento${expectedArguments[name] === 1 ? '' : 's'}, pero tiene ${arities[0]}`)
+  return incompatible.length ? `${incompatible.join('. ')}.` : ''
 }
 
 function exercisePreambleName() {
@@ -504,10 +1169,40 @@ function exercisePreambleName() {
   return exerciseTemplate?.archivo || 'ejercicio.tex'
 }
 
-function codeForPreamble(code) {
-  if (/\\begin\{ejercicios\}/.test(code)) return code
-  const standaloneCode = code.replace(/\\ej\b/g, '\\refstepcounter{ejercicio}').trimStart()
-  return `\\begin{ejercicios}\n${standaloneCode}\n\\end{ejercicios}`
+const exerciseRenderProfiles = Object.freeze({
+  segment: 'segment',
+  statement: 'statement',
+  solved: 'solved',
+})
+
+function internalSegmentTemplate(code) {
+  return `\\noindent
+\\hspace*{2.5mm}
+\\begin{minipage}{8.5cm}
+\\vspace*{2.5mm}
+${String(code || '').trim()}
+\\par
+\\vspace*{2.5mm}
+\\end{minipage}
+\\hspace*{2.5mm}`
+}
+
+function internalCompleteExerciseTemplate(code) {
+  return `\\begin{ejercicios}\n${String(code || '').trim()}\n\\end{ejercicios}`
+}
+
+function codeForPreamble(code, profile = exerciseRenderProfiles.statement) {
+  const compilableCode = normalizeDisplayMathDelimiters(stripExerciseDurationMetadata(code))
+  const body = profile === exerciseRenderProfiles.segment
+    ? internalSegmentTemplate(compilableCode)
+    : internalCompleteExerciseTemplate(compilableCode)
+  return `\\shorthandoff{<>}\n${body}`
+}
+
+function stripExerciseDurationMetadata(code = '') {
+  return String(code || '')
+    .replace(/(\\ej\b(?:\s*\\(?:M|P)\s*\{[^{}]*\})?\s*)\\T\s*\{[^{}]*\}/g, '$1')
+    .replace(/(\\ap\b(?:\s*\\p\s*\{[^{}]*\})?\s*)\\t\s*\{[^{}]*\}/g, '$1')
 }
 
 function removeBlankLinesInsideAligned(code) {
@@ -535,6 +1230,97 @@ function compileErrorWithSourceContext(code, preambleName, error) {
   return `${compilerMessage}\n\nLa línea ${sourceLine} corresponde al fragmento siguiente del ejercicio generado:\n${excerpt}`
 }
 
+function compilationArtifactLatex(errorMessage = '') {
+  const structure = activeExerciseStructure.value
+  const key = errorMessage.match(/Vista\s+([^:\n]+):/)?.[1] || ''
+  const partMatch = key.match(/^parts\.([^.]+)\.(statement|workedSolution)\.pdf$/)
+  let title = 'vista completa'
+  let code = ''
+  let profile = exerciseRenderProfiles.statement
+
+  if (key === 'pdf.statement') {
+    title = 'vista completa del enunciado'
+    code = buildExerciseLatex(structure, {
+      includeSolutions: false,
+      includeAnswers: false,
+      preserveApartadosEnvironment: true,
+    })
+  } else if (key === 'pdf.solved') {
+    title = 'vista completa resuelta'
+    profile = exerciseRenderProfiles.solved
+    code = buildExerciseLatex(structure, {
+      includeSolutions: true,
+      includeAnswers: true,
+      preserveApartadosEnvironment: false,
+    })
+  } else if (key === 'statement.pdf') {
+    title = 'segmento del enunciado general'
+    profile = exerciseRenderProfiles.segment
+    code = buildExercisePartLatex(structure, null, {
+      includeSolutions: false,
+      includeAnswers: false,
+    })
+  } else if (key === 'workedSolution.pdf') {
+    title = 'segmento resuelto del enunciado general'
+    profile = exerciseRenderProfiles.segment
+    code = buildExercisePartLatex(structure, null, {
+      includeSolutions: true,
+      includeAnswers: true,
+    })
+  } else if (partMatch) {
+    const partIndex = structure.apartados.findIndex((part) => part.id === partMatch[1])
+    const partLabel = partIndex >= 0 ? String.fromCharCode(97 + partIndex) : partMatch[1]
+    const solved = partMatch[2] === 'workedSolution'
+    profile = exerciseRenderProfiles.segment
+    title = `apartado ${partLabel}${solved ? ' resuelto' : ''}`
+    code = buildExercisePartLatex(structure, partMatch[1], {
+      includeSolutions: solved,
+      includeAnswers: solved,
+    })
+  } else {
+    const solved = hasExerciseSolutions(activeExerciseCode.value)
+    profile = solved ? exerciseRenderProfiles.solved : exerciseRenderProfiles.statement
+    title = solved ? 'vista completa resuelta' : 'vista completa del enunciado'
+    code = buildExerciseLatex(structure, {
+      includeSolutions: solved,
+      includeAnswers: solved,
+      preserveApartadosEnvironment: !solved,
+    })
+  }
+
+  const compilerCode = removeBlankLinesInsideAligned(codeForPreamble(code, profile))
+  return { title, code: prettyPrintLatex(compilerCode) }
+}
+
+function compilationErrorWithLatex(error) {
+  const rawMessage = typeof error === 'string' ? error : error?.message
+  const message = !rawMessage || /^(?:firebase:\s*)?internal\.?$/i.test(rawMessage.trim())
+    ? 'La función de compilación ha devuelto un error interno.'
+    : rawMessage
+  const source = compilationArtifactLatex(message)
+  return `${message}\n\nLaTeX enviado al compilador (${source.title}):\n\n${source.code}`
+}
+
+async function copyTextToClipboard(value) {
+  if (!value) return
+  try {
+    await navigator.clipboard.writeText(value)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = value
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    textarea.remove()
+  }
+}
+
+async function copyCompilerError() {
+  await copyTextToClipboard(compilerError.value)
+}
+
 function hasExerciseSolutions(code) {
   return /\\begin\s*\{solucion\}[\s\S]*?\\end\s*\{solucion\}/.test(code)
 }
@@ -545,12 +1331,32 @@ function statementLatex(code) {
     .replace(/\n{3,}/g, '\n\n')
 }
 
+function resolvedLatex(code) {
+  return String(code || '')
+    // La versión resuelta se compone en una sola columna. Algunos
+    // preámbulos implementan \ap con un \columnbreak pensado para
+    // apartadosc; aquí ese salto no es válido y debe ser inocuo.
+    .replace(/\\begin\s*\{apartadosc\}/g, '\\begin{apartados}')
+    .replace(/\\end\s*\{apartadosc\}/g, '\\end{apartados}')
+    .replace(/^/,'\\def\\columnbreak{}\n')
+}
+
 function clearVersionPreview(version) {
-  if (!version?.previewPdf) return
-  Object.values(version.previewPdf).forEach((url) => {
-    if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+  if (!version) return
+  if (version.previewPdf) {
+    Object.values(version.previewPdf).forEach((url) => {
+      if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+    })
+    version.previewPdf = null
+  }
+  const structure = version.structure
+  if (!structure) return
+  ;[structure, ...(structure.apartados || [])].forEach((part) => {
+    ;['previewPdfEnunciado', 'previewPdfSolucion'].forEach((field) => {
+      if (part[field]?.startsWith('blob:')) URL.revokeObjectURL(part[field])
+      delete part[field]
+    })
   })
-  version.previewPdf = null
 }
 
 function clearExercisePreviews() {
@@ -563,6 +1369,12 @@ function setActivePreviewPdf(documentType, url) {
   const previousUrl = version.previewPdf?.[documentType]
   if (previousUrl?.startsWith('blob:')) URL.revokeObjectURL(previousUrl)
   version.previewPdf = { ...(version.previewPdf || emptyPdfPair()), [documentType]: url }
+}
+
+function setPartPreviewPdf(part, field, blob = null) {
+  const previousUrl = part?.[field]
+  if (previousUrl?.startsWith('blob:')) URL.revokeObjectURL(previousUrl)
+  if (part) part[field] = blob ? URL.createObjectURL(blob) : null
 }
 
 async function compilerRequest(path, options = {}) {
@@ -656,21 +1468,62 @@ function tagsToObject(tags) {
   return Object.fromEntries([...expandedTags].map((tag) => [tag, true]))
 }
 
-async function loadExercises() {
-  isLoadingExercises.value = true
-  exercisesError.value = ''
+async function loadExercises({ reset = false } = {}) {
+  if (reset && isLoadingExercises.value) return
+  if (!reset && (isLoadingMoreExercises.value || !hasMoreExercises.value)) return
+  if (reset) {
+    isLoadingExercises.value = true
+    exercisesError.value = ''
+    lastExerciseDocument = null
+    hasMoreExercises.value = true
+  } else {
+    isLoadingMoreExercises.value = true
+  }
   try {
-    const snapshot = await getDocs(collection(db, 'ejercicios'))
-    exercises.value = snapshot.docs
-      .map((exercise) => normalizeExercise({ id: exercise.id, ...exercise.data() }))
-      .sort((a, b) => a.id.localeCompare(b.id))
+    const constraints = [orderBy(documentId()), firestoreLimit(exerciseBatchSize)]
+    if (lastExerciseDocument) constraints.splice(1, 0, startAfter(lastExerciseDocument))
+    const snapshot = await getDocs(firestoreQuery(collection(db, 'ejercicios'), ...constraints))
+    const loadedExercises = snapshot.docs.map((exercise) => normalizeExercise({ id: exercise.id, ...exercise.data() }))
+    if (reset) {
+      exercises.value = loadedExercises
+    } else {
+      const byId = new Map(exercises.value.map((exercise) => [exercise.id, exercise]))
+      loadedExercises.forEach((exercise) => byId.set(exercise.id, exercise))
+      exercises.value = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+    }
+    lastExerciseDocument = snapshot.docs.at(-1) || lastExerciseDocument
+    hasMoreExercises.value = snapshot.size === exerciseBatchSize
   } catch (error) {
-    exercisesError.value = 'No se han podido cargar los ejercicios de Firestore.'
+    exercisesError.value = reset
+      ? 'No se han podido cargar los ejercicios de Firestore.'
+      : 'No se han podido cargar más ejercicios de Firestore.'
     console.error('Error al cargar ejercicios:', error)
   } finally {
-    isLoadingExercises.value = false
+    if (reset) isLoadingExercises.value = false
+    else isLoadingMoreExercises.value = false
   }
 }
+
+function loadNextExerciseBatch() {
+  if (active.value !== 'Ejercicios' || exerciseView.value !== 'search') return
+  void loadExercises()
+}
+
+function handleExerciseScroll() {
+  if (exerciseScrollFrame) return
+  exerciseScrollFrame = window.requestAnimationFrame(() => {
+    exerciseScrollFrame = 0
+    if (active.value !== 'Ejercicios' || exerciseView.value !== 'search') return
+    const scrollingElement = document.scrollingElement || document.documentElement
+    const distanceToBottom = scrollingElement.scrollHeight - scrollingElement.scrollTop - scrollingElement.clientHeight
+    if (distanceToBottom <= 420) loadNextExerciseBatch()
+  })
+}
+
+watch(exerciseSearchQuery, async () => {
+  await nextTick()
+  handleExerciseScroll()
+})
 
 async function loadMathConcepts() {
   isLoadingMathConcepts.value = true
@@ -927,6 +1780,101 @@ function selectExercise(exercise) {
   exerciseView.value = 'search'
 }
 
+function stopWatchingExerciseCompilation() {
+  stopExerciseCompilationWatch?.()
+  stopExerciseCompilationWatch = null
+}
+
+function copyCompiledStructureReferences(target, source) {
+  if (!target || !source) return
+  target.pdfenunciado = source.pdfenunciado || ''
+  target.pdfsolucion = source.pdfsolucion || null
+  target.pdfenunciadocompleto = source.pdfenunciadocompleto || ''
+  target.pdfsolucioncompleto = source.pdfsolucioncompleto || null
+  const sourceParts = new Map((source.apartados || []).map((part) => [part.id, part]))
+  ;(target.apartados || []).forEach((part, index) => {
+    const compiled = sourceParts.get(part.id) || source.apartados?.[index]
+    if (!compiled) return
+    part.pdfenunciado = compiled.pdfenunciado || ''
+    part.pdfsolucion = compiled.pdfsolucion || null
+  })
+}
+
+function copyPreviewStructureReferences(target, source) {
+  if (!target || !source) return
+  target.previewPdfEnunciado = source.previewPdfEnunciado || null
+  target.previewPdfSolucion = source.previewPdfSolucion || null
+  const sourceParts = new Map((source.apartados || []).map((part) => [part.id, part]))
+  ;(target.apartados || []).forEach((part, index) => {
+    const preview = sourceParts.get(part.id) || source.apartados?.[index]
+    if (!preview) return
+    part.previewPdfEnunciado = preview.previewPdfEnunciado || null
+    part.previewPdfSolucion = preview.previewPdfSolucion || null
+  })
+}
+
+function updateExerciseListFromSnapshot(snapshot) {
+  if (!snapshot.exists()) return null
+  const normalized = normalizeExercise({ id: snapshot.id, ...snapshot.data() })
+  const listIndex = exercises.value.findIndex((exercise) => exercise.id === snapshot.id)
+  if (listIndex >= 0) exercises.value[listIndex] = normalized
+  else exercises.value.push(normalized)
+  return normalized
+}
+
+function watchExerciseCompilationInList(exerciseId) {
+  if (!exerciseId || exerciseCompilationListWatches.has(exerciseId)) return
+  const unsubscribe = onSnapshot(doc(db, 'ejercicios', exerciseId), (snapshot) => {
+    const normalized = updateExerciseListFromSnapshot(snapshot)
+    const status = normalized?.compilation?.status
+    if (!['ready', 'error'].includes(status)) return
+    exerciseCompilationListWatches.get(exerciseId)?.()
+    exerciseCompilationListWatches.delete(exerciseId)
+  }, (error) => {
+    console.error('Error al actualizar la compilación en el buscador:', error)
+    exerciseCompilationListWatches.delete(exerciseId)
+  })
+  exerciseCompilationListWatches.set(exerciseId, unsubscribe)
+}
+
+function watchExerciseCompilation(exerciseId) {
+  stopWatchingExerciseCompilation()
+  if (!exerciseId) return
+  stopExerciseCompilationWatch = onSnapshot(doc(db, 'ejercicios', exerciseId), (snapshot) => {
+    const normalized = updateExerciseListFromSnapshot(snapshot)
+    if (!normalized) return
+    if (exerciseEditor.value.id !== exerciseId) return
+
+    exerciseEditor.value.pdf = normalized.pdf
+    exerciseEditor.value.compilation = normalized.compilation
+    exerciseEditor.value.revision = normalized.revision
+    copyCompiledStructureReferences(exerciseEditor.value.structure, normalized.structure)
+    normalized.variaciones.forEach((variation, index) => {
+      const current = exerciseEditor.value.variaciones[index]
+      if (!current) return
+      current.pdf = variation.pdf
+      current.compilation = variation.compilation
+      current.revision = variation.revision
+      copyCompiledStructureReferences(current.structure, variation.structure)
+    })
+
+    const target = selectedExerciseVersion.value === 0
+      ? normalized
+      : normalized.variaciones[selectedExerciseVersion.value - 1]
+    const status = target?.compilation?.status || normalized.compilation?.status || 'ready'
+    exerciseCompilationStatus.value = status
+    if (status === 'error') {
+      compilerError.value = compilationErrorWithLatex(
+        target?.compilation?.error || normalized.compilation?.error || 'No se ha podido compilar el ejercicio.',
+      )
+    }
+    if (['ready', 'error'].includes(status)) isCompiling.value = false
+  }, (error) => {
+    console.error('Error al seguir la compilación del ejercicio:', error)
+    isCompiling.value = false
+  })
+}
+
 function destroyLatexEditor() {
   latexCodeEditor?.destroy()
   latexCodeEditor = null
@@ -936,6 +1884,27 @@ function destroyTemplateEditor() {
   templateCodeEditor?.destroy()
   templateCodeEditor = null
 }
+
+function hiddenExerciseMarkerDecorations(view) {
+  const decorations = []
+  for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
+    const line = view.state.doc.line(lineNumber)
+    if (/^\s*%\s*neope:part\s+id=[A-Za-z0-9_-]+\s*$/.test(line.text)) {
+      decorations.push(Decoration.line({ attributes: { class: 'cm-neope-marker-line' } }).range(line.from))
+    }
+  }
+  return Decoration.set(decorations)
+}
+
+const hiddenExerciseMarkers = ViewPlugin.fromClass(class {
+  constructor(view) {
+    this.decorations = hiddenExerciseMarkerDecorations(view)
+  }
+
+  update(update) {
+    if (update.docChanged || update.viewportChanged) this.decorations = hiddenExerciseMarkerDecorations(update.view)
+  }
+}, { decorations: (plugin) => plugin.decorations })
 
 function mountLatexEditor() {
   nextTick(() => {
@@ -948,6 +1917,7 @@ function mountLatexEditor() {
           basicSetup,
           latexEditorTheme,
           latexHighlighting,
+          hiddenExerciseMarkers,
           latex({ enableAutocomplete: false, autoCloseBrackets: true, autoCloseTags: true, enableTooltips: true }),
           autocompletion({ override: [latexCompletion] }),
           keymap.of([
@@ -960,6 +1930,7 @@ function mountLatexEditor() {
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               activeExerciseVersion.value.enunciado = update.state.doc.toString()
+              syncStructureFromCode(activeExerciseVersion.value)
               if (!hasExerciseSolutions(activeExerciseVersion.value.enunciado)) activeExerciseVersion.value.solucionIA = false
             }
           }),
@@ -1042,6 +2013,11 @@ function selectTemplate(template) {
 
 async function saveTemplate() {
   if (!templateEditor.value.nombre.trim() || !templateEditor.value.codigo.trim()) return
+  const toolCommandError = validateDocumentToolCommands(templateEditor.value.codigo)
+  if (toolCommandError) {
+    templatesError.value = toolCommandError
+    return
+  }
   isSavingTemplate.value = true
   templatesError.value = ''
   try {
@@ -1108,14 +2084,17 @@ async function removeTemplate() {
 }
 
 function openNewExercise() {
+  stopWatchingExerciseCompilation()
   selectedExerciseId.value = null
   exerciseEditor.value = emptyExercise()
   exerciseEditorTab.value = 'code'
+  exerciseContentTarget.value = null
   sessionUploadedAttachmentPaths.clear()
   pendingDeletedAttachments.splice(0)
   selectedExerciseVersion.value = 0
   compilerError.value = ''
   exercisePreviewTab.value = 'statement'
+  exercisePreviewMode.value = 'segmented'
   exerciseView.value = 'edit'
   mountLatexEditor()
 }
@@ -1125,28 +2104,163 @@ function editExercise(exercise = selectedExercise.value) {
   selectedExerciseId.value = exercise.id
   exerciseEditor.value = normalizeExercise(exercise)
   exerciseEditorTab.value = 'code'
+  exerciseContentTarget.value = null
   sessionUploadedAttachmentPaths.clear()
   pendingDeletedAttachments.splice(0)
   selectedExerciseVersion.value = 0
   compilerError.value = ''
   exercisePreviewTab.value = 'statement'
+  exercisePreviewMode.value = 'segmented'
   exerciseView.value = 'edit'
+  exerciseCompilationStatus.value = exerciseEditor.value.compilation?.status || 'ready'
+  isCompiling.value = ['queued', 'compiling'].includes(exerciseCompilationStatus.value)
+  watchExerciseCompilation(exercise.id)
   mountLatexEditor()
 }
 
 async function cancelExerciseEdit() {
+  stopWatchingExerciseCompilation()
   destroyLatexEditor()
   clearExercisePreviews()
   await cleanupSessionExerciseFiles()
   pendingDeletedAttachments.splice(0)
   exerciseView.value = 'search'
   exerciseEditor.value = emptyExercise()
+  exerciseContentTarget.value = null
   selectedExerciseVersion.value = 0
+  exercisePreviewMode.value = 'segmented'
 }
 
 function selectExerciseEditorTab(tab) {
   exerciseEditorTab.value = tab
+  if (tab === 'contents' && exerciseContentTarget.value === null) {
+    exerciseContentTarget.value = activeExerciseHasSections.value ? 0 : 'exercise'
+  }
   if (tab === 'code') nextTick(() => latexCodeEditor?.requestMeasure())
+}
+
+const exerciseContentModel = computed({
+  get() {
+    const structure = activeExerciseStructure.value
+    const target = exerciseContentTarget.value
+    const conceptIds = typeof target === 'number'
+      ? structure.apartados[target]?.contenidos || []
+      : target === 'global' && structure.apartados.length
+        ? aggregateExerciseStructure(structure).contenidos
+        : structure.contenidos || []
+    return {
+      ...normalizeCurriculum(exerciseEditor.value.curriculum),
+      conceptIds: [...conceptIds],
+    }
+  },
+  set(value) {
+    const normalized = normalizeCurriculum(value)
+    const structure = activeExerciseStructure.value
+    const target = exerciseContentTarget.value
+    if (target === 'global' && structure.apartados.length) {
+      const previousCompleteConcepts = new Set(aggregateExerciseStructure(structure).contenidos)
+      const nextCompleteConcepts = new Set(normalized.conceptIds)
+      const addedConcepts = normalized.conceptIds.filter((conceptId) => !previousCompleteConcepts.has(conceptId))
+      const removedConcepts = new Set([...previousCompleteConcepts].filter((conceptId) => !nextCompleteConcepts.has(conceptId)))
+      structure.contenidosGenerales = [...new Set([
+        ...(structure.contenidosGenerales || []).filter((conceptId) => !removedConcepts.has(conceptId)),
+        ...addedConcepts,
+      ])]
+      structure.apartados.forEach((apartado) => {
+        apartado.contenidos = [...new Set([
+          ...(apartado.contenidos || []).filter((conceptId) => !removedConcepts.has(conceptId)),
+          ...addedConcepts,
+          ...structure.contenidosGenerales,
+        ])]
+      })
+    } else if (typeof target === 'number' && structure.apartados[target]) {
+      structure.apartados[target].contenidos = [...new Set([
+        ...normalized.conceptIds,
+        ...(structure.contenidosGenerales || []),
+      ])]
+    } else {
+      structure.contenidos = [...normalized.conceptIds]
+    }
+    activeExerciseVersion.value.structure = aggregateExerciseStructure(structure)
+    exerciseEditor.value.curriculum = {
+      ...normalized,
+      conceptIds: [...activeExerciseVersion.value.structure.contenidos],
+    }
+  },
+})
+
+function syncStructureFromCode(version = activeExerciseVersion.value) {
+  const analysis = analyzeExerciseLatex(version.enunciado || '', version.structure || {})
+  version.analysis = { valid: analysis.valid, ambiguous: analysis.ambiguous }
+  if (!analysis.valid) return version.structure
+  version.structure = mergeExerciseStructure(analysis.structure, version.structure || {})
+  if (version === exerciseEditor.value) {
+    exerciseEditor.value.curriculum = {
+      ...normalizeCurriculum(exerciseEditor.value.curriculum),
+      conceptIds: [...version.structure.contenidos],
+    }
+  }
+  return version.structure
+}
+
+function replaceActiveExerciseCode(code, structure = null) {
+  const version = activeExerciseVersion.value
+  version.enunciado = code
+  version.structure = structure || mergeExerciseStructure(parseExerciseLatex(code), version.structure || {})
+  version.renderedLatex = ''
+  if (latexCodeEditor && exerciseEditorTab.value === 'code') {
+    latexCodeEditor.dispatch({ changes: { from: 0, to: latexCodeEditor.state.doc.length, insert: code } })
+  }
+}
+
+function rebuildActiveExerciseCode() {
+  const structure = aggregateExerciseStructure(activeExerciseStructure.value)
+  replaceActiveExerciseCode(buildExerciseLatex(structure, { preserveApartadosEnvironment: true }), structure)
+  if (activeExerciseVersion.value === exerciseEditor.value) {
+    exerciseEditor.value.curriculum = {
+      ...normalizeCurriculum(exerciseEditor.value.curriculum),
+      conceptIds: [...structure.contenidos],
+    }
+  }
+}
+
+function updateExerciseMetric(field, value, apartadoIndex = null) {
+  const number = Math.max(0, Number(value) || 0)
+  const structure = activeExerciseStructure.value
+  if (typeof apartadoIndex === 'number' && structure.apartados[apartadoIndex]) {
+    structure.apartados[apartadoIndex][field] = field === 'puntuacion' ? Math.round(number * 4) / 4 : Math.round(number)
+  } else if (!structure.apartados.length) {
+    structure[field] = field === 'puntuacion' ? Math.round(number * 4) / 4 : Math.round(number)
+  }
+  activeExerciseVersion.value.structure = aggregateExerciseStructure(structure)
+  rebuildActiveExerciseCode()
+}
+
+function selectExercisePartContents(apartadoIndex) {
+  exerciseContentTarget.value = apartadoIndex
+  selectExerciseEditorTab('contents')
+}
+
+function selectedContentTargetLabel() {
+  if (typeof exerciseContentTarget.value === 'number') {
+    return `Contenidos del apartado ${String.fromCharCode(97 + exerciseContentTarget.value)}`
+  }
+  return exerciseContentTarget.value === 'global'
+    ? 'Contenidos del ejercicio completo'
+    : 'Contenidos del ejercicio'
+}
+
+function partPdfUrl(apartado, solved = false) {
+  return solved
+    ? apartado?.previewPdfSolucion || apartado?.pdfsolucion || ''
+    : apartado?.previewPdfEnunciado || apartado?.pdfenunciado || ''
+}
+
+function mainPartPdfUrl(solved = false) {
+  const structure = activeExerciseStructure.value
+  return solved
+    ? structure.previewPdfSolucion || structure.pdfsolucion || ''
+    : structure.previewPdfEnunciado || structure.pdfenunciado || ''
 }
 
 const latexCompactEnvironments = new Set([
@@ -1274,10 +2388,10 @@ function ensureExerciseId() {
   return exerciseEditor.value.id
 }
 
-function safeAttachmentName(name) {
-  return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'archivo'
+function nextExerciseImageNumber() {
+  const numbers = [...exerciseEditor.value.archivos, ...pendingDeletedAttachments]
+    .map((file) => Number(String(file.latexName || '').match(/^imagen(\d+)$/)?.[1]) || 0)
+  return Math.max(0, ...numbers) + 1
 }
 
 function openExerciseFilePicker() {
@@ -1291,25 +2405,38 @@ async function uploadExerciseFiles(event) {
   exercisesError.value = ''
   try {
     const exerciseId = ensureExerciseId()
+    const rejected = []
+    let imageNumber = nextExerciseImageNumber()
     for (const file of files) {
-      const fileId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
-      const path = `ejercicios/${exerciseId}/archivos/${fileId}-${safeAttachmentName(file.name)}`
+      const extension = exerciseImageExtension(file)
+      if (!extension || file.size > 5 * 1024 * 1024) {
+        rejected.push(file.name)
+        continue
+      }
+      const latexName = `imagen${imageNumber}`
+      const compilerName = `${latexName}.${extension}`
+      const path = `ejercicios/${exerciseId}/archivos/${compilerName}`
       const reference = storageRef(storage, path)
       await uploadBytes(reference, file, {
         contentType: file.type || 'application/octet-stream',
-        customMetadata: { exerciseId, originalName: file.name },
+        customMetadata: { exerciseId, originalName: file.name, latexName, compilerName },
       })
       const url = await getDownloadURL(reference)
       exerciseEditor.value.archivos.push({
-        id: fileId,
-        nombre: file.name,
+        id: latexName,
+        nombre: compilerName,
+        originalName: file.name,
+        latexName,
+        compilerName,
         path,
         url,
         type: file.type || 'application/octet-stream',
         size: file.size,
       })
       sessionUploadedAttachmentPaths.add(path)
+      imageNumber += 1
     }
+    if (rejected.length) exercisesError.value = `No se han añadido: ${rejected.join(', ')}. Usa PNG, JPG o PDF de hasta 5 MB.`
   } catch (error) {
     exercisesError.value = error.message || 'No se han podido subir los archivos.'
     console.error('Error al subir archivos del ejercicio:', error)
@@ -1350,9 +2477,17 @@ function clearExerciseCurriculumFilters() {
 function selectExerciseVersion(version) {
   if (version === null || version < 0 || version > exerciseEditor.value.variaciones.length) return
   selectedExerciseVersion.value = version
+  exerciseCompilationStatus.value = activeExerciseVersion.value.compilation?.status || exerciseEditor.value.compilation?.status || 'ready'
+  isCompiling.value = ['queued', 'compiling'].includes(exerciseCompilationStatus.value)
   exercisePreviewTab.value = compiledSolutionPdfUrl.value && exercisePreviewTab.value === 'solution' ? 'solution' : 'statement'
+  if (!activeExerciseHasSections.value) exercisePreviewMode.value = 'complete'
   compilerError.value = ''
   mountLatexEditor()
+}
+
+function setExercisePreviewMode(mode) {
+  if (!['complete', 'segmented'].includes(mode)) return
+  exercisePreviewMode.value = mode
 }
 
 function deleteSelectedVariation() {
@@ -1362,6 +2497,7 @@ function deleteSelectedVariation() {
   clearVersionPreview(deletedVariation)
   selectedExerciseVersion.value = 0
   exercisePreviewTab.value = 'statement'
+  exercisePreviewMode.value = activeExerciseHasSections.value ? 'segmented' : 'complete'
   compilerError.value = ''
   mountLatexEditor()
 }
@@ -1389,6 +2525,7 @@ async function generateOriginalExerciseSolution() {
       const response = await generateSolution({
         enunciado: sourceExercise,
         model: selectedAiModel.value,
+        curriculum: exerciseAiCurriculum(),
         previousAttempt,
         compileError,
       })
@@ -1396,8 +2533,8 @@ async function generateOriginalExerciseSolution() {
       if (!candidate) throw new Error('La IA no ha devuelto un ejercicio resuelto válido.')
 
       try {
-        solutionPdf = await compilePdfBlob(candidate, preambleName)
-        statementPdf = await compilePdfBlob(statementLatex(candidate), preambleName)
+        solutionPdf = await compilePdfBlob(resolvedLatex(candidate), preambleName, undefined, exerciseRenderProfiles.solved)
+        statementPdf = await compilePdfBlob(statementLatex(candidate), preambleName, undefined, exerciseRenderProfiles.statement)
         solvedExercise = candidate
         break
       } catch (error) {
@@ -1410,12 +2547,21 @@ async function generateOriginalExerciseSolution() {
       throw new Error(`La IA ha generado LaTeX no compilable tras tres intentos. ${compileError}`)
     }
 
+    const generatedStructure = mergeExerciseStructure(
+      parseExerciseLatex(solvedExercise),
+      activeExerciseVersion.value.structure || {},
+    )
     activeExerciseVersion.value.enunciado = solvedExercise
+    activeExerciseVersion.value.structure = generatedStructure
+    activeExerciseVersion.value.renderedLatex = ''
     activeExerciseVersion.value.solucionIA = true
     setActivePreviewPdf('enunciado', URL.createObjectURL(statementPdf))
     setActivePreviewPdf('resuelto', URL.createObjectURL(solutionPdf))
     mountLatexEditor()
     exercisePreviewTab.value = 'solution'
+    await compileExerciseSolutionPreviews(solvedExercise, generatedStructure, preambleName, { compileFull: false })
+    const queued = await refreshLatexRender({ preservePreviews: true, preferredPreviewTab: 'solution' })
+    if (!queued) throw new Error(compilerError.value || 'La solución se ha generado, pero no se ha podido guardar y encolar su compilación.')
   } catch (error) {
     exercisesError.value = error.message || 'No se ha podido generar la solución con IA.'
     console.error('Error al generar solución:', error)
@@ -1431,41 +2577,102 @@ async function deleteOriginalExerciseSolution() {
   exercisesError.value = ''
   try {
     const codeWithoutSolution = statementLatex(exerciseEditor.value.enunciado)
-    const exerciseId = exerciseEditor.value.id
     const pdf = { ...exerciseEditor.value.pdf, resuelto: null }
-
-    if (exerciseId) {
-      const solutionReference = storageRef(storage, `ejercicios/${exerciseId}/resuelto_${exerciseId}.pdf`)
-      try {
-        await deleteObject(solutionReference)
-      } catch (error) {
-        if (error?.code !== 'storage/object-not-found') throw error
-      }
-      await setDoc(doc(db, 'ejercicios', exerciseId), {
-        enunciado: codeWithoutSolution,
-        solucionIA: false,
-        pdf,
-      }, { merge: true })
-    }
+    const structure = mergeExerciseStructure(parseExerciseLatex(codeWithoutSolution), exerciseEditor.value.structure || {})
+    structure.solucion = ''
+    structure.pdfsolucion = null
+    structure.pdfsolucioncompleto = null
+    setPartPreviewPdf(structure, 'previewPdfSolucion')
+    structure.apartados.forEach((apartado) => {
+      apartado.solucion = ''
+      apartado.pdfsolucion = null
+      setPartPreviewPdf(apartado, 'previewPdfSolucion')
+    })
 
     exerciseEditor.value.enunciado = codeWithoutSolution
     exerciseEditor.value.solucionIA = false
     exerciseEditor.value.pdf = pdf
+    exerciseEditor.value.structure = aggregateExerciseStructure(structure)
     exerciseEditor.value.renderedLatex = codeWithoutSolution
     setActivePreviewPdf('resuelto', null)
     exercisePreviewTab.value = 'statement'
     compilerError.value = ''
     mountLatexEditor()
-
-    if (exerciseId) {
-      const index = exercises.value.findIndex((exercise) => exercise.id === exerciseId)
-      if (index !== -1) exercises.value[index] = normalizeExercise({ ...exercises.value[index], enunciado: codeWithoutSolution, solucionIA: false, pdf })
-    }
+    await refreshLatexRender()
   } catch (error) {
     exercisesError.value = error.message || 'No se ha podido eliminar la solución.'
     console.error('Error al eliminar solución:', error)
   } finally {
     isDeletingSolution.value = false
+  }
+}
+
+async function generateExercisePartSolution(apartadoIndex) {
+  const structure = activeExerciseStructure.value
+  const apartado = structure.apartados[apartadoIndex]
+  if (!apartado || apartado.solucion?.trim() || isGeneratingPartSolution.value !== null) return
+  if (!isAppCheckConfigured) {
+    exercisesError.value = 'App Check no está configurado en este entorno. Añade VITE_FIREBASE_APP_CHECK_KEY y registra el token de depuración de localhost en Firebase.'
+    return
+  }
+
+  isGeneratingPartSolution.value = apartadoIndex
+  exercisesError.value = ''
+  try {
+    const generateSolution = httpsCallable(functions, 'generateExerciseSolution', { timeout: 120_000 })
+    const focusedStructure = {
+      ...structure,
+      apartados: [{ ...apartado }],
+      final: '',
+    }
+    const sourceExercise = buildExerciseLatex(focusedStructure, { includeSolutions: false, includeAnswers: true })
+    const response = await generateSolution({
+      enunciado: sourceExercise,
+      model: selectedAiModel.value,
+      curriculum: exerciseAiCurriculum(),
+      previousAttempt: '',
+      compileError: '',
+    })
+    const candidate = removeBlankLinesInsideAligned(response.data?.enunciado?.trim() || '')
+    if (!candidate) throw new Error('La IA no ha devuelto una solución válida.')
+    await compilePdfBlob(resolvedLatex(candidate), exercisePreambleName(), undefined, exerciseRenderProfiles.solved)
+    const generated = parseExerciseLatex(candidate)
+    const generatedPart = generated.apartados[0]
+    const solution = generatedPart?.solucion || generated.solucion
+    if (!solution?.trim()) throw new Error('La IA no ha incluido el entorno solucion para este apartado.')
+    apartado.solucion = solution
+    if (!apartado.respuesta && generatedPart?.respuesta) apartado.respuesta = generatedPart.respuesta
+    activeExerciseVersion.value.solucionIA = true
+    rebuildActiveExerciseCode()
+    exercisePreviewTab.value = 'solution'
+    await compileExerciseSolutionPreviews(
+      activeExerciseCode.value,
+      activeExerciseStructure.value,
+      exercisePreambleName(),
+      { apartadoIndex },
+    )
+    const queued = await refreshLatexRender({ preservePreviews: true, preferredPreviewTab: 'solution' })
+    if (!queued) throw new Error(compilerError.value || 'La solución se ha generado, pero no se ha podido guardar y encolar su compilación.')
+  } catch (error) {
+    exercisesError.value = error.message || 'No se ha podido generar la solución del apartado.'
+    console.error('Error al generar la solución del apartado:', error)
+  } finally {
+    isGeneratingPartSolution.value = null
+  }
+}
+
+function deleteExercisePartSolution(apartadoIndex) {
+  const apartado = activeExerciseStructure.value.apartados[apartadoIndex]
+  if (!apartado?.solucion?.trim()) return
+  apartado.solucion = ''
+  apartado.pdfsolucion = null
+  if (apartado.previewPdfSolucion?.startsWith('blob:')) URL.revokeObjectURL(apartado.previewPdfSolucion)
+  apartado.previewPdfSolucion = null
+  rebuildActiveExerciseCode()
+  setActivePreviewPdf('resuelto', null)
+  exercisePreviewTab.value = 'statement'
+  if (!hasExerciseSolutions(activeExerciseCode.value)) {
+    activeExerciseVersion.value.solucionIA = false
   }
 }
 
@@ -1494,6 +2701,7 @@ async function addExerciseVariation(experimental = false) {
       variaciones: exerciseEditor.value.variaciones.map((variation) => variation.enunciado),
       model: selectedAiModel.value,
       experimental,
+      curriculum: exerciseAiCurriculum(),
     })
     progressPhase = experimental ? 'Aplicando estrategia' : 'Preparando variante'
     updateProgressText()
@@ -1521,13 +2729,85 @@ async function addExerciseVariation(experimental = false) {
   }
 }
 
-async function compilePdfBlob(code, preambleName) {
+function exerciseCompileAssets(files = exerciseEditor.value.archivos) {
+  return Object.fromEntries(normalizeExerciseFiles(files)
+    .filter((file) => file.compilerName && file.url && exerciseImageExtension(file))
+    .map((file) => [file.compilerName, { url: file.url }]))
+}
+
+async function compilePdfBlob(code, preambleName, assets = exerciseCompileAssets(), profile = exerciseRenderProfiles.statement) {
   const response = await compilerRequest('/compile', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: codeForPreamble(removeBlankLinesInsideAligned(code)), preamble_name: preambleName }),
+    body: JSON.stringify({
+      code: codeForPreamble(removeBlankLinesInsideAligned(code), profile),
+      preamble_name: preambleName,
+      assets,
+    }),
   })
   return response.blob()
+}
+
+async function runWithConcurrency(items, limit, task) {
+  const results = new Array(items.length)
+  const errors = []
+  let cursor = 0
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor
+      cursor += 1
+      try {
+        results[index] = await task(items[index], index)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
+  if (errors.length) throw errors[0]
+  return results
+}
+
+async function compileExerciseSolutionPreviews(code, structure, preambleName, options = {}) {
+  const apartadoIndex = Number.isInteger(options.apartadoIndex) ? options.apartadoIndex : null
+  if (options.compileFull !== false) {
+    if (hasExerciseSolutions(code)) {
+      const completeSolution = await compilePdfBlob(resolvedLatex(code), preambleName, undefined, exerciseRenderProfiles.solved)
+      setActivePreviewPdf('resuelto', URL.createObjectURL(completeSolution))
+    } else {
+      setActivePreviewPdf('resuelto', null)
+    }
+  }
+
+  if (apartadoIndex === null) {
+    const solutionJobs = []
+    if (!structure.solucion?.trim()) setPartPreviewPdf(structure, 'previewPdfSolucion')
+    else solutionJobs.push({ target: structure, index: null })
+    structure.apartados.forEach((apartado, index) => {
+      if (!apartado.solucion?.trim()) setPartPreviewPdf(apartado, 'previewPdfSolucion')
+      else solutionJobs.push({ target: apartado, index })
+    })
+    await runWithConcurrency(solutionJobs, 3, async ({ target, index }) => {
+      const solutionPdf = await compilePdfBlob(buildExercisePartLatex(structure, index, {
+          includeSolutions: true,
+          includeAnswers: true,
+      }), preambleName, undefined, exerciseRenderProfiles.segment)
+      setPartPreviewPdf(target, 'previewPdfSolucion', solutionPdf)
+    })
+    return
+  }
+
+  const apartado = structure.apartados[apartadoIndex]
+  if (!apartado) return
+  if (!apartado.solucion?.trim()) {
+    setPartPreviewPdf(apartado, 'previewPdfSolucion')
+    return
+  }
+  const partSolution = await compilePdfBlob(buildExercisePartLatex(structure, apartadoIndex, {
+    includeSolutions: true,
+    includeAnswers: true,
+  }), preambleName, undefined, exerciseRenderProfiles.segment)
+  setPartPreviewPdf(apartado, 'previewPdfSolucion', partSolution)
 }
 
 async function compileExercisePreviews(code, preambleName = selectedPreamble.value) {
@@ -1538,55 +2818,146 @@ async function compileExercisePreviews(code, preambleName = selectedPreamble.val
   isCompiling.value = true
   compilerError.value = ''
   try {
-    const statementPdf = await compilePdfBlob(statementLatex(code), preambleName)
+    activeExerciseVersion.value.enunciado = code
+    const structure = syncStructureFromCode(activeExerciseVersion.value)
+    const rebuiltCode = buildExerciseLatex(structure, {
+      includeSolutions: true,
+      includeAnswers: true,
+      preserveApartadosEnvironment: true,
+    })
+    const statementPdf = await compilePdfBlob(statementLatex(rebuiltCode), preambleName, undefined, exerciseRenderProfiles.statement)
     setActivePreviewPdf('enunciado', URL.createObjectURL(statementPdf))
 
-    if (hasExerciseSolutions(code)) {
-      const solutionPdf = await compilePdfBlob(code, preambleName)
-      setActivePreviewPdf('resuelto', URL.createObjectURL(solutionPdf))
+    if (hasExerciseSolutions(rebuiltCode)) {
+      await compileExerciseSolutionPreviews(rebuiltCode, structure, preambleName)
     } else {
       setActivePreviewPdf('resuelto', null)
+      setPartPreviewPdf(structure, 'previewPdfSolucion')
+      structure.apartados.forEach((apartado) => setPartPreviewPdf(apartado, 'previewPdfSolucion'))
       exercisePreviewTab.value = 'statement'
     }
+
+    const statementJobs = [{ target: structure, index: null }, ...structure.apartados.map((apartado, index) => ({ target: apartado, index }))]
+    await runWithConcurrency(statementJobs, 3, async ({ target, index }) => {
+      const statement = await compilePdfBlob(buildExercisePartLatex(structure, index, {
+        includeSolutions: false,
+        includeAnswers: false,
+      }), preambleName, undefined, exerciseRenderProfiles.segment)
+      setPartPreviewPdf(target, 'previewPdfEnunciado', statement)
+    })
     activeExerciseVersion.value.renderedLatex = code
   } catch (error) {
-    compilerError.value = error.message || 'No se ha podido compilar el documento LaTeX.'
+    compilerError.value = compilationErrorWithLatex(error)
   } finally {
     isCompiling.value = false
   }
 }
 
-function refreshLatexRender() {
-  exercisePreviewTab.value = 'statement'
-  return compileExercisePreviews(activeExerciseCode.value, exercisePreambleName())
-}
-
-async function uploadExercisePdf(exerciseId, pdf, documentType, variationNumber = null) {
-  const fileSuffix = variationNumber === null ? exerciseId : `${exerciseId}_${variationNumber}`
-  const folder = variationNumber === null ? '' : `variaciones/${variationNumber}/`
-  const path = `ejercicios/${exerciseId}/${folder}${documentType}_${fileSuffix}.pdf`
-  const reference = storageRef(storage, path)
-  await uploadBytes(reference, pdf, {
-    contentType: 'application/pdf',
-    customMetadata: { exerciseId, documentType },
-  })
-  return getDownloadURL(reference)
-}
-
-async function compileAndUploadExerciseVersion(exerciseId, code, variationNumber = null) {
+async function refreshLatexRender(options = {}) {
   const preambleName = exercisePreambleName()
-  const statementPdf = await compilePdfBlob(statementLatex(code), preambleName)
-  const statementPdfUrl = await uploadExercisePdf(exerciseId, statementPdf, 'enunciado', variationNumber)
-  let solutionPdfUrl = null
-  if (hasExerciseSolutions(code)) {
-    const solutionPdf = await compilePdfBlob(code, preambleName)
-    solutionPdfUrl = await uploadExercisePdf(exerciseId, solutionPdf, 'resuelto', variationNumber)
+  if (!preambleName || !activeExerciseCode.value.trim() || isCompiling.value) return false
+  const variationIndex = selectedExerciseVersion.value > 0 ? selectedExerciseVersion.value - 1 : null
+  const mode = activeExerciseVersion.value.analysis?.ambiguous ? 'full' : 'selective'
+  const previewPdf = options.preservePreviews ? { ...(activeExerciseVersion.value.previewPdf || {}) } : null
+  const previewStructure = options.preservePreviews ? activeExerciseVersion.value.structure : null
+  isCompiling.value = true
+  compilerError.value = ''
+  exerciseCompilationStatus.value = 'queued'
+  try {
+    const savedExercise = await saveExercise({ closeAfterSave: false })
+    if (!savedExercise) {
+      isCompiling.value = false
+      exerciseCompilationStatus.value = 'error'
+      return false
+    }
+    const queueCompilation = httpsCallable(functions, 'queueExerciseCompilation', { timeout: 30_000 })
+    await queueCompilation({
+      exerciseId: savedExercise.id,
+      variationIndex,
+      mode,
+      preambleName,
+    })
+    const target = variationIndex === null
+      ? exerciseEditor.value
+      : exerciseEditor.value.variaciones[variationIndex]
+    if (target) {
+      target.compilation = { ...(target.compilation || {}), status: 'queued' }
+      if (options.preservePreviews) {
+        target.previewPdf = previewPdf
+        copyPreviewStructureReferences(target.structure, previewStructure)
+      }
+    }
+    watchExerciseCompilationInList(savedExercise.id)
+    exercisePreviewTab.value = options.preferredPreviewTab === 'solution' && compiledSolutionPdfUrl.value
+      ? 'solution'
+      : 'statement'
+    return true
+  } catch (error) {
+    compilerError.value = compilationErrorWithLatex(error)
+    isCompiling.value = false
+    exerciseCompilationStatus.value = 'error'
+    return false
   }
-  return { enunciado: statementPdfUrl, resuelto: solutionPdfUrl }
 }
 
-async function saveExercise() {
-  if (!exerciseEditor.value.enunciado.trim()) return
+function compilationSource(document = {}) {
+  const block = (value) => value?.latex || ''
+  return JSON.stringify({
+    statement: block(document.statement),
+    answer: block(document.answer),
+    workedSolution: block(document.workedSolution),
+    points: Number(document.points) || 0,
+    partsEnvironment: document.partsEnvironment || null,
+    parts: (document.parts || []).map((part) => ({
+      id: part.id,
+      statement: block(part.statement),
+      answer: block(part.answer),
+      workedSolution: block(part.workedSolution),
+      points: Number(part.points) || 0,
+    })),
+    final: document.final || '',
+    info: document.info || '',
+  })
+}
+
+function compilationStateAfterSave(previous = {}, revision, sourceChanged = true) {
+  if (!sourceChanged) return { ...previous, sourceRevision: revision }
+  return {
+    requestedRevision: Number(previous.requestedRevision) || null,
+    readyRevision: Number(previous.readyRevision) || 0,
+    status: 'outdated',
+    requestedAt: previous.requestedAt || null,
+    completedAt: previous.completedAt || null,
+    error: null,
+    sourceRevision: revision,
+  }
+}
+
+function structuredVariationForSave(variation, previous = {}) {
+  const analysis = analyzeExerciseLatex(variation.enunciado || '', variation.structure || {})
+  if (!analysis.valid) throw new Error('La variante contiene una estructura LaTeX incompleta.')
+  variation.analysis = { valid: true, ambiguous: analysis.ambiguous }
+  variation.structure = mergeExerciseStructure(analysis.structure, variation.structure || {})
+  const candidate = exerciseDocumentStructure(variation.structure, previous, (Number(previous.revision) || 0) + 1)
+  const sourceChanged = Number(previous.schemaVersion || 0) < 3 || compilationSource(candidate) !== compilationSource(previous)
+  const revision = sourceChanged ? (Number(previous.revision) || 0) + 1 : Number(previous.revision) || 1
+  const persisted = {
+    ...exerciseDocumentStructure(variation.structure, previous, revision),
+    modelo: variation.modelo || previous.modelo || null,
+    solucionIA: Boolean(variation.solucionIA),
+    compilation: compilationStateAfterSave(previous.compilation, revision, sourceChanged),
+  }
+  const nextPaths = new Set(exercisePdfStoragePaths(persisted))
+  persisted.pendingStorageCleanup = [...new Set([
+    ...(previous.pendingStorageCleanup || []),
+    ...exercisePdfStoragePaths(previous).filter((path) => !nextPaths.has(path)),
+  ])]
+  return persisted
+}
+
+async function saveExercise(options = {}) {
+  const closeAfterSave = options?.closeAfterSave !== false
+  if (!exerciseEditor.value.enunciado.trim()) return null
   isSavingExercise.value = true
   exercisesError.value = ''
   try {
@@ -1597,24 +2968,56 @@ async function saveExercise() {
     const previousData = previousSnapshot.exists() ? previousSnapshot.data() : {}
     const previousCurriculum = normalizeCurriculum(previousData.curriculum)
     const code = exerciseEditor.value.enunciado
-    const pdf = await compileAndUploadExerciseVersion(reference.id, code)
-    const variaciones = []
-    for (const [index, variation] of exerciseEditor.value.variaciones.entries()) {
-      if (!variation.enunciado.trim()) continue
-      const variationPdf = await compileAndUploadExerciseVersion(reference.id, variation.enunciado, index + 1)
-      variaciones.push({ enunciado: variation.enunciado, modelo: variation.modelo || null, pdf: variationPdf })
+    const analysis = analyzeExerciseLatex(code, exerciseEditor.value.structure || {})
+    if (!analysis.valid) throw new Error('El código LaTeX está incompleto. Corrige las llaves o entornos antes de guardar.')
+    exerciseEditor.value.analysis = { valid: true, ambiguous: analysis.ambiguous }
+    const structure = mergeExerciseStructure(analysis.structure, exerciseEditor.value.structure || {})
+    exerciseEditor.value.structure = structure
+    const candidateStructure = exerciseDocumentStructure(structure, previousData, (Number(previousData.revision) || 0) + 1)
+    const sourceChanged = Number(previousData.schemaVersion || 0) < 3
+      || compilationSource(candidateStructure) !== compilationSource(previousData)
+    const revision = sourceChanged ? (Number(previousData.revision) || 0) + 1 : Number(previousData.revision) || 1
+    const persistedStructure = exerciseDocumentStructure(structure, previousData, revision)
+    const previousVariaciones = Array.isArray(previousData.variaciones) ? previousData.variaciones : []
+    const variaciones = exerciseEditor.value.variaciones
+      .filter((variation) => variation.enunciado.trim())
+      .map((variation, index) => structuredVariationForSave(variation, previousVariaciones[index] || {}))
+    const nextStoragePaths = new Set([
+      ...exercisePdfStoragePaths(persistedStructure),
+      ...variaciones.flatMap((variation) => exercisePdfStoragePaths(variation)),
+    ])
+    const pendingStorageCleanup = [...new Set([
+      ...(previousData.pendingStorageCleanup || []),
+      ...exercisePdfStoragePaths(previousData).filter((path) => !nextStoragePaths.has(path)),
+      ...previousVariaciones
+        .slice(variaciones.length)
+        .flatMap((variation) => exercisePdfStoragePaths(variation)),
+    ])]
+    const curriculum = {
+      ...normalizeCurriculum(exerciseEditor.value.curriculum),
+      conceptIds: [...persistedStructure.contenidos],
     }
+    const now = new Date().toISOString()
     const data = {
+      ...persistedStructure,
       id: reference.id,
-      enunciado: code,
-      curriculum: normalizeCurriculum(exerciseEditor.value.curriculum),
+      ownerId: previousData.ownerId || DEVELOPMENT_TEACHER_ID,
+      visibility: previousData.visibility === 'public' ? 'public' : 'private',
+      curriculum,
+      tags: normalizeTags(exerciseEditor.value.tags),
       archivos: normalizeExerciseFiles(exerciseEditor.value.archivos),
-      pdf,
       solucionIA: Boolean(exerciseEditor.value.solucionIA),
       variaciones,
+      // Se conserva como referencia obsoleta hasta que la nueva miniatura se
+      // publique; el sourceUrl evita mostrarla y la función elimina el objeto anterior.
+      preview: previousData.preview || {},
+      pendingStorageCleanup,
+      compilation: compilationStateAfterSave(previousData.compilation, revision, sourceChanged),
+      createdAt: previousData.createdAt || now,
+      updatedAt: now,
     }
     const batch = writeBatch(db)
-    batch.set(reference, data, { merge: true })
+    batch.set(reference, data)
     await syncExerciseConceptIndex(reference.id, previousCurriculum.conceptIds, data.curriculum.conceptIds, batch)
     await batch.commit()
     const filesToDelete = pendingDeletedAttachments.splice(0)
@@ -1628,14 +3031,26 @@ async function saveExercise() {
     else exercises.value[index] = savedExercise
     exercises.value.sort((a, b) => a.id.localeCompare(b.id))
     selectedExerciseId.value = reference.id
-    destroyLatexEditor()
-    clearExercisePreviews()
-    exerciseEditor.value = emptyExercise()
-    selectedExerciseVersion.value = 0
-    exerciseView.value = 'search'
+    if (closeAfterSave) {
+      stopWatchingExerciseCompilation()
+      destroyLatexEditor()
+      clearExercisePreviews()
+      exerciseEditor.value = emptyExercise()
+      selectedExerciseVersion.value = 0
+      exerciseView.value = 'search'
+    } else {
+      const activeVersionIndex = selectedExerciseVersion.value
+      exerciseEditor.value = savedExercise
+      selectedExerciseVersion.value = Math.min(activeVersionIndex, savedExercise.variaciones.length)
+      exerciseCompilationStatus.value = 'outdated'
+      watchExerciseCompilation(reference.id)
+      mountLatexEditor()
+    }
+    return savedExercise
   } catch (error) {
-    exercisesError.value = error.message || 'No se ha podido compilar y guardar el ejercicio.'
+    exercisesError.value = error.message || 'No se ha podido guardar el ejercicio.'
     console.error('Error al guardar ejercicio:', error)
+    return null
   } finally {
     isSavingExercise.value = false
   }
@@ -1709,41 +3124,6 @@ function createGroupId() {
   return globalThis.crypto?.randomUUID?.() || `group-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-function currentAcademicYear() {
-  const today = new Date()
-  const startYear = today.getMonth() >= 8 ? today.getFullYear() : today.getFullYear() - 1
-  return `${startYear}-${startYear + 1}`
-}
-
-function normalizeCareerCourses(courses = []) {
-  return courses.map((course) => ({
-    ...course,
-    grupos: (course.grupos || []).map((group) => {
-      const legacyGroupId = [group.nombre, group.asignatura, group.aula, group.color].join('|')
-      return {
-        ...group,
-        id: group.id || legacyGroupId,
-        alumnos: Array.isArray(group.alumnos)
-          ? group.alumnos.map((student) => ({ id: typeof student === 'string' ? student : student.id })).filter((student) => student.id)
-          : [],
-        evaluaciones: {
-          estructura: Array.isArray(group.evaluaciones?.estructura)
-            ? group.evaluaciones.estructura
-            : (group.evaluaciones?.columnas || []).map((column) => ({
-                type: 'item',
-                id: column.id,
-                nombre: column.title || column.nombre || 'Resultado',
-                nombreCorto: column.nombreCorto || column.title || column.nombre || 'Resultado',
-              })),
-          resultados: group.evaluaciones?.resultados && typeof group.evaluaciones.resultados === 'object'
-            ? group.evaluaciones.resultados
-            : {},
-        },
-      }
-    }),
-  }))
-}
-
 async function migrateLegacyStudentIdentities(courses = []) {
   for (const course of courses) {
     for (const group of course.grupos || []) {
@@ -1756,67 +3136,64 @@ async function migrateLegacyStudentIdentities(courses = []) {
   }
 }
 
-function serializeSchedule(blocks, existingCourses = careerCourses.value) {
-  const coursesByYear = new Map(normalizeCareerCourses(existingCourses).map((course) => [
-    course.year,
-    new Map((course.grupos || []).map((group) => [group.id, {
-      ...group,
-      horario: course.year === currentAcademicYear() ? [] : (group.horario || []),
-    }])),
-  ]))
-
-  blocks.forEach((block) => {
-    const year = currentAcademicYear()
-    if (!coursesByYear.has(year)) coursesByYear.set(year, new Map())
-    const groups = coursesByYear.get(year)
-    const groupKey = block.groupId || [block.course, block.subject, block.classroom, block.color].join('|')
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, {
-        id: groupKey,
-        nombre: block.course,
-        asignatura: block.subject,
-        aula: block.classroom,
-        color: block.color,
-        horario: [],
-        alumnos: [],
-        evaluaciones: { estructura: [], resultados: {} },
-      })
-    }
-    const group = groups.get(groupKey)
-    group.nombre = block.course
-    group.asignatura = block.subject
-    group.aula = block.classroom
-    group.color = block.color
-    group.horario.push({ dia: block.dayIndex, tramo: block.moduleIndex })
-  })
-
-  return {
-    carrera: {
-      cursos: [...coursesByYear.entries()].map(([year, groups]) => ({
-        year,
-        grupos: [...groups.values()],
-      })),
-    },
-  }
+function teachingScheduleBlocks(groups = teacherGroups.value) {
+  return groups.flatMap((group) => (group.horario || []).map((segment) => ({
+    type: 'teaching',
+    groupId: group.id,
+    course: group.nombre,
+    subjectId: group.subjectId || scheduleSubjectId(group.curso || group.nombre, group.asignatura),
+    subject: group.asignatura || '',
+    classroom: segment.aula ?? group.aula ?? '',
+    color: scheduleColorFor({
+      subjectId: group.subjectId || scheduleSubjectId(group.curso || group.nombre, group.asignatura),
+      course: group.nombre,
+    }),
+    dayIndex: segment.dia,
+    moduleIndex: segment.tramo,
+  })))
 }
 
-function deserializeSchedule(data) {
-  return (data?.carrera?.cursos || []).flatMap((course) =>
-    (course.grupos || []).flatMap((group) =>
-      (group.horario || []).map((segment) => {
-        const legacyGroupId = [group.nombre, group.asignatura, group.aula, group.color].join('|')
-        return {
-          groupId: group.id || legacyGroupId,
-          course: group.nombre,
-          subject: group.asignatura || '',
-          classroom: group.aula || '',
-          color: group.color,
-          dayIndex: segment.dia,
-          moduleIndex: segment.tramo,
-        }
+function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
+  const teachingBlocks = blocks.filter((block) => block.type !== 'nonTeaching' && block.groupId)
+  const blocksByGroup = new Map()
+  teachingBlocks.forEach((block) => {
+    const entries = blocksByGroup.get(block.groupId) || []
+    entries.push(block)
+    blocksByGroup.set(block.groupId, entries)
+  })
+
+  const groupsById = new Map(existingGroups.map((group) => [group.id, {
+    ...group,
+    horario: [],
+  }]))
+  blocksByGroup.forEach((groupBlocks, groupId) => {
+    const first = groupBlocks[0]
+    const previous = groupsById.get(groupId)
+    groupsById.set(groupId, {
+      ...(previous || {
+        id: groupId,
+        academicYear: currentAcademicYear(),
+        teacherId: DEVELOPMENT_TEACHER_ID,
+        alumnos: [],
+        evaluaciones: { estructura: [], resultados: {}, pesos: {} },
+        disposicion: { rows: 4, cols: 5, aisles: [], asientos: [] },
+        studentCount: 0,
+        studentsLoaded: true,
       }),
-    ),
-  )
+      nombre: first.course,
+      curso: mathSubjectsById.get(first.subjectId)?.course || String(first.course || '').replace(/\s+[A-Z]$/u, ''),
+      subjectId: first.subjectId || null,
+      asignatura: first.subject || '',
+      aula: first.classroom || '',
+      color: scheduleColorFor(first),
+      horario: groupBlocks.map((block) => ({
+        dia: block.dayIndex,
+        tramo: block.moduleIndex,
+        aula: block.classroom || '',
+      })),
+    })
+  })
+  return [...groupsById.values()]
 }
 
 async function loadTeacherSchedule() {
@@ -1824,29 +3201,37 @@ async function loadTeacherSchedule() {
   try {
     const snapshot = await getDoc(teacherDocument)
     if (snapshot.exists()) {
-      const storedCourses = snapshot.data()?.carrera?.cursos || []
+      let teacherData = snapshot.data() || {}
+      const storedCourses = teacherData?.carrera?.cursos || []
+      teacherProfile.value = normalizeTeacherProfile(teacherData.perfil)
       await migrateLegacyStudentIdentities(storedCourses)
-      careerCourses.value = normalizeCareerCourses(storedCourses)
-      scheduleBlocks.value = deserializeSchedule({ carrera: { cursos: careerCourses.value } })
-      const needsGradebookMigration = storedCourses.some((course) => (course.grupos || []).some((group) => (
-        !Array.isArray(group.alumnos)
-        || !Array.isArray(group.evaluaciones?.estructura)
-        || group.alumnos.some((student) => !student || typeof student !== 'object' || Object.keys(student).some((key) => key !== 'id'))
-      )))
-      if (needsGradebookMigration) {
-        await setDoc(teacherDocument, { carrera: { cursos: careerCourses.value } }, { merge: true })
-      }
+      const migrated = await migrateLegacyGroups(snapshot, DEVELOPMENT_TEACHER_ID)
+      if (migrated) teacherData = (await getDoc(teacherDocument)).data() || teacherData
+      schoolCalendar.value = normalizeSchoolCalendar(
+        teacherData?.calendariosEscolares?.[academicCalendarYear.value] || teacherData?.calendarioEscolar || {},
+      )
     } else {
-      await setDoc(teacherDocument, { carrera: { cursos: [] } })
+      teacherProfile.value = normalizeTeacherProfile()
+      schoolCalendar.value = normalizeSchoolCalendar()
+      await setDoc(teacherDocument, { groupMigration: { schemaVersion: 2 } }, { merge: true })
     }
+    const [loadedGroups, nonTeachingSchedule] = await Promise.all([
+      loadGroupsForTeacher(DEVELOPMENT_TEACHER_ID, currentAcademicYear()),
+      loadNonTeachingSchedule(DEVELOPMENT_TEACHER_ID, currentAcademicYear()),
+    ])
+    teacherGroups.value = loadedGroups
+    scheduleBlocks.value = [
+      ...teachingScheduleBlocks(loadedGroups),
+      ...nonTeachingSchedule.map((block) => ({
+        ...block,
+        subject: '',
+        color: scheduleColorFor(block),
+      })),
+    ]
   } catch (error) {
     firestoreError.value = 'No se ha podido cargar el horario de Firestore.'
-    console.error('Error al cargar teachers/test:', error)
+    console.error('Error al cargar los grupos y el horario:', error)
   }
-}
-
-function uniqueScheduleValues(field) {
-  return [...new Set(scheduleBlocks.value.map((block) => block[field]).filter(Boolean))]
 }
 
 function scheduleBlock(dayIndex, moduleIndex) {
@@ -1857,50 +3242,78 @@ function openScheduleDialog(dayIndex, moduleIndex) {
   if (!scheduleConfigMode.value) return
   selectedSlot.value = { dayIndex, moduleIndex }
   const currentBlock = scheduleBlock(dayIndex, moduleIndex)
+  const isNonTeachingBlock = currentBlock?.type === 'nonTeaching' || (currentBlock && !currentBlock.groupId)
   scheduleForm.value = currentBlock
     ? {
+        id: currentBlock.id || null,
+        type: isNonTeachingBlock ? 'nonTeaching' : 'teaching',
+        nonTeachingKind: isNonTeachingBlock
+          ? (scheduleSegmentType(currentBlock.nonTeachingKind)?.value || scheduleSegmentType(currentBlock.course)?.value)
+          : null,
         groupId: currentBlock.groupId,
-        course: currentBlock.course,
-        subject: currentBlock.subject,
+        course: isNonTeachingBlock ? '' : currentBlock.course,
+        subjectId: isNonTeachingBlock ? null : (currentBlock.subjectId || scheduleSubjectId(currentBlock.course, currentBlock.subject)),
+        subject: isNonTeachingBlock ? '' : currentBlock.subject,
         classroom: currentBlock.classroom,
         color: currentBlock.color,
       }
     : emptyScheduleForm()
-  selectedSchedulePreset.value = null
   scheduleDialog.value = true
 }
 
-async function applySchedulePreset(preset) {
-  if (!preset) return
-  scheduleForm.value = {
-    groupId: preset.groupId,
-    course: preset.course,
-    subject: preset.subject,
-    classroom: preset.classroom,
-    color: preset.color,
-  }
-  await saveScheduleBlock()
-}
-
 async function saveScheduleBlock() {
-  if (!scheduleForm.value.course || !scheduleForm.value.color) return
+  if (!canSaveScheduleBlock.value) return
   const slot = selectedSlot.value
   const currentBlock = scheduleBlock(slot.dayIndex, slot.moduleIndex)
-  const groupId = currentBlock?.groupId || scheduleForm.value.groupId || createGroupId()
-  const block = { ...scheduleForm.value, groupId, ...slot }
+  const isNonTeaching = !scheduleForm.value.course.trim()
+  const selectedSegmentType = scheduleSegmentType(scheduleForm.value.nonTeachingKind)
+  const groupId = isNonTeaching ? null : (currentBlock?.groupId || scheduleForm.value.groupId || createGroupId())
+  const block = {
+    ...scheduleForm.value,
+    course: isNonTeaching ? selectedSegmentType.title : scheduleForm.value.course.trim(),
+    subjectId: isNonTeaching ? null : scheduleForm.value.subjectId,
+    subject: isNonTeaching ? '' : scheduleForm.value.subject,
+    nonTeachingKind: isNonTeaching ? selectedSegmentType.value : null,
+    color: scheduleColorFor(scheduleForm.value),
+    id: isNonTeaching ? (currentBlock?.id || scheduleForm.value.id || createGroupId()) : null,
+    type: isNonTeaching ? 'nonTeaching' : 'teaching',
+    groupId,
+    ...slot,
+  }
   const previousBlocks = [...scheduleBlocks.value]
   const existingIndex = scheduleBlocks.value.findIndex((item) => item.dayIndex === slot.dayIndex && item.moduleIndex === slot.moduleIndex)
   if (existingIndex === -1) {
     scheduleBlocks.value.push(block)
   } else {
-    scheduleBlocks.value = scheduleBlocks.value.map((item) => (item.groupId === groupId ? { ...item, ...scheduleForm.value, groupId } : item))
+    scheduleBlocks.value.splice(existingIndex, 1, block)
+    if (!isNonTeaching) {
+      scheduleBlocks.value = scheduleBlocks.value.map((item, index) => (
+        index !== existingIndex && item.groupId === groupId
+          ? {
+              ...item,
+              type: 'teaching',
+              course: block.course,
+              subjectId: block.subjectId,
+              subject: block.subject,
+              color: block.color,
+            }
+          : item
+      ))
+    }
   }
   isSavingSchedule.value = true
   firestoreError.value = ''
   try {
-    const serialized = serializeSchedule(scheduleBlocks.value)
-    await setDoc(teacherDocument, serialized, { merge: true })
-    careerCourses.value = serialized.carrera.cursos
+    const updatedGroups = groupsFromSchedule(scheduleBlocks.value)
+    await Promise.all([
+      saveGroupMetadata(updatedGroups, DEVELOPMENT_TEACHER_ID),
+      saveNonTeachingSchedule(
+        scheduleBlocks.value.filter((item) => item.type === 'nonTeaching'),
+        DEVELOPMENT_TEACHER_ID,
+        currentAcademicYear(),
+      ),
+    ])
+    teacherGroups.value = updatedGroups
     scheduleDialog.value = false
   } catch (error) {
     scheduleBlocks.value = previousBlocks
@@ -1911,7 +3324,91 @@ async function saveScheduleBlock() {
   }
 }
 
+function copyScheduleBlock(dayIndex, moduleIndex) {
+  const block = scheduleBlock(dayIndex, moduleIndex)
+  if (!block) return
+  if (isScheduleCopySource(dayIndex, moduleIndex)) {
+    scheduleClipboard.value = null
+    return
+  }
+  scheduleClipboard.value = {
+    sourceDayIndex: dayIndex,
+    sourceModuleIndex: moduleIndex,
+    block: JSON.parse(JSON.stringify(block)),
+  }
+}
+
+function handleScheduleCellClick(dayIndex, moduleIndex) {
+  if (scheduleClipboard.value) {
+    if (!isScheduleCopySource(dayIndex, moduleIndex)) void pasteScheduleBlock(dayIndex, moduleIndex)
+    return
+  }
+  openScheduleDialog(dayIndex, moduleIndex)
+}
+
+function isScheduleCopySource(dayIndex, moduleIndex) {
+  return scheduleClipboard.value?.sourceDayIndex === dayIndex
+    && scheduleClipboard.value?.sourceModuleIndex === moduleIndex
+}
+
+async function pasteScheduleBlock(dayIndex, moduleIndex) {
+  if (!scheduleClipboard.value || isScheduleCopySource(dayIndex, moduleIndex)) return
+  const previousBlocks = [...scheduleBlocks.value]
+  const source = JSON.parse(JSON.stringify(scheduleClipboard.value.block))
+  const isNonTeaching = source.type === 'nonTeaching' || !source.subjectId
+  const pastedBlock = {
+    ...source,
+    id: isNonTeaching ? createGroupId() : null,
+    type: isNonTeaching ? 'nonTeaching' : 'teaching',
+    groupId: isNonTeaching ? null : source.groupId,
+    color: scheduleColorFor(source),
+    dayIndex,
+    moduleIndex,
+  }
+  const existingIndex = scheduleBlocks.value.findIndex((item) => (
+    item.dayIndex === dayIndex && item.moduleIndex === moduleIndex
+  ))
+  if (existingIndex === -1) scheduleBlocks.value.push(pastedBlock)
+  else scheduleBlocks.value.splice(existingIndex, 1, pastedBlock)
+  isSavingSchedule.value = true
+  firestoreError.value = ''
+  try {
+    const updatedGroups = groupsFromSchedule(scheduleBlocks.value)
+    await Promise.all([
+      saveGroupMetadata(updatedGroups, DEVELOPMENT_TEACHER_ID),
+      saveNonTeachingSchedule(
+        scheduleBlocks.value.filter((item) => item.type === 'nonTeaching'),
+        DEVELOPMENT_TEACHER_ID,
+        currentAcademicYear(),
+      ),
+    ])
+    teacherGroups.value = updatedGroups
+  } catch (error) {
+    scheduleBlocks.value = previousBlocks
+    firestoreError.value = 'No se ha podido pegar el segmento en Firestore.'
+    console.error('Error al pegar un segmento horario:', error)
+  } finally {
+    isSavingSchedule.value = false
+  }
+}
+
+async function clearScheduleCell(dayIndex, moduleIndex) {
+  selectedSlot.value = { dayIndex, moduleIndex }
+  await clearScheduleBlock()
+}
+
 async function clearScheduleBlock() {
+  if (!selectedSlot.value || !hasSelectedScheduleBlock.value) return
+  const currentBlock = scheduleBlock(selectedSlot.value.dayIndex, selectedSlot.value.moduleIndex)
+  const scheduledGroup = teacherGroups.value.find((group) => group.id === currentBlock?.groupId)
+  if (Number(scheduledGroup?.studentCount) > 0 || (scheduledGroup?.alumnos || []).length) {
+    scheduleDeleteDialog.value = true
+    return
+  }
+  await performClearScheduleBlock()
+}
+
+async function performClearScheduleBlock() {
   if (!selectedSlot.value || !hasSelectedScheduleBlock.value) return
   const previousBlocks = [...scheduleBlocks.value]
   const { dayIndex, moduleIndex } = selectedSlot.value
@@ -1919,9 +3416,16 @@ async function clearScheduleBlock() {
   isSavingSchedule.value = true
   firestoreError.value = ''
   try {
-    const serialized = serializeSchedule(scheduleBlocks.value)
-    await setDoc(teacherDocument, serialized, { merge: true })
-    careerCourses.value = serialized.carrera.cursos
+    const updatedGroups = groupsFromSchedule(scheduleBlocks.value)
+    await Promise.all([
+      saveGroupMetadata(updatedGroups, DEVELOPMENT_TEACHER_ID),
+      saveNonTeachingSchedule(
+        scheduleBlocks.value.filter((item) => item.type === 'nonTeaching'),
+        DEVELOPMENT_TEACHER_ID,
+        currentAcademicYear(),
+      ),
+    ])
+    teacherGroups.value = updatedGroups
     scheduleDialog.value = false
   } catch (error) {
     scheduleBlocks.value = previousBlocks
@@ -1946,7 +3450,22 @@ function changeMonth(offset) {
 
 function setCalendarMode(mode) {
   calendarMode.value = mode
-  if (mode !== 'week') scheduleConfigMode.value = false
+  if (mode !== 'week') {
+    scheduleConfigMode.value = false
+    scheduleClipboard.value = null
+  }
+  if (mode !== 'year') courseCalendarConfigMode.value = false
+}
+
+function toggleCalendarConfiguration() {
+  if (calendarMode.value === 'week') {
+    scheduleConfigMode.value = !scheduleConfigMode.value
+    if (!scheduleConfigMode.value) scheduleClipboard.value = null
+    courseCalendarConfigMode.value = false
+  } else if (calendarMode.value === 'year') {
+    courseCalendarConfigMode.value = !courseCalendarConfigMode.value
+    scheduleConfigMode.value = false
+  }
 }
 
 function isToday(day) {
@@ -1979,34 +3498,53 @@ const navigation = [
   { title: 'Matemáticas', icon: 'mdi-function-variant' },
   { title: 'Ejercicios', icon: 'mdi-pencil-ruler' },
   { title: 'Documentos', icon: 'mdi-file-document-outline' },
-  { title: 'Plantillas', icon: 'mdi-content-duplicate' },
 ]
 
 const groups = computed(() => {
-  return careerCourses.value.flatMap((course) => (course.grupos || [])
-    .filter((group) => Boolean(group.asignatura?.trim()))
+  return teacherGroups.value
+    .filter((group) => Boolean(group.asignatura?.trim()) && Array.isArray(group.horario) && group.horario.length > 0)
     .map((group) => ({
       ...group,
-      academicYear: course.year,
       title: group.nombre,
       subtitle: group.asignatura,
       icon: 'mdi-function-variant',
-    })))
+    }))
 })
 
 const selectedCareerGroup = computed(() => groups.value.find((group) => group.id === selectedCareerGroupId.value) || null)
-const existingStudentIds = computed(() => careerCourses.value.flatMap((course) => (
-  (course.grupos || []).flatMap((group) => (group.alumnos || []).map((student) => student.id).filter(Boolean))
+const existingStudentIds = computed(() => teacherGroups.value.flatMap((group) => (
+  (group.alumnos || []).map((student) => student.id).filter(Boolean)
 )))
 
 let gradebookSavePromise = null
+let groupOpenRequest = 0
 
 async function openCareerGroup(group) {
+  const request = ++groupOpenRequest
+  isLoadingSelectedGroup.value = false
   if (active.value === 'Grupo' && selectedCareerGroupId.value !== group.id && gradebookDirty.value) {
     const saved = await saveGradebook({ includeIdentities: gradebookConfigurationMode.value })
-    if (!saved) return
+    if (!saved || request !== groupOpenRequest) return
   }
-  selectedCareerGroupId.value = group.id
+  firestoreError.value = ''
+  let groupToOpen = teacherGroups.value.find((item) => item.id === group.id) || group
+  if (!groupToOpen.studentsLoaded) {
+    isLoadingSelectedGroup.value = true
+    try {
+      const loadedGroup = await loadStudentsForGroup(groupToOpen)
+      teacherGroups.value = teacherGroups.value.map((item) => item.id === loadedGroup.id ? loadedGroup : item)
+      groupToOpen = loadedGroup
+    } catch (error) {
+      if (request !== groupOpenRequest) return
+      firestoreError.value = 'No se han podido cargar los alumnos y las calificaciones del grupo.'
+      console.error('Error al cargar los alumnos del grupo:', error)
+      return
+    } finally {
+      if (request === groupOpenRequest) isLoadingSelectedGroup.value = false
+    }
+  }
+  if (request !== groupOpenRequest) return
+  selectedCareerGroupId.value = groupToOpen.id
   gradebookDirty.value = false
   gradebookValid.value = true
   gradebookConfigurationMode.value = false
@@ -2073,12 +3611,10 @@ async function saveGradebook({ includeIdentities = false } = {}) {
       if (includeIdentities) await gradebookRef.value?.persistLocalIdentities?.()
       const updatedGroup = gradebookRef.value?.getGroup?.()
       if (!updatedGroup) return false
-      const updatedCourses = careerCourses.value.map((course) => ({
-        ...course,
-        grupos: (course.grupos || []).map((group) => (group.id === updatedGroup.id ? updatedGroup : group)),
-      }))
-      await setDoc(teacherDocument, { carrera: { cursos: updatedCourses } }, { merge: true })
-      careerCourses.value = updatedCourses
+      const previousGroup = teacherGroups.value.find((group) => group.id === updatedGroup.id)
+      const previousStudentIds = (previousGroup?.alumnos || []).map((student) => student.id).filter(Boolean)
+      const savedGroup = await saveGroup(updatedGroup, previousStudentIds, DEVELOPMENT_TEACHER_ID)
+      teacherGroups.value = teacherGroups.value.map((group) => group.id === savedGroup.id ? savedGroup : group)
       if (includeIdentities) {
         try {
           await gradebookRef.value?.finalizeIdentityDeletions?.()
@@ -2123,6 +3659,8 @@ async function setActiveView(view) {
     selectedStudentDetail.value = null
     studentDetailConfigurationMode.value = false
   }
+  if (view !== 'Perfil') teacherProfileEditing.value = false
+  if (view === 'Documentos') documentsTab.value = 'documents'
   active.value = view
 }
 
@@ -2171,19 +3709,29 @@ function saveActiveDocument() {
 let currentTimeInterval
 onMounted(() => {
   loadTeacherSchedule()
-  loadExercises()
+  loadExercises({ reset: true })
   loadMathConcepts()
   loadTemplates()
   currentTimeInterval = window.setInterval(() => { currentTime.value = new Date() }, 30_000)
+  window.addEventListener('scroll', handleExerciseScroll, { passive: true })
+  window.addEventListener('wheel', handleExerciseScroll, { passive: true })
+  window.addEventListener('touchmove', handleExerciseScroll, { passive: true })
   window.addEventListener('pagehide', flushGradebookOnPageHide)
   document.addEventListener('visibilitychange', flushGradebookWhenHidden)
 })
 
 onBeforeUnmount(() => {
   window.clearInterval(currentTimeInterval)
+  window.cancelAnimationFrame(exerciseScrollFrame)
+  window.removeEventListener('scroll', handleExerciseScroll)
+  window.removeEventListener('wheel', handleExerciseScroll)
+  window.removeEventListener('touchmove', handleExerciseScroll)
   window.removeEventListener('pagehide', flushGradebookOnPageHide)
   document.removeEventListener('visibilitychange', flushGradebookWhenHidden)
   flushGradebookOnPageHide()
+  stopWatchingExerciseCompilation()
+  exerciseCompilationListWatches.forEach((unsubscribe) => unsubscribe())
+  exerciseCompilationListWatches.clear()
   destroyLatexEditor()
   destroyTemplateEditor()
   clearExercisePreviews()
@@ -2242,7 +3790,7 @@ onBeforeUnmount(() => {
         <div class="drawer-footer">
           <v-btn variant="text" prepend-icon="mdi-cog-outline" block justify="start">Ajustes</v-btn>
           <v-divider class="my-3" />
-          <v-list-item prepend-avatar="/brand/carlos-sanchez-catala.png" title="Carlos Sánchez Catalá" subtitle="Profesor" />
+          <v-list-item prepend-avatar="/brand/carlos-sanchez-catala.png" title="Carlos Sánchez Catalá" subtitle="Profesor" @click="setActiveView('Perfil')" />
         </div>
       </template>
     </v-navigation-drawer>
@@ -2366,10 +3914,13 @@ onBeforeUnmount(() => {
         <v-tooltip text="Chat" location="bottom">
           <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
         </v-tooltip>
-        <v-btn icon="mdi-account-circle-outline" variant="text" aria-label="Perfil" class="mr-2" />
       </template>
       <template v-else-if="active === 'Documentos'">
-        <template v-if="documentWorkflow.mode === 'library'">
+        <v-btn-toggle :model-value="documentsTab" mandatory density="compact" class="calendar-toolbar-modes documents-toolbar-tabs" aria-label="Sección de documentos" @update:model-value="documentsTab = $event">
+          <v-btn value="documents">Documentos</v-btn>
+          <v-btn value="templates">Plantillas</v-btn>
+        </v-btn-toggle>
+        <template v-if="documentsTab === 'documents' && documentWorkflow.mode === 'library'">
           <v-text-field
             v-model="documentSearchQuery"
             aria-label="Buscar documentos"
@@ -2386,13 +3937,13 @@ onBeforeUnmount(() => {
           <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action mr-3" @click="newActiveDocument">Nuevo documento</v-btn>
           <v-spacer />
         </template>
-        <template v-else-if="documentWorkflow.mode === 'viewer'">
+        <template v-else-if="documentsTab === 'documents' && documentWorkflow.mode === 'viewer'">
           <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" @click="closeActiveDocument">Documentos</v-btn>
           <v-spacer />
           <span class="document-toolbar-step">Vista del documento</span>
           <v-spacer />
         </template>
-        <template v-else>
+        <template v-else-if="documentsTab === 'documents'">
           <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" :disabled="isCompilingDocument" @click="closeActiveDocument">Documentos</v-btn>
           <v-spacer />
           <span class="document-toolbar-step">Paso {{ documentWorkflow.step }} de 4</span>
@@ -2422,20 +3973,19 @@ onBeforeUnmount(() => {
             >Guardar</v-btn>
           </template>
         </template>
+        <template v-else>
+          <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action ml-2" @click="openNewTemplate">Nueva plantilla</v-btn>
+          <v-btn variant="text" prepend-icon="mdi-upload-outline" class="ml-2" @click="chooseTemplateFile">Importar .tex</v-btn>
+          <v-spacer />
+          <v-btn v-if="selectedTemplate" color="error" variant="text" prepend-icon="mdi-delete-outline" :loading="isSavingTemplate" @click="removeTemplate">Eliminar</v-btn>
+          <v-btn v-if="isEditingTemplate" color="primary" variant="flat" prepend-icon="mdi-content-save-outline" class="app-toolbar-primary-action mr-3 ml-2" :disabled="!templateEditor.nombre.trim() || !templateEditor.codigo.trim()" :loading="isSavingTemplate" @click="saveTemplate">Guardar</v-btn>
+        </template>
         <v-tooltip text="Calendario" location="bottom">
           <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
         </v-tooltip>
         <v-tooltip text="Chat" location="bottom">
           <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
         </v-tooltip>
-        <v-btn icon="mdi-account-circle-outline" variant="text" aria-label="Perfil" class="mr-2" />
-      </template>
-      <template v-else-if="active === 'Plantillas'">
-        <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action ml-2" @click="openNewTemplate">Nueva plantilla</v-btn>
-        <v-btn variant="text" prepend-icon="mdi-upload-outline" class="ml-2" @click="chooseTemplateFile">Importar .tex</v-btn>
-        <v-spacer />
-        <v-btn v-if="selectedTemplate" color="error" variant="text" prepend-icon="mdi-delete-outline" :loading="isSavingTemplate" @click="removeTemplate">Eliminar</v-btn>
-        <v-btn v-if="isEditingTemplate" color="primary" variant="flat" prepend-icon="mdi-content-save-outline" class="app-toolbar-primary-action mr-3 ml-2" :disabled="!templateEditor.nombre.trim() || !templateEditor.codigo.trim()" :loading="isSavingTemplate" @click="saveTemplate">Guardar</v-btn>
       </template>
       <template v-else-if="active === 'Grupo'">
         <template v-if="selectedStudentDetail">
@@ -2496,13 +4046,12 @@ onBeforeUnmount(() => {
         <v-tooltip text="Chat" location="bottom">
           <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
         </v-tooltip>
-        <v-btn icon="mdi-account-circle-outline" variant="text" aria-label="Perfil" class="mr-2" />
         </template>
       </template>
       <template v-else-if="active === 'Calendario'">
-        <v-tooltip :text="calendarMode === 'week' ? 'Configurar horario semanal' : 'Configuración disponible en la vista semanal'" location="bottom">
+        <v-tooltip :text="calendarMode === 'week' ? 'Configurar horario semanal' : calendarMode === 'year' ? 'Configurar calendario escolar' : 'Configuración disponible en la vista semanal y de curso'" location="bottom">
           <template #activator="{ props }">
-            <v-btn v-bind="props" icon="mdi-cog-outline" rounded="circle" class="ml-2" :disabled="calendarMode !== 'week'" :color="scheduleConfigMode ? 'primary' : undefined" :variant="scheduleConfigMode ? 'tonal' : 'text'" aria-label="Configurar horario semanal" @click="scheduleConfigMode = !scheduleConfigMode" />
+            <v-btn v-bind="props" icon="mdi-cog-outline" rounded="circle" class="ml-2" :disabled="calendarMode === 'month'" :color="(scheduleConfigMode || courseCalendarConfigMode) ? 'primary' : undefined" :variant="(scheduleConfigMode || courseCalendarConfigMode) ? 'tonal' : 'text'" :aria-label="calendarMode === 'year' ? 'Configurar calendario escolar' : 'Configurar horario semanal'" @click="toggleCalendarConfiguration" />
           </template>
         </v-tooltip>
         <v-btn icon="mdi-chevron-left" variant="text" aria-label="Periodo anterior" @click="changeMonth(-1)" />
@@ -2521,7 +4070,17 @@ onBeforeUnmount(() => {
         <v-tooltip text="Chat" location="bottom">
           <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
         </v-tooltip>
-        <v-btn icon="mdi-account-circle-outline" variant="text" aria-label="Perfil" class="mr-2" />
+      </template>
+      <template v-else-if="active === 'Perfil'">
+        <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" @click="setActiveView('Ejercicios')">Volver</v-btn>
+        <v-spacer />
+        <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action mr-3" @click="addTeacherCenter">Nuevo centro</v-btn>
+        <v-tooltip text="Calendario" location="bottom">
+          <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
+        </v-tooltip>
+        <v-tooltip text="Chat" location="bottom">
+          <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
+        </v-tooltip>
       </template>
       <template v-else>
         <v-toolbar-title v-if="active !== 'Ejercicios' && active !== 'Matemáticas'" class="page-title">{{ active }}</v-toolbar-title>
@@ -2554,14 +4113,12 @@ onBeforeUnmount(() => {
         <v-tooltip text="Chat" location="bottom">
           <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
         </v-tooltip>
-        <v-btn icon="mdi-account-circle-outline" variant="text" aria-label="Perfil" class="mr-2" />
       </template>
     </v-app-bar>
 
     <v-main>
-      <div class="page-shell" :class="{ 'page-shell-mathematics': active === 'Matemáticas', 'page-shell-exercise-search': active === 'Ejercicios' && exerciseView === 'search', 'page-shell-exercise-edit': active === 'Ejercicios' && exerciseView === 'edit', 'page-shell-documents': active === 'Documentos', 'page-shell-templates': active === 'Plantillas', 'page-shell-gradebook': active === 'Grupo', 'page-shell-calendar': active === 'Calendario' }">
+      <div class="page-shell" :class="{ 'page-shell-mathematics': active === 'Matemáticas', 'page-shell-exercise-search': active === 'Ejercicios' && exerciseView === 'search', 'page-shell-exercise-edit': active === 'Ejercicios' && exerciseView === 'edit', 'page-shell-documents': active === 'Documentos', 'page-shell-documents-templates': active === 'Documentos' && documentsTab === 'templates', 'page-shell-gradebook': active === 'Grupo', 'page-shell-calendar': active === 'Calendario', 'page-shell-profile': active === 'Perfil' }">
         <section v-if="active === 'Matemáticas'" class="mathematics-page">
-          <v-alert v-if="mathConceptsError" type="error" variant="tonal" density="compact" class="math-concepts-error">{{ mathConceptsError }}</v-alert>
           <div v-if="isLoadingMathConcepts" class="math-concepts-loading"><v-progress-circular indeterminate color="primary" /><span>Cargando mapa de conceptos…</span></div>
           <MathConceptMap
             v-else
@@ -2582,45 +4139,129 @@ onBeforeUnmount(() => {
             @update-subject-node-ids="updateMathSubjectNodeIds"
           />
         </section>
+        <section v-else-if="active === 'Perfil'" class="teacher-profile-page">
+          <input ref="profileImageInput" type="file" accept="image/*" multiple hidden @change="uploadProfileImages">
+          <header class="teacher-profile-intro">
+            <div>
+              <span class="teacher-profile-eyebrow">Perfil profesional</span>
+              <h1>Centros y cursos</h1>
+              <p>Añade los centros donde trabajas o has trabajado. Sus logotipos podrán utilizarse más adelante en los documentos.</p>
+            </div>
+            <v-avatar size="64" class="teacher-profile-avatar"><img src="/brand/carlos-sanchez-catala.png" alt="Carlos Sánchez Catalá"></v-avatar>
+          </header>
+          <div v-if="!teacherProfile.centros.length" class="teacher-profile-empty">
+            <v-icon icon="mdi-school-outline" size="48" />
+            <strong>Aún no hay centros registrados</strong>
+            <span>Empieza añadiendo un centro y sus cursos.</span>
+            <v-btn color="primary" variant="tonal" prepend-icon="mdi-plus" @click="addTeacherCenter">Añadir centro</v-btn>
+          </div>
+          <div v-else class="teacher-profile-grid">
+            <v-card v-for="(center, index) in teacherProfile.centros" :key="center.id" class="teacher-center-card" variant="outlined">
+              <header class="teacher-center-card-header">
+                <div class="teacher-center-heading">
+                  <div class="teacher-center-logo-mark"><img v-if="center.imagenes[0]?.url" :src="center.imagenes[0].url" :alt="`Logotipo de ${center.centro || 'centro'}`"><v-icon v-else icon="mdi-school-outline" size="19" /></div>
+                  <strong>{{ center.centro || 'Nuevo centro' }}</strong>
+                </div>
+                <v-spacer />
+                <span class="teacher-center-course">{{ center.curso || 'Sin curso' }}</span>
+                <v-btn v-if="isTeacherCenterEditing(center)" icon="mdi-content-save-outline" size="small" variant="text" color="primary" aria-label="Guardar centro" :loading="isSavingTeacherProfile" @click="saveTeacherCenter(center)" />
+                <v-btn v-if="isTeacherCenterEditing(center)" icon="mdi-delete-outline" size="small" variant="text" color="error" aria-label="Eliminar centro" @click="removeTeacherCenter(center)" />
+              </header>
+              <v-card-text class="teacher-center-card-body">
+                <div v-if="isTeacherCenterEditing(center)" class="teacher-center-fields">
+                  <v-text-field v-model="center.curso" label="Curso" placeholder="2025 / 2026" variant="outlined" density="comfortable" hide-details />
+                  <v-text-field v-model="center.centro" label="Nombre del centro" placeholder="IES ..." variant="outlined" density="comfortable" hide-details />
+                </div>
+                <div v-else class="teacher-center-readonly">
+                  <p>{{ center.descripcion || 'Sin descripción.' }}</p>
+                  <div class="teacher-center-readonly-actions">
+                    <v-btn class="teacher-center-edit-btn" icon="mdi-pencil-outline" size="small" variant="text" color="primary" aria-label="Editar centro" @click="editTeacherCenter(center)" />
+                  </div>
+                </div>
+                <v-textarea v-if="isTeacherCenterEditing(center)" v-model="center.descripcion" label="Descripción" placeholder="Puesto, etapa o información relevante" variant="outlined" density="comfortable" rows="3" auto-grow hide-details />
+                <div v-if="isTeacherCenterEditing(center)" class="teacher-center-logos">
+                  <div class="teacher-center-logos-heading"><strong>Logotipos</strong><v-btn v-if="isTeacherCenterEditing(center)" size="small" variant="tonal" color="primary" prepend-icon="mdi-image-plus-outline" @click="openProfileImagePicker(center)">Añadir imágenes</v-btn></div>
+                  <div v-if="center.imagenes.length" class="teacher-center-logo-grid">
+                    <div v-for="image in center.imagenes" :key="image.id" class="teacher-center-logo">
+                      <img :src="image.url" :alt="image.nombre">
+                      <v-btn v-if="isTeacherCenterEditing(center)" icon="mdi-close" size="x-small" variant="flat" color="error" aria-label="Eliminar imagen" @click="removeProfileImage(center, image)" />
+                    </div>
+                  </div>
+                  <span v-else class="teacher-center-no-logos">Todavía no hay imágenes.</span>
+                </div>
+              </v-card-text>
+            </v-card>
+          </div>
+        </section>
         <section v-else-if="active === 'Ejercicios'" class="exercises-page">
-          <v-alert v-if="exercisesError && exerciseView === 'search'" type="error" variant="tonal" density="compact" class="mb-5">{{ exercisesError }}</v-alert>
           <template v-if="exerciseView === 'search'">
             <div v-if="isLoadingExercises" class="exercise-grid-empty"><v-progress-circular indeterminate color="primary" /><span>Cargando ejercicios…</span></div>
             <MasonryGrid v-else-if="filteredExercises.length" :items="filteredExercises" :item-key="(exercise) => exercise.id" class="exercise-results-grid">
               <template #default="{ item: exercise }">
-                <v-card class="exercise-result-card" elevation="1">
-                  <header class="exercise-result-toolbar">
-                    <span v-if="exercise.variaciones.length" class="exercise-result-variations" :title="`${exercise.variaciones.length} variantes IA`">
-                      {{ exercise.variaciones.length }} {{ exercise.variaciones.length === 1 ? 'variante' : 'variantes' }}
-                    </span>
-                    <span class="exercise-result-subject" :class="{ 'exercise-result-subject-divided': exercise.variaciones.length }" :title="exerciseSubjectLabel(exercise)">{{ exerciseSubjectLabel(exercise) }}</span>
-                    <span class="exercise-result-toolbar-spacer" />
-                    <span class="exercise-result-solution" :class="`exercise-result-solution-${exerciseSolutionBadge(exercise).color || 'pending'}`">
-                      <v-icon :icon="exerciseSolutionBadge(exercise).icon" size="14" />
-                      {{ exerciseSolutionBadge(exercise).label }}
-                    </span>
+                <v-card class="exercise-result-card" elevation="0">
+                  <header class="exercise-result-header">
+                    <div class="exercise-result-toolbar">
+                      <span class="exercise-result-subject" :title="exerciseSubjectLabel(exercise)">{{ exerciseSubjectLabel(exercise) }}</span>
+                    </div>
+                    <ExerciseVariantSelector
+                      :model-value="searchExerciseVersionIndex(exercise)"
+                      :variations="exercise.variaciones || []"
+                      compact
+                      @update:model-value="setSearchExerciseVersion(exercise, $event)"
+                    />
                   </header>
                   <div class="exercise-result-pdf">
-                    <ExercisePdfPreview v-if="exercise.pdf?.enunciado" :src="exercise.pdf.enunciado" :title="`PDF del ejercicio ${exercise.id}`" />
+                    <img
+                      v-if="searchExerciseThumbnail(exercise)"
+                      :src="searchExerciseThumbnail(exercise)"
+                      :alt="`Enunciado del ejercicio ${exercise.id}`"
+                      class="exercise-result-thumbnail"
+                      loading="lazy"
+                      decoding="async"
+                    >
+                    <ExercisePdfPreview
+                      v-else-if="searchExercisePdf(exercise)"
+                      :src="searchExercisePdf(exercise)"
+                      :aspect-ratio="searchExercisePdfAspectRatio(exercise)"
+                      :title="`Enunciado de la versión ${searchExerciseVersionIndex(exercise)} del ejercicio ${exercise.id}`"
+                      thumbnail
+                      :generate-thumbnail="searchExerciseVersionIndex(exercise) === 0"
+                      @page-metrics="searchExerciseVersionIndex(exercise) === 0 && rememberExercisePdfMetrics(exercise, $event)"
+                      @thumbnail-ready="persistExerciseThumbnail(exercise, $event)"
+                    />
                     <div v-else class="exercise-result-no-pdf"><v-icon icon="mdi-file-pdf-box" size="38" /><span>PDF pendiente</span></div>
                     <v-tooltip text="Editar ejercicio" location="top">
-                      <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-pencil-outline" size="small" color="primary" class="exercise-card-edit" aria-label="Editar ejercicio" @click="editExercise(exercise)" /></template>
+                      <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-pencil-outline" size="x-small" color="primary" variant="flat" elevation="0" class="exercise-card-edit" aria-label="Editar ejercicio" @click="editExercise(exercise)" /></template>
                     </v-tooltip>
                   </div>
                   <footer class="exercise-result-concepts" :title="exerciseConceptLabel(exercise)">
                     <span v-html="exerciseConceptRichLabel(exercise)" />
                     <v-icon v-if="exercise.curriculum.competencial" icon="mdi-lightbulb-on-outline" size="14" class="exercise-result-competency" title="Ejercicio competencial" />
                   </footer>
+                  <footer class="exercise-result-authors">
+                    <span :title="`Autor del enunciado: ${searchExerciseAuthors(exercise).statement}`"><strong>Enunciado</strong> · {{ searchExerciseAuthors(exercise).statement }}</span>
+                    <span class="exercise-result-toolbar-spacer" />
+                    <span :title="`Autor de la solución: ${searchExerciseAuthors(exercise).solution}`"><strong>Solución</strong> · {{ searchExerciseAuthors(exercise).solution }}</span>
+                  </footer>
                 </v-card>
               </template>
             </MasonryGrid>
-            <div v-else class="exercise-grid-empty"><v-icon icon="mdi-file-search-outline" size="42" /><span>No hay ejercicios que coincidan con los filtros.</span></div>
+            <div v-else class="exercise-grid-empty">
+              <v-progress-circular v-if="hasMoreExercises" indeterminate color="primary" size="30" width="3" />
+              <v-icon v-else icon="mdi-file-search-outline" size="42" />
+              <span>{{ hasMoreExercises ? 'Buscando ejercicios coincidentes…' : 'No hay ejercicios que coincidan con los filtros.' }}</span>
+            </div>
+            <div v-if="!isLoadingExercises && hasMoreExercises" class="exercise-load-sentinel" aria-live="polite">
+              <template v-if="isLoadingMoreExercises">
+                <v-progress-circular indeterminate color="primary" size="22" width="2" />
+                <span>Cargando más ejercicios…</span>
+              </template>
+            </div>
           </template>
 
           <template v-else>
             <div class="exercise-edit-workspace">
               <section class="exercise-editor-pane" aria-label="Contenido del ejercicio">
-                <v-alert v-if="exercisesError" type="error" variant="tonal" density="compact" class="exercise-edit-error">{{ exercisesError }}</v-alert>
                 <div class="exercise-editor-toolbar">
                   <v-tabs :model-value="exerciseEditorTab" density="compact" @update:model-value="selectExerciseEditorTab">
                     <v-tab value="code">Código</v-tab>
@@ -2628,15 +4269,17 @@ onBeforeUnmount(() => {
                     <v-tab value="files">Archivos</v-tab>
                   </v-tabs>
                   <v-spacer />
+                  <span v-if="exerciseEditorTab === 'contents'" class="exercise-content-toolbar-label">{{ selectedContentTargetLabel() }}</span>
                   <v-tooltip v-if="exerciseEditorTab === 'code'" text="Formatear código LaTeX" location="bottom">
                     <template #activator="{ props }">
                       <v-btn
                         v-bind="props"
                         icon="mdi-format-indent-increase"
-                        size="small"
+                        size="x-small"
+                        rounded="circle"
                         variant="text"
                         color="primary"
-                        class="exercise-code-format"
+                        class="exercise-code-format exercise-segment-icon"
                         aria-label="Formatear código LaTeX"
                         @click="formatExerciseLatex"
                       />
@@ -2646,14 +4289,14 @@ onBeforeUnmount(() => {
                 <div v-show="exerciseEditorTab === 'code'" ref="latexEditorHost" class="latex-editor-shell exercise-editor-shell" />
                 <div v-show="exerciseEditorTab === 'contents'" class="exercise-editor-curriculum">
                   <ExerciseCurriculumPicker
-                    v-model="exerciseEditor.curriculum"
+                    v-model="exerciseContentModel"
                     :nodes="mathConceptNodes"
                     :subject-selections="mathConceptSubjectSelections"
                     :exercise-counts="editorExerciseCountByConcept"
                   />
                 </div>
                 <div v-show="exerciseEditorTab === 'files'" class="exercise-editor-files">
-                  <input ref="exerciseAttachmentInput" type="file" multiple hidden @change="uploadExerciseFiles" />
+                  <input ref="exerciseAttachmentInput" type="file" accept=".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf" multiple hidden @change="uploadExerciseFiles" />
                   <div class="exercise-files-actions">
                     <div>
                       <strong>Archivos del ejercicio</strong>
@@ -2665,8 +4308,9 @@ onBeforeUnmount(() => {
                     <v-card v-for="file in exerciseEditor.archivos" :key="file.path" variant="outlined" class="exercise-file-card">
                       <v-icon :icon="file.type.startsWith('image/') ? 'mdi-file-image-outline' : 'mdi-file-outline'" color="primary" size="28" />
                       <div class="exercise-file-info">
-                        <strong :title="file.nombre">{{ file.nombre }}</strong>
-                        <span>{{ formatFileSize(file.size) }}</span>
+                        <strong :title="file.originalName">{{ file.nombre }}</strong>
+                        <span>{{ file.originalName }} · {{ formatFileSize(file.size) }}</span>
+                        <code>\includegraphics&#123;{{ file.latexName }}&#125;</code>
                       </div>
                       <v-btn :href="file.url" target="_blank" icon="mdi-open-in-new" size="small" variant="text" aria-label="Abrir archivo" />
                       <v-btn icon="mdi-delete-outline" size="small" variant="text" color="error" aria-label="Eliminar archivo" @click="removeExerciseFile(file)" />
@@ -2679,42 +4323,126 @@ onBeforeUnmount(() => {
                 </div>
               </section>
               <section class="exercise-preview-pane" aria-label="PDF compilado del ejercicio">
-                <div class="exercise-preview-toolbar">
-                  <v-tabs v-model="exercisePreviewTab" density="compact">
-                    <v-tab value="statement">Enunciado</v-tab>
-                    <v-tab value="solution" :disabled="!compiledSolutionPdfUrl">Resuelto</v-tab>
-                  </v-tabs>
-                  <div class="exercise-preview-variation-actions">
-                    <v-tooltip v-if="selectedExerciseVersion === 0" text="Generar solución" location="bottom">
-                      <template #activator="{ props }">
-                        <v-btn v-bind="props" icon="mdi-lightbulb-on-outline" size="small" variant="tonal" color="primary" rounded="circle" aria-label="Generar solución" :disabled="hasExerciseSolutions(activeExerciseCode)" :loading="isGeneratingSolution" @click="generateOriginalExerciseSolution" />
-                      </template>
-                    </v-tooltip>
-                    <v-tooltip v-if="selectedExerciseVersion === 0 && hasExerciseSolutions(activeExerciseCode)" text="Eliminar solución" location="bottom">
-                      <template #activator="{ props }">
-                        <v-btn v-bind="props" icon="mdi-lightbulb-off-outline" size="small" variant="tonal" color="error" rounded="circle" aria-label="Eliminar solución" :disabled="isGeneratingSolution" :loading="isDeletingSolution" @click="deleteOriginalExerciseSolution" />
-                      </template>
-                    </v-tooltip>
-                    <v-tooltip v-if="selectedExerciseVersion > 0" text="Eliminar variante" location="bottom">
-                      <template #activator="{ props }">
-                        <v-btn v-bind="props" icon="mdi-delete-outline" size="small" variant="tonal" color="error" rounded="circle" aria-label="Eliminar variante" :disabled="isGeneratingSolution" @click="deleteSelectedVariation" />
-                      </template>
-                    </v-tooltip>
-                  </div>
-                  <v-tooltip text="Compilar vista previa" location="bottom">
-                    <template #activator="{ props }">
-                      <v-btn v-bind="props" icon="mdi-refresh" variant="text" color="primary" class="exercise-preview-compile" aria-label="Compilar vista previa" :disabled="!activeExerciseCode.trim()" :loading="isCompiling" @click="refreshLatexRender" />
-                    </template>
-                  </v-tooltip>
-                </div>
-                <v-alert v-if="compilerError" type="error" variant="tonal" density="compact" class="exercise-preview-error">{{ compilerError }}</v-alert>
-                <div class="exercise-preview-document">
-                  <ExercisePdfPreview v-if="activeExercisePdfUrl" :src="activeExercisePdfUrl" :title="exercisePreviewTab === 'statement' ? 'PDF del enunciado' : 'PDF del ejercicio resuelto'" />
-                  <div v-else class="exercise-preview-empty">
-                    <v-icon :icon="exercisePreviewTab === 'statement' ? 'mdi-file-pdf-box' : 'mdi-file-check-outline'" size="46" color="primary" />
-                    <p>{{ exercisePreviewTab === 'statement' ? 'Todavía no hay una vista previa compilada.' : 'Este ejercicio todavía no tiene un PDF resuelto.' }}</p>
-                    <v-btn v-if="exercisePreviewTab === 'statement'" color="primary" variant="tonal" prepend-icon="mdi-refresh" :disabled="!activeExerciseCode.trim()" :loading="isCompiling" @click="refreshLatexRender">Compilar</v-btn>
-                  </div>
+                <div class="exercise-structured-preview">
+                  <article class="exercise-preview-block exercise-preview-main-block">
+                    <div class="exercise-segment-bars exercise-main-bars">
+                      <div class="exercise-preview-toolbar exercise-segment-actions">
+                        <v-tabs v-model="exercisePreviewTab" density="compact">
+                          <v-tab value="statement">Enunciado</v-tab>
+                          <v-tab value="solution" :disabled="!hasExerciseSolutions(activeExerciseCode)">Resuelto</v-tab>
+                        </v-tabs>
+                        <v-spacer />
+                        <div class="exercise-preview-variation-actions">
+                        <v-tooltip :text="activeExerciseHasSections ? 'Seleccionar contenidos del ejercicio completo' : 'Seleccionar contenidos'" location="bottom">
+                          <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-chart-donut-variant" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" :aria-label="activeExerciseHasSections ? 'Seleccionar contenidos del ejercicio completo' : 'Seleccionar contenidos'" @click="selectExercisePartContents(activeExerciseHasSections ? 'global' : 'exercise')" /></template>
+                        </v-tooltip>
+                        <v-tooltip v-if="selectedExerciseVersion === 0" text="Generar todas las soluciones" location="bottom">
+                          <template #activator="{ props }">
+                            <v-btn v-bind="props" icon="mdi-auto-fix" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" aria-label="Generar todas las soluciones" :disabled="hasExerciseSolutions(activeExerciseCode)" :loading="isGeneratingSolution" @click="generateOriginalExerciseSolution" />
+                          </template>
+                        </v-tooltip>
+                        <v-tooltip v-if="selectedExerciseVersion === 0 && hasExerciseSolutions(activeExerciseCode)" text="Eliminar todas las soluciones" location="bottom">
+                          <template #activator="{ props }">
+                            <v-btn v-bind="props" icon="mdi-eraser" size="x-small" variant="tonal" color="error" rounded="circle" class="exercise-segment-icon" aria-label="Eliminar todas las soluciones" :disabled="isGeneratingSolution" :loading="isDeletingSolution" @click="deleteOriginalExerciseSolution" />
+                          </template>
+                        </v-tooltip>
+                        <v-tooltip v-if="selectedExerciseVersion > 0" text="Eliminar variante" location="bottom">
+                          <template #activator="{ props }">
+                            <v-btn v-bind="props" icon="mdi-delete-outline" size="x-small" variant="tonal" color="error" rounded="circle" class="exercise-segment-icon" aria-label="Eliminar variante" :disabled="isGeneratingSolution" @click="deleteSelectedVariation" />
+                          </template>
+                        </v-tooltip>
+                        <v-tooltip text="Compilar todas las vistas previas" location="bottom">
+                          <template #activator="{ props }">
+                            <v-btn v-bind="props" icon="mdi-refresh" size="x-small" rounded="circle" variant="text" color="primary" class="exercise-preview-compile exercise-segment-icon" aria-label="Compilar todas las vistas previas" :disabled="!activeExerciseCode.trim()" :loading="isCompiling" @click="refreshLatexRender" />
+                          </template>
+                        </v-tooltip>
+                        <span v-if="exerciseCompilationStatus !== 'ready'" class="exercise-compilation-status" role="status">{{ exerciseCompilationLabel }}</span>
+                        </div>
+                      </div>
+                      <div class="exercise-segment-metrics">
+                        <strong class="exercise-segment-metrics-title">{{ activeExerciseHasSections ? 'Total' : 'Ejercicio' }}</strong>
+                        <div class="exercise-metrics" :class="{ 'exercise-metrics-readonly': activeExerciseHasSections }">
+                          <template v-if="activeExerciseHasSections">
+                            <span><strong>{{ activeExerciseStructure.puntuacion }}</strong> pt</span>
+                            <span><strong>{{ activeExerciseStructure.tiempo }}</strong> min</span>
+                          </template>
+                          <template v-else>
+                            <label>Puntos<input :value="activeExerciseStructure.puntuacion" type="number" min="0" step="0.25" @change="updateExerciseMetric('puntuacion', $event.target.value)" /></label>
+                            <label>Minutos<input :value="activeExerciseStructure.tiempo" type="number" min="0" step="1" @change="updateExerciseMetric('tiempo', $event.target.value)" /></label>
+                          </template>
+                        </div>
+                        <v-spacer />
+                        <v-btn-toggle
+                          v-if="activeExerciseHasSections"
+                          :model-value="exercisePreviewMode"
+                          mandatory
+                          density="compact"
+                          class="exercise-preview-mode-toggle"
+                          aria-label="Modo de visualización del ejercicio"
+                          @update:model-value="setExercisePreviewMode"
+                        >
+                          <v-btn value="complete">Completo</v-btn>
+                          <v-btn value="segmented">Segmentado</v-btn>
+                        </v-btn-toggle>
+                      </div>
+                    </div>
+                    <div v-show="segmentedExercisePreview" class="exercise-preview-document exercise-preview-part-document">
+                      <ExercisePdfPreview
+                        v-if="mainPartPdfUrl(exercisePreviewTab === 'solution') || mainPartPdfUrl(false)"
+                        :src="mainPartPdfUrl(exercisePreviewTab === 'solution') || mainPartPdfUrl(false)"
+                        :title="exercisePreviewTab === 'statement' ? 'Enunciado común' : 'Enunciado común resuelto'"
+                        crop-bottom
+                      />
+                      <div v-else class="exercise-preview-empty compact">
+                        <v-icon icon="mdi-file-pdf-box" size="38" color="primary" />
+                        <p>Todavía no se ha compilado esta parte.</p>
+                      </div>
+                    </div>
+                    <div v-show="!segmentedExercisePreview" class="exercise-preview-document exercise-preview-complete-document">
+                      <ExercisePdfPreview
+                        v-if="activeCompletePdfUrl"
+                        :src="activeCompletePdfUrl"
+                        :title="exercisePreviewTab === 'statement' ? 'Ejercicio completo' : 'Ejercicio completo resuelto'"
+                        crop-bottom
+                      />
+                      <div v-else class="exercise-preview-empty compact">
+                        <v-icon icon="mdi-file-pdf-box" size="38" color="primary" />
+                        <p>Todavía no se ha compilado el ejercicio completo.</p>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article v-for="(apartado, apartadoIndex) in activeExerciseStructure.apartados" v-show="segmentedExercisePreview" :key="apartado.id || apartadoIndex" class="exercise-preview-block" :class="{ 'exercise-preview-block-content-active': exerciseContentTarget === apartadoIndex && exerciseEditorTab === 'contents' }">
+                    <div class="exercise-part-toolbar exercise-segment-actions">
+                      <strong class="exercise-part-label">{{ String.fromCharCode(97 + apartadoIndex) }}</strong>
+                      <v-spacer />
+                      <v-tooltip text="Seleccionar contenidos del apartado" location="bottom">
+                        <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-chart-donut-variant" size="x-small" rounded="circle" class="exercise-segment-icon" :variant="exerciseContentTarget === apartadoIndex && exerciseEditorTab === 'contents' ? 'flat' : 'tonal'" color="primary" :aria-label="`Seleccionar contenidos del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="selectExercisePartContents(apartadoIndex)" /></template>
+                      </v-tooltip>
+                      <v-tooltip text="Competencias (próximamente)" location="bottom">
+                        <template #activator="{ props }"><span v-bind="props"><v-btn icon="mdi-shield-star-outline" size="x-small" rounded="circle" class="exercise-segment-icon" variant="tonal" disabled aria-label="Seleccionar competencias" /></span></template>
+                      </v-tooltip>
+                      <v-tooltip v-if="!apartado.solucion" text="Generar solución de este apartado" location="bottom">
+                        <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-auto-fix" size="x-small" rounded="circle" class="exercise-segment-icon" variant="tonal" color="primary" :loading="isGeneratingPartSolution === apartadoIndex" :disabled="isGeneratingPartSolution !== null" :aria-label="`Generar solución del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="generateExercisePartSolution(apartadoIndex)" /></template>
+                      </v-tooltip>
+                      <v-tooltip v-else text="Eliminar solución de este apartado" location="bottom">
+                        <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-eraser" size="x-small" rounded="circle" class="exercise-segment-icon" variant="tonal" color="error" :aria-label="`Eliminar solución del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="deleteExercisePartSolution(apartadoIndex)" /></template>
+                      </v-tooltip>
+                    </div>
+                    <div class="exercise-part-metrics exercise-segment-metrics">
+                      <label>Puntos<input :value="apartado.puntuacion" type="number" min="0" step="0.25" @change="updateExerciseMetric('puntuacion', $event.target.value, apartadoIndex)" /></label>
+                      <label>Minutos<input :value="apartado.tiempo" type="number" min="0" step="1" @change="updateExerciseMetric('tiempo', $event.target.value, apartadoIndex)" /></label>
+                    </div>
+                    <div class="exercise-preview-document exercise-preview-part-document">
+                      <ExercisePdfPreview
+                        v-if="partPdfUrl(apartado, exercisePreviewTab === 'solution') || partPdfUrl(apartado, false)"
+                        :src="partPdfUrl(apartado, exercisePreviewTab === 'solution') || partPdfUrl(apartado, false)"
+                        :title="`Apartado ${String.fromCharCode(97 + apartadoIndex)}`"
+                        crop-bottom
+                      />
+                      <div v-else class="exercise-preview-empty compact"><v-icon icon="mdi-file-pdf-box" size="34" color="primary" /><p>PDF pendiente</p></div>
+                    </div>
+                  </article>
                 </div>
                 <footer class="exercise-preview-footer" :title="exerciseEditorCurriculumLabel">
                   <v-icon icon="mdi-chart-donut-variant" size="15" />
@@ -2726,7 +4454,7 @@ onBeforeUnmount(() => {
           </template>
         </section>
 
-        <section v-else-if="active === 'Documentos'" class="documents-page">
+        <section v-else-if="active === 'Documentos' && documentsTab === 'documents'" class="documents-page">
           <DocumentCreator
             ref="documentCreatorRef"
             :templates="templates"
@@ -2734,6 +4462,8 @@ onBeforeUnmount(() => {
             :concept-nodes="mathConceptNodes"
             :subject-selections="mathConceptSubjectSelections"
             :exercise-counts="activeMathExerciseCountByConcept"
+            :teacher-profile="teacherProfile"
+            :groups="groups"
             :compiler-base-url="compilerBaseUrl"
             :library-query="documentSearchQuery"
             @busy-change="isCompilingDocument = $event"
@@ -2741,7 +4471,7 @@ onBeforeUnmount(() => {
           />
         </section>
 
-        <section v-else-if="active === 'Plantillas'" class="templates-page">
+        <section v-else-if="active === 'Documentos' && documentsTab === 'templates'" class="templates-page">
           <input ref="templateFileInput" type="file" accept=".tex,text/x-tex,text/plain" hidden @change="importTemplateFile">
           <div class="templates-workspace">
             <aside class="template-list-pane" aria-label="Plantillas disponibles">
@@ -2757,14 +4487,14 @@ onBeforeUnmount(() => {
               </div>
             </aside>
             <section class="template-editor-pane" aria-label="Editor de plantilla">
-              <v-alert v-if="templatesError" type="error" variant="tonal" density="compact" class="template-editor-error">{{ templatesError }}</v-alert>
               <template v-if="isEditingTemplate">
                 <div class="template-editor-fields">
                   <v-text-field v-model="templateEditor.nombre" label="Nombre" density="compact" variant="outlined" hide-details />
                   <v-textarea v-model="templateEditor.descripcion" label="Descripción" rows="2" max-rows="4" auto-grow density="compact" variant="outlined" hide-details />
                 </div>
                 <v-alert density="compact" variant="tonal" color="primary" icon="mdi-form-textbox" class="template-metadata-help">
-                  Para que una plantilla aparezca en «Documentos», debe declarar al comienzo un comentario <code>% neope:document</code> y un comentario <code>% neope:field</code> por cada argumento del formulario. Las plantillas nuevas incluyen un ejemplo editable. Temporalmente, los comandos <code>\includegraphics</code> y <code>\epsfig</code> se omiten al enviarla al compilador.
+                  Marca los argumentos del encabezado con comentarios como <code>%% grupo %%</code>, <code>%% asignatura %%</code>, <code>%% título %%</code> o <code>%% fecha %%</code>. Si una línea contiene varios argumentos, enuméralos en el mismo orden, por ejemplo <code>%% grupo, título, fecha %%</code>.
+                  Los entornos y comandos opcionales del ejercicio solo se insertarán cuando estén definidos por la propia plantilla.
                 </v-alert>
                 <div ref="templateEditorHost" class="latex-editor-shell template-code-editor" />
               </template>
@@ -2774,11 +4504,10 @@ onBeforeUnmount(() => {
         </section>
 
         <section v-else-if="active === 'Grupo'" class="gradebook-page">
-          <v-alert v-if="firestoreError" type="error" variant="tonal" density="compact" class="gradebook-error">{{ firestoreError }}</v-alert>
           <StudentDetail
             v-if="selectedCareerGroup && selectedStudentDetail"
             :student="selectedStudentDetail"
-            :group-id="selectedCareerGroup.id"
+            :group="selectedCareerGroup"
             :configuration-mode="studentDetailConfigurationMode"
           />
           <component
@@ -2800,7 +4529,12 @@ onBeforeUnmount(() => {
         <section v-else class="calendar-workspace">
           <div v-if="calendarMode === 'month'" class="calendar-grid" :style="{ '--calendar-weeks': calendarDays.length / 7 }">
             <div v-for="day in ['L', 'M', 'X', 'J', 'V', 'S', 'D']" :key="day" class="calendar-weekday">{{ day }}</div>
-            <div v-for="(day, index) in calendarDays" :key="index" class="calendar-day" :class="{ 'calendar-day-empty': !day, 'calendar-day-today': isToday(day), 'calendar-weekend': index % 7 >= 5 }"><span class="calendar-day-number">{{ day }}</span></div>
+            <div v-for="(day, index) in calendarDays" :key="index" class="calendar-day" :class="{ 'calendar-day-empty': !day, 'calendar-day-today': isToday(day), 'calendar-weekend': index % 7 >= 5 }" :style="day ? { backgroundColor: displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))?.color } : undefined">
+              <span class="calendar-day-number">{{ day }}</span>
+              <span v-if="day && displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))?.mensaje" class="calendar-day-message">{{ displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day)).mensaje }}</span>
+              <span v-if="day && displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))?.lectivo === false" class="calendar-day-status">No lectivo</span>
+              <span v-if="day && displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))?.cursos?.length" class="calendar-day-courses">{{ calendarTypeCourses(displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))) }}</span>
+            </div>
           </div>
           <div v-else-if="calendarMode === 'week'" class="week-calendar">
             <div class="week-header">
@@ -2808,26 +4542,62 @@ onBeforeUnmount(() => {
               <div v-for="date in weekDays" :key="date.toISOString()" class="week-day" :class="{ 'week-day-today': isTodayDate(date) }">
                 <span>{{ new Intl.DateTimeFormat('es-ES', { weekday: 'short' }).format(date) }}</span>
                 <strong v-if="!scheduleConfigMode" class="week-day-number">{{ date.getDate() }}</strong>
+                <span v-if="displayedSchoolCalendarEntry(date)" class="week-day-calendar-note">
+                  <small v-if="displayedSchoolCalendarEntry(date).mensaje">{{ displayedSchoolCalendarEntry(date).mensaje }}</small>
+                  <small>{{ displayedSchoolCalendarEntry(date).lectivo === false ? 'No lectivo' : 'Lectivo' }}</small>
+                  <small v-if="displayedSchoolCalendarEntry(date).cursos?.length">{{ calendarTypeCourses(displayedSchoolCalendarEntry(date)) }}</small>
+                </span>
               </div>
             </div>
             <div v-for="(module, moduleIndex) in scheduleModules" :key="module.start" class="schedule-row" :class="{ 'schedule-break': module.break }" :style="{ '--duration': module.minutes }">
               <div class="schedule-time"><span class="schedule-start">{{ module.start }}</span><span v-if="moduleIndex === scheduleModules.length - 1" class="schedule-end">{{ module.end }}</span></div>
-              <button
+              <div
                 v-for="(date, dayIndex) in weekDays"
                 :key="`${module.start}-${date.toISOString()}`"
-                type="button"
                 class="schedule-cell"
-                :class="{ 'schedule-cell-configurable': scheduleConfigMode, 'schedule-cell-filled': scheduleBlock(dayIndex, moduleIndex) }"
-                :style="scheduleBlock(dayIndex, moduleIndex) ? { '--schedule-color': scheduleBlock(dayIndex, moduleIndex).color } : undefined"
+                :class="{
+                  'schedule-cell-configurable': scheduleConfigMode,
+                  'schedule-cell-filled': scheduleBlock(dayIndex, moduleIndex),
+                  'schedule-cell-copy-source': isScheduleCopySource(dayIndex, moduleIndex),
+                  'schedule-cell-copy-target': scheduleClipboard && !isScheduleCopySource(dayIndex, moduleIndex),
+                }"
+                :style="scheduleCellStyle(scheduleBlock(dayIndex, moduleIndex))"
                 :aria-label="scheduleConfigMode ? `Configurar ${new Intl.DateTimeFormat('es-ES', { weekday: 'long' }).format(date)}, ${module.start}` : undefined"
-                @click="openScheduleDialog(dayIndex, moduleIndex)"
+                :role="scheduleConfigMode ? 'button' : undefined"
+                :tabindex="scheduleConfigMode ? 0 : -1"
+                @click="handleScheduleCellClick(dayIndex, moduleIndex)"
+                @keydown.enter.prevent="handleScheduleCellClick(dayIndex, moduleIndex)"
+                @keydown.space.prevent="handleScheduleCellClick(dayIndex, moduleIndex)"
               >
                 <span v-if="scheduleBlock(dayIndex, moduleIndex)" class="schedule-block">
                   <span class="schedule-block-top"><strong>{{ scheduleBlock(dayIndex, moduleIndex).course }}</strong><small>{{ scheduleBlock(dayIndex, moduleIndex).classroom }}</small></span>
-                  <span class="schedule-block-subject">{{ scheduleBlock(dayIndex, moduleIndex).subject }}</span>
+                  <span
+                    v-if="scheduleBlock(dayIndex, moduleIndex).type !== 'nonTeaching' && scheduleBlock(dayIndex, moduleIndex).subject && scheduleBlock(dayIndex, moduleIndex).subject !== scheduleBlock(dayIndex, moduleIndex).course"
+                    class="schedule-block-subject"
+                  >{{ scheduleBlock(dayIndex, moduleIndex).subject }}</span>
+                </span>
+                <span v-if="scheduleConfigMode" class="schedule-cell-actions">
+                  <button
+                    v-if="scheduleBlock(dayIndex, moduleIndex)"
+                    type="button"
+                    class="schedule-cell-action"
+                    :class="{ 'schedule-cell-action-active': isScheduleCopySource(dayIndex, moduleIndex) }"
+                    title="Copiar segmento"
+                    aria-label="Copiar segmento"
+                    @click.stop="copyScheduleBlock(dayIndex, moduleIndex)"
+                  ><v-icon icon="mdi-content-copy" size="13" /></button>
+                  <button
+                    v-if="scheduleBlock(dayIndex, moduleIndex)"
+                    type="button"
+                    class="schedule-cell-action schedule-cell-action-clear"
+                    title="Limpiar segmento"
+                    aria-label="Limpiar segmento"
+                    :disabled="isSavingSchedule"
+                    @click.stop="clearScheduleCell(dayIndex, moduleIndex)"
+                  ><v-icon icon="mdi-close" size="14" /></button>
                 </span>
                 <span v-if="currentTimePosition(date, module)" class="current-time-line" :style="{ top: currentTimePosition(date, module) }" aria-hidden="true" />
-              </button>
+              </div>
             </div>
           </div>
           <div v-else class="academic-calendar">
@@ -2835,7 +4605,9 @@ onBeforeUnmount(() => {
               <h2>{{ new Intl.DateTimeFormat('es-ES', { month: 'long' }).format(month) }}</h2>
               <div class="academic-weekdays"><span v-for="day in ['L', 'M', 'X', 'J', 'V', 'S', 'D']" :key="day">{{ day }}</span></div>
               <div class="academic-days">
-                <span v-for="(day, index) in getMonthDays(month)" :key="index" :class="{ 'academic-empty': !day, 'academic-weekend': index % 7 >= 5, 'academic-today': day && month.getMonth() === new Date().getMonth() && month.getFullYear() === new Date().getFullYear() && day === new Date().getDate() }">{{ day }}</span>
+                <button v-for="(day, index) in getMonthDays(month)" :key="index" type="button" class="academic-day" :class="{ 'academic-empty': !day, 'academic-weekend': index % 7 >= 5, 'academic-today': day && month.getMonth() === new Date().getMonth() && month.getFullYear() === new Date().getFullYear() && day === new Date().getDate(), 'academic-day-configurable': courseCalendarConfigMode }" :style="academicCalendarDayStyle(month, day)" :disabled="!day || !courseCalendarConfigMode || new Date(month.getFullYear(), month.getMonth(), day).getDay() === 0 || new Date(month.getFullYear(), month.getMonth(), day).getDay() === 6" :title="academicCalendarEntry(month, day)?.mensaje || undefined" @click="openCourseCalendarDialog(month, day)">
+                  <span>{{ day }}</span>
+                </button>
               </div>
             </section>
           </div>
@@ -2888,7 +4660,6 @@ onBeforeUnmount(() => {
         <v-card-text class="px-6 pb-2">
           <p>Se eliminarán el ejercicio, todas sus variantes, sus PDF, los archivos adjuntos y sus referencias en el mapa de conceptos.</p>
           <p class="text-body-2 text-medium-emphasis mt-3">Esta acción no se puede deshacer.</p>
-          <v-alert v-if="exerciseDeleteError" type="error" variant="tonal" density="compact" class="mt-4">{{ exerciseDeleteError }}</v-alert>
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
           <v-spacer />
@@ -2903,25 +4674,87 @@ onBeforeUnmount(() => {
         <v-card-title class="pt-5 px-6">Configurar segmento horario</v-card-title>
         <v-card-text class="px-6 pb-2">
           <p class="text-body-2 text-medium-emphasis mb-5">Esta configuración se aplicará a este día y tramo horario en todas las semanas.</p>
-          <v-alert v-if="firestoreError" type="error" variant="tonal" density="compact" class="mb-4">{{ firestoreError }}</v-alert>
-          <v-select v-if="schedulePresets.length" v-model="selectedSchedulePreset" :items="schedulePresets" item-title="title" return-object clearable label="Reutilizar configuración" @update:model-value="applySchedulePreset">
-            <template #item="{ props, item }"><v-list-item v-bind="props" class="schedule-preset-option" :style="{ backgroundColor: item.raw.color }" /></template>
+          <v-text-field v-model="scheduleForm.course" label="Grupo" @update:model-value="updateScheduleCourse" />
+          <v-select
+            v-if="scheduleForm.course.trim()"
+            v-model="scheduleForm.subjectId"
+            :items="filteredScheduleSubjectOptions"
+            item-title="title"
+            item-value="value"
+            label="Asignatura"
+            clearable
+            @update:model-value="selectScheduleSubject"
+          />
+          <v-select
+            v-else
+            v-model="scheduleForm.nonTeachingKind"
+            :items="scheduleSegmentTypeOptions"
+            item-title="title"
+            item-value="value"
+            label="Tipo de segmento"
+            clearable
+            @update:model-value="selectScheduleSegmentType"
+          >
+            <template #selection="{ item }"><span class="color-dot mr-3" :style="{ background: item.raw.color }" />{{ item.title }}</template>
+            <template #item="{ props, item }"><v-list-item v-bind="props"><template #prepend><span class="color-dot mr-3" :style="{ background: item.raw.color }" /></template></v-list-item></template>
           </v-select>
-          <v-combobox v-model="scheduleForm.course" :items="courseOptions" label="Curso" />
-          <v-combobox v-model="scheduleForm.subject" :items="subjectOptions" label="Asignatura" />
-          <v-combobox v-model="scheduleForm.classroom" :items="classroomOptions" label="Aula" />
-          <v-select v-model="scheduleForm.color" :items="colorOptions" item-title="title" item-value="value" label="Color">
-            <template #selection="{ item }"><span class="color-dot mr-3" :style="{ background: item.raw.value }" />{{ item.title }}</template>
-            <template #item="{ props, item }"><v-list-item v-bind="props"><template #prepend><span class="color-dot mr-3" :style="{ background: item.raw.value }" /></template></v-list-item></template>
-          </v-select>
+          <v-text-field v-model="scheduleForm.classroom" label="Aula" />
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
           <v-btn color="error" variant="text" :disabled="isSavingSchedule || !hasSelectedScheduleBlock" @click="clearScheduleBlock">Limpiar segmento</v-btn>
           <v-spacer />
           <v-btn variant="text" :disabled="isSavingSchedule" @click="scheduleDialog = false">Cancelar</v-btn>
-          <v-btn color="primary" :loading="isSavingSchedule" :disabled="!scheduleForm.course || !scheduleForm.color" @click="saveScheduleBlock">Guardar</v-btn>
+          <v-btn color="primary" :loading="isSavingSchedule" :disabled="!canSaveScheduleBlock" @click="saveScheduleBlock">Guardar</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <v-dialog v-model="scheduleDeleteDialog" max-width="500">
+      <v-card>
+        <v-card-title class="pt-5 px-6">Eliminar segmento horario</v-card-title>
+        <v-card-text class="px-6 pb-2">
+          Este grupo ya tiene alumnos asignados. ¿Quieres eliminar este segmento del horario?
+        </v-card-text>
+        <v-card-actions class="px-6 pb-5">
+          <v-spacer />
+          <v-btn variant="text" @click="scheduleDeleteDialog = false">Cancelar</v-btn>
+          <v-btn color="error" variant="flat" :loading="isSavingSchedule" @click="scheduleDeleteDialog = false; performClearScheduleBlock()">Eliminar segmento</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="courseCalendarDialog" max-width="520">
+      <v-card>
+        <v-card-title class="pt-5 px-6">Configurar día lectivo</v-card-title>
+        <v-card-text class="px-6 pb-2">
+          <v-select v-if="courseCalendarPresets.length" v-model="selectedCourseCalendarPreset" :items="courseCalendarPresets" item-title="mensaje" return-object clearable label="Repetir configuración anterior" @update:model-value="applyCourseCalendarPreset">
+            <template #item="{ props, item }"><v-list-item v-bind="props"><template #prepend><span class="color-dot mr-3" :style="{ background: item.raw.color }" /></template></v-list-item></template>
+          </v-select>
+          <v-select v-model="courseCalendarForm.color" :items="schoolCalendarColorOptions" item-title="title" item-value="value" label="Color">
+            <template #selection="{ item }"><span class="color-dot mr-3" :style="{ background: item.raw.value }" />{{ item.title }}</template>
+            <template #item="{ props, item }"><v-list-item v-bind="props"><template #prepend><span class="color-dot mr-3" :style="{ background: item.raw.value }" /></template></v-list-item></template>
+          </v-select>
+          <v-switch v-model="courseCalendarForm.lectivo" color="primary" label="Día lectivo" hide-details class="mb-2" />
+          <v-text-field v-model="courseCalendarForm.mensaje" label="Mensaje corto" placeholder="Inicio de curso" clearable />
+          <v-select v-model="courseCalendarForm.cursos" :items="academicCalendarCourseOptions" item-title="title" item-value="value" label="Cursos" multiple chips closable-chips hint="Selecciona uno o varios cursos" persistent-hint />
+        </v-card-text>
+        <v-card-actions class="px-6 pb-5">
+          <v-btn color="error" variant="text" :disabled="!schoolCalendar.days?.[selectedCourseCalendarDate]" @click="clearCourseCalendarDay">Limpiar día</v-btn>
+          <v-spacer />
+          <v-btn variant="text" @click="courseCalendarDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" variant="flat" :disabled="!courseCalendarForm.color" @click="saveCourseCalendarDay">Guardar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <AppErrorToast />
+
+    <v-snackbar v-model="exerciseCompilerErrorSnackbar" location="bottom" color="error" timeout="-1" class="exercise-error-snackbar">
+      <div class="exercise-error-snackbar-message">{{ compilerError }}</div>
+      <template #actions>
+        <v-btn variant="text" size="small" @click="copyCompilerError">Copiar</v-btn>
+        <v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar error de compilación" @click="exerciseCompilerErrorSnackbar = false" />
+      </template>
+    </v-snackbar>
   </v-app>
 </template>

@@ -42,17 +42,28 @@ function layoutItems() {
   const itemWidth = (width - props.gap * (columns - 1)) / columns
   const columnHeights = Array(columns).fill(0)
 
+  const layoutEntries = []
   props.items.forEach((item) => {
     const element = itemElements.get(props.itemKey(item))
     if (!element) return
 
-    element.style.width = `${itemWidth}px`
+    const widthValue = `${itemWidth}px`
+    if (element.style.width !== widthValue) element.style.width = widthValue
+    layoutEntries.push({ element })
+  })
+
+  // Agrupar todas las escrituras, después todas las lecturas y finalmente las
+  // transformaciones evita forzar un layout completo por cada tarjeta.
+  layoutEntries.forEach((entry) => {
+    entry.height = entry.element.offsetHeight
+  })
+  layoutEntries.forEach(({ element, height: itemHeight }) => {
     const shortestColumn = columnHeights.indexOf(Math.min(...columnHeights))
     const x = shortestColumn * (itemWidth + props.gap)
     const y = columnHeights[shortestColumn]
     element.style.transform = `translate3d(${x}px, ${y}px, 0)`
     element.style.visibility = 'visible'
-    columnHeights[shortestColumn] += element.offsetHeight + props.gap
+    columnHeights[shortestColumn] += itemHeight + props.gap
   })
 
   containerHeight.value = Math.max(0, ...columnHeights) - (props.items.length ? props.gap : 0)
@@ -66,6 +77,7 @@ function scheduleLayout() {
 function setItemElement(item, element) {
   const key = props.itemKey(item)
   const previous = itemElements.get(key)
+  if (previous === element) return
   if (previous && previous !== element) itemObserver?.unobserve(previous)
   if (!element) {
     itemElements.delete(key)

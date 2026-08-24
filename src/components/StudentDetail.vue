@@ -1,10 +1,11 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { loadStudentIdentities, saveStudentIdentities } from '../services/localStudentIdentity'
+import { loadStudentIdentitiesForGroup, saveStudentIdentities } from '../services/localStudentIdentity'
+import { showAppErrorToast } from '../composables/useAppErrorToast'
 
 const props = defineProps({
   student: { type: Object, required: true },
-  groupId: { type: String, required: true },
+  group: { type: Object, required: true },
   configurationMode: { type: Boolean, default: false },
 })
 
@@ -13,6 +14,9 @@ const identity = ref({ id: '', nombre: '', nombreCorto: '', foto: '', repetidor:
 const isLoading = ref(true)
 const isSaving = ref(false)
 const error = ref('')
+watch(error, (message) => {
+  if (message) showAppErrorToast(message)
+})
 const photoDragActive = ref(false)
 let ready = false
 let saveSequence = 0
@@ -35,7 +39,7 @@ async function persist() {
   isSaving.value = true
   error.value = ''
   try {
-    await saveStudentIdentities(props.groupId, [{ ...identity.value }])
+    await saveStudentIdentities(props.group.id, [{ ...identity.value }], { preserveEmpty: false })
     if (sequence === saveSequence) emit('saved', { ...identity.value })
   } catch (cause) {
     error.value = 'No se han podido guardar los datos en este dispositivo.'
@@ -49,7 +53,7 @@ async function load() {
   isLoading.value = true
   ready = false
   try {
-    const stored = await loadStudentIdentities(props.groupId)
+    const stored = await loadStudentIdentitiesForGroup(props.group)
     applyStudent({ ...props.student, ...(stored.get(props.student.id) || {}) })
   } catch (cause) {
     applyStudent(props.student)
@@ -84,7 +88,7 @@ function startPhotoDrag() { if (props.configurationMode) photoDragActive.value =
 
 function clearPhoto() { identity.value.foto = '' }
 
-watch(() => [props.student, props.groupId], load, { immediate: true, deep: true })
+watch(() => [props.student, props.group], load, { immediate: true, deep: true })
 watch(identity, persist, { deep: true })
 
 defineExpose({ persist })
@@ -92,7 +96,6 @@ defineExpose({ persist })
 
 <template>
   <div class="student-detail-view">
-    <v-alert v-if="error" type="error" variant="tonal" density="compact" class="student-detail-error">{{ error }}</v-alert>
     <div class="student-detail-grid">
       <v-card class="student-detail-card" variant="flat">
         <v-card-item>
