@@ -4,6 +4,9 @@ const IDENTITY_STORE = 'student-identities'
 const KEY_STORE = 'crypto-keys'
 const IDENTITY_KEY_ID = 'student-identities-v1'
 const GLOBAL_IDENTITY_SCOPE = '__teacher-students__'
+const TRANSFER_FORMAT = 'neope-private-students'
+const TRANSFER_VERSION = 1
+const TRANSFER_KDF_ITERATIONS = 310_000
 const DEVELOPMENT_PORTRAIT_SHEET = '/dev-fixtures/student-portraits.png'
 const DEVELOPMENT_IDENTITIES = Object.freeze([
   ['ALONSO MARTÍN, Lucía', 'Lucía'],
@@ -46,6 +49,39 @@ const DEVELOPMENT_IDENTITIES_4ESO_A = Object.freeze([
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
+
+function bytesToBase64(value) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
+  }
+  return btoa(binary)
+}
+
+function base64ToBytes(value) {
+  const binary = atob(String(value || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return bytes
+}
+
+async function transferKey(passphrase, salt, usages) {
+  const material = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(passphrase),
+    'PBKDF2',
+    false,
+    ['deriveKey'],
+  )
+  return crypto.subtle.deriveKey({
+    name: 'PBKDF2',
+    hash: 'SHA-256',
+    salt,
+    iterations: TRANSFER_KDF_ITERATIONS,
+  }, material, { name: 'AES-GCM', length: 256 }, false, usages)
+}
 
 function requestResult(request) {
   return new Promise((resolve, reject) => {
@@ -393,4 +429,98 @@ export async function deleteStudentIdentities(groupId, studentIds) {
 export async function deleteStudentIdentitiesForGroup(group, studentIds) {
   const groupIds = studentIdentityGroupIds(group)
   await Promise.all(groupIds.map((groupId) => deleteStudentIdentities(groupId, studentIds)))
+}
+
+/**
+ * Crea un archivo portable cifrado con una contraseña de transferencia.
+ * El contenido se descifra únicamente en este dispositivo y vuelve a cifrarse
+ * antes de salir del navegador; nunca se envía a Firebase.
+ */
+export async function exportStudentIdentityBundle(passphrase) {
+  if (typeof passphrase !== 'string' || passphrase.length < 8) {
+    throw new Error('La contraseña de transferencia debe tener al menos 8 caracteres.')
+  }
+  const database = await openDatabase()
+  try {
+    const localKey = await getEncryptionKey(database)
+    const transaction = database.transaction(IDENTITY_STORE, 'readonly')
+    const records = await requestResult(transaction.objectStore(IDENTITY_STORE).getAll())
+    await transactionDone(transaction)
+    const identities = await Promise.all(records.map(async (record) => ({
+      key: record.key,
+      groupId: record.groupId,
+      studentId: record.studentId,
+      updatedAt: record.updatedAt || null,
+      privateData: await decryptIdentity(localKey, record),
+    })))
+    const payload = encoder.encode(JSON.stringify({ exportedAt: new Date().toISOString(), identities }))
+    const salt = crypto.getRandomValues(new Uint8Array(16))
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const key = await transferKey(passphrase, salt, ['encrypt'])
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: encoder.encode(`${TRANSFER_FORMAT}:${TRANSFER_VERSION}`) },
+      key,
+      payload,
+    )
+    return JSON.stringify({
+      format: TRANSFER_FORMAT,
+      version: TRANSFER_VERSION,
+      kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: TRANSFER_KDF_ITERATIONS, salt: bytesToBase64(salt) },
+      cipher: { name: 'AES-GCM', iv: bytesToBase64(iv) },
+      data: bytesToBase64(ciphertext),
+    }, null, 2)
+  } finally {
+    database.close()
+  }
+}
+
+/** Importa un archivo portable y lo cifra de nuevo con la clave local no exportable. */
+export async function importStudentIdentityBundle(serialized, passphrase) {
+  if (typeof passphrase !== 'string' || passphrase.length < 8) {
+    throw new Error('Introduce la contraseña de transferencia.')
+  }
+  let bundle
+  try {
+    bundle = JSON.parse(String(serialized || ''))
+  } catch {
+    throw new Error('El archivo de datos locales no es válido.')
+  }
+  if (bundle?.format !== TRANSFER_FORMAT || bundle?.version !== TRANSFER_VERSION) {
+    throw new Error('El archivo no pertenece a una versión compatible de Neope.')
+  }
+  let payload
+  try {
+    const salt = base64ToBytes(bundle.kdf?.salt)
+    const iv = base64ToBytes(bundle.cipher?.iv)
+    const key = await transferKey(passphrase, salt, ['decrypt'])
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv, additionalData: encoder.encode(`${TRANSFER_FORMAT}:${TRANSFER_VERSION}`) },
+      key,
+      base64ToBytes(bundle.data),
+    )
+    payload = JSON.parse(decoder.decode(plaintext))
+  } catch {
+    throw new Error('No se ha podido descifrar el archivo. Comprueba la contraseña.')
+  }
+  const identities = Array.isArray(payload?.identities) ? payload.identities : []
+  const database = await openDatabase()
+  try {
+    const localKey = await getEncryptionKey(database)
+    const encrypted = await Promise.all(identities
+      .filter((record) => record?.groupId && record?.studentId && record?.privateData && typeof record.privateData === 'object')
+      .map(async (record) => ({
+        key: recordKey(record.groupId, record.studentId),
+        groupId: record.groupId,
+        studentId: record.studentId,
+        ...(await encryptIdentity(localKey, { id: record.studentId, ...record.privateData })),
+        updatedAt: record.updatedAt || new Date().toISOString(),
+      })))
+    const transaction = database.transaction(IDENTITY_STORE, 'readwrite')
+    const store = transaction.objectStore(IDENTITY_STORE)
+    encrypted.forEach((record) => store.put(record))
+    await transactionDone(transaction)
+    return { records: encrypted.length, students: new Set(encrypted.map((record) => record.studentId)).size }
+  } finally {
+    database.close()
+  }
 }

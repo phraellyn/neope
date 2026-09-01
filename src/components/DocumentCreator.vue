@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { collection, deleteDoc, doc, getDocs, setDoc } from 'firebase/firestore'
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
-import { db, storage } from '../services/firebase'
+import { auth, db, storage } from '../services/firebase'
 import { mathSubjects } from '../data/mathCurriculum'
 import ExerciseCurriculumPicker from './ExerciseCurriculumPicker.vue'
 import ExercisePdfPreview from './ExercisePdfPreview.vue'
@@ -461,12 +461,35 @@ function activePdfAspectRatio(exercise) {
 }
 
 function activeThumbnail(exercise) {
+  return activeThumbnailMetadata(exercise)?.url || ''
+}
+
+function activeThumbnailMetadata(exercise) {
   const version = activeVersion(exercise)
   const thumbnail = version?.preview?.enunciado
-  if (!thumbnail?.url) return ''
+  if (!thumbnail?.url) return null
   return !thumbnail.sourceUrl || thumbnail.sourceUrl === version?.pdf?.enunciado
-    ? thumbnail.url
-    : ''
+    ? thumbnail
+    : null
+}
+
+function activeThumbnailAspectRatio(exercise) {
+  const thumbnail = activeThumbnailMetadata(exercise)
+  const storedRatio = Number(thumbnail?.aspectRatio) || 0
+  if (storedRatio > 0) return storedRatio
+  const width = Number(thumbnail?.width) || 0
+  const height = Number(thumbnail?.height) || 0
+  if (width > 0 && height > 0) return width / height
+  return activePdfAspectRatio(exercise)
+}
+
+function activeThumbnailStyle(exercise) {
+  const aspectRatio = activeThumbnailAspectRatio(exercise)
+  return aspectRatio > 0 ? { aspectRatio: String(aspectRatio) } : undefined
+}
+
+function revealDocumentExerciseThumbnail(event) {
+  event.currentTarget?.parentElement?.classList.add('is-loaded')
 }
 
 function activeVersionAuthors(exercise) {
@@ -1397,7 +1420,11 @@ async function goToVisitedStep(step) {
 async function compilerRequest(path, options = {}) {
   let response
   try {
-    response = await fetch(`${props.compilerBaseUrl}${path}`, options)
+    const token = await auth.currentUser?.getIdToken()
+    response = await fetch(`${props.compilerBaseUrl}${path}`, {
+      ...options,
+      headers: { ...(options.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
   } catch (error) {
     throw new Error(`No se ha podido conectar con el compilador LaTeX (${path}): ${error?.message || 'error de red'}`)
   }
@@ -1939,7 +1966,18 @@ defineExpose({
                       />
                     </header>
                     <div class="document-exercise-card-pdf">
-                      <img v-if="activeThumbnail(exercise)" :src="activeThumbnail(exercise)" :alt="`Enunciado del ejercicio ${exercise.id}`" class="document-exercise-card-thumbnail" loading="lazy" decoding="async">
+                      <div v-if="activeThumbnail(exercise)" class="document-exercise-card-thumbnail-frame" :style="activeThumbnailStyle(exercise)">
+                        <img
+                          :src="activeThumbnail(exercise)"
+                          :alt="`Enunciado del ejercicio ${exercise.id}`"
+                          :width="activeThumbnailMetadata(exercise)?.width || undefined"
+                          :height="activeThumbnailMetadata(exercise)?.height || undefined"
+                          class="document-exercise-card-thumbnail"
+                          loading="lazy"
+                          decoding="async"
+                          @load="revealDocumentExerciseThumbnail"
+                        >
+                      </div>
                       <ExercisePdfPreview v-else-if="activePdf(exercise)" :src="activePdf(exercise)" :aspect-ratio="activePdfAspectRatio(exercise)" :title="`Enunciado de la versión ${selectedVersionFor(exercise)} del ejercicio ${exercise.id}`" thumbnail />
                       <div v-else class="document-exercise-no-pdf"><v-icon icon="mdi-file-pdf-box" size="32" /><span>PDF pendiente</span></div>
                     </div>
@@ -2272,7 +2310,13 @@ defineExpose({
 .document-exercise-add-actions :deep(.v-btn) { width: 25px; height: 25px; box-shadow: none !important; }
 .document-exercise-card-header :deep(.exercise-variant-bar) { width: 100%; border-top: 1px solid #d4e0ed; border-bottom: 0; background: #f3f7fc; }
 .document-exercise-card-pdf { overflow: hidden; background: #fff; }
-.document-exercise-card-thumbnail { display: block; width: 100%; height: auto; margin: 0; }
+.document-exercise-card-thumbnail-frame { position: relative; width: 100%; min-height: 155px; overflow: hidden; background: #e8edf5; }
+.document-exercise-card-thumbnail-frame[style] { min-height: 0; }
+.document-exercise-card-thumbnail-frame::after { position: absolute; z-index: 0; inset: 0; background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.72) 50%, transparent 65%); content: ''; transform: translateX(-100%); animation: document-thumbnail-shimmer 1.25s ease-in-out infinite; }
+.document-exercise-card-thumbnail-frame.is-loaded::after { display: none; }
+.document-exercise-card-thumbnail { position: relative; z-index: 1; display: block; width: 100%; height: 100%; margin: 0; opacity: 0; background: #fff; object-fit: contain; transition: opacity .12s ease; }
+.document-exercise-card-thumbnail-frame.is-loaded .document-exercise-card-thumbnail { opacity: 1; }
+@keyframes document-thumbnail-shimmer { to { transform: translateX(100%); } }
 .document-exercise-card-pdf :deep(.exercise-pdf-preview) { min-height: 155px; }
 .document-exercise-card-pdf :deep(.exercise-pdf-preview.exercise-pdf-preview-loaded) { min-height: 0; }
 .document-exercise-no-pdf { display: flex; min-height: 155px; align-items: center; justify-content: center; flex-direction: column; color: #7d8da2; font-size: .72rem; }

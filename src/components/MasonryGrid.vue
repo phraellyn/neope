@@ -12,10 +12,13 @@ const props = defineProps({
 const container = ref(null)
 const containerHeight = ref(0)
 const itemElements = new Map()
+const itemColumns = new Map()
 let containerObserver = null
 let itemObserver = null
 let layoutFrame = 0
 let observedContainerWidth = 0
+let assignedColumnCount = 0
+let previousItemKeys = []
 
 function columnCount(containerWidth) {
   const viewportWidth = window.innerWidth
@@ -39,17 +42,26 @@ function layoutItems() {
   if (!width) return
 
   const columns = columnCount(width)
+  if (assignedColumnCount !== columns) {
+    itemColumns.clear()
+    assignedColumnCount = columns
+  }
   const itemWidth = (width - props.gap * (columns - 1)) / columns
   const columnHeights = Array(columns).fill(0)
+  const currentKeys = new Set(props.items.map((item) => props.itemKey(item)))
+  itemColumns.forEach((_, key) => {
+    if (!currentKeys.has(key)) itemColumns.delete(key)
+  })
 
   const layoutEntries = []
   props.items.forEach((item) => {
-    const element = itemElements.get(props.itemKey(item))
+    const key = props.itemKey(item)
+    const element = itemElements.get(key)
     if (!element) return
 
     const widthValue = `${itemWidth}px`
     if (element.style.width !== widthValue) element.style.width = widthValue
-    layoutEntries.push({ element })
+    layoutEntries.push({ key, element })
   })
 
   // Agrupar todas las escrituras, después todas las lecturas y finalmente las
@@ -57,13 +69,17 @@ function layoutItems() {
   layoutEntries.forEach((entry) => {
     entry.height = entry.element.offsetHeight
   })
-  layoutEntries.forEach(({ element, height: itemHeight }) => {
-    const shortestColumn = columnHeights.indexOf(Math.min(...columnHeights))
-    const x = shortestColumn * (itemWidth + props.gap)
-    const y = columnHeights[shortestColumn]
+  layoutEntries.forEach(({ key, element, height: itemHeight }) => {
+    let column = itemColumns.get(key)
+    if (!Number.isInteger(column) || column < 0 || column >= columns) {
+      column = columnHeights.indexOf(Math.min(...columnHeights))
+      itemColumns.set(key, column)
+    }
+    const x = column * (itemWidth + props.gap)
+    const y = columnHeights[column]
     element.style.transform = `translate3d(${x}px, ${y}px, 0)`
     element.style.visibility = 'visible'
-    columnHeights[shortestColumn] += itemHeight + props.gap
+    columnHeights[column] += itemHeight + props.gap
   })
 
   containerHeight.value = Math.max(0, ...columnHeights) - (props.items.length ? props.gap : 0)
@@ -88,10 +104,18 @@ function setItemElement(item, element) {
   scheduleLayout()
 }
 
-watch(() => props.items, async () => {
+watch(() => props.items, async (items) => {
+  const currentKeys = items.map((item) => props.itemKey(item))
+  const isAppend = previousItemKeys.length > 0
+    && currentKeys.length >= previousItemKeys.length
+    && previousItemKeys.every((key, index) => currentKeys[index] === key)
+  const isSame = currentKeys.length === previousItemKeys.length
+    && currentKeys.every((key, index) => previousItemKeys[index] === key)
+  if (!isAppend && !isSame) itemColumns.clear()
+  previousItemKeys = currentKeys
   await nextTick()
   scheduleLayout()
-}, { deep: false })
+}, { deep: false, immediate: true })
 
 onMounted(() => {
   itemObserver = new ResizeObserver(() => scheduleLayout())

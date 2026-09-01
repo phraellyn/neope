@@ -1,5 +1,7 @@
 <script setup>
 import { ref, watch } from 'vue'
+import { httpsCallable } from 'firebase/functions'
+import { functions } from '../services/firebase'
 import { loadStudentIdentitiesForGroup, saveStudentIdentities } from '../services/localStudentIdentity'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 
@@ -18,6 +20,8 @@ watch(error, (message) => {
   if (message) showAppErrorToast(message)
 })
 const photoDragActive = ref(false)
+const resetAccessDialog = ref(false)
+const isResettingAccess = ref(false)
 let ready = false
 let saveSequence = 0
 
@@ -88,6 +92,19 @@ function startPhotoDrag() { if (props.configurationMode) photoDragActive.value =
 
 function clearPhoto() { identity.value.foto = '' }
 
+async function resetStudentPassword() {
+  isResettingAccess.value = true
+  try {
+    await httpsCallable(functions, 'resetStudentAccess')({ groupId: props.group.id, code: identity.value.id })
+    resetAccessDialog.value = false
+    showAppErrorToast('El acceso se ha restablecido. El alumno podrá elegir una contraseña nueva con el mismo código.', { color: 'success', copy: false })
+  } catch (cause) {
+    showAppErrorToast(cause?.message || 'No se ha podido restablecer el acceso del alumno.')
+  } finally {
+    isResettingAccess.value = false
+  }
+}
+
 watch(() => [props.student, props.group], load, { immediate: true, deep: true })
 watch(identity, persist, { deep: true })
 
@@ -106,6 +123,7 @@ defineExpose({ persist })
           <v-text-field v-model="identity.nombre" label="Nombre completo" placeholder="APELLIDO 1 APELLIDO 2, Nombre" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="comfortable" hide-details="auto" />
           <v-text-field v-model="identity.nombreCorto" label="Nombre corto" placeholder="Nombre para el aula" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="comfortable" hide-details="auto" />
           <div class="student-detail-code"><span>Código pseudónimo</span><code>{{ identity.id }}</code></div>
+          <v-btn v-if="configurationMode" variant="tonal" color="primary" prepend-icon="mdi-lock-reset" @click="resetAccessDialog = true">Restablecer contraseña de acceso</v-btn>
           <div class="student-detail-flags">
             <div class="student-detail-flags-title">Indicadores</div>
             <v-switch v-model="identity.repetidor" label="Repetidor" color="primary" :disabled="!configurationMode" hide-details density="compact" />
@@ -129,5 +147,11 @@ defineExpose({ persist })
       </v-card>
     </div>
     <div v-if="isSaving" class="student-detail-saving">Guardando en este dispositivo…</div>
+    <v-dialog v-model="resetAccessDialog" max-width="460">
+      <v-card title="Restablecer acceso del alumno">
+        <v-card-text>La contraseña actual dejará de funcionar. El alumno podrá elegir otra al entrar de nuevo con el código <strong>{{ identity.id }}</strong>.</v-card-text>
+        <v-card-actions><v-spacer /><v-btn variant="text" @click="resetAccessDialog = false">Cancelar</v-btn><v-btn color="primary" :loading="isResettingAccess" @click="resetStudentPassword">Restablecer</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>

@@ -1,39 +1,84 @@
 rules_version = '2';
 
-// DESARROLLO TEMPORAL — NO APTO PARA PRODUCCIÓN.
-//
-// Permite probar únicamente las colecciones que usa Neope antes de que exista
-// autenticación. Caduca el 21 de septiembre de 2026: sustituir estas reglas por
-// reglas basadas en `request.auth` antes de esa fecha o de cualquier despliegue
-// público posterior.
 service cloud.firestore {
   match /databases/{database}/documents {
-    function temporaryDevelopmentAccess() {
-      return request.time < timestamp.date(2026, 9, 21);
+    function signedIn() {
+      return request.auth != null;
     }
 
-    match /teachers/{document=**} {
-      allow read, write: if temporaryDevelopmentAccess();
+    function isTeacher() {
+      return signedIn() && request.auth.token.role == 'teacher';
     }
 
-    match /grupos/{document=**} {
-      allow read, write: if temporaryDevelopmentAccess();
+    function isAdmin() {
+      return isTeacher() && request.auth.token.admin == true;
     }
 
+    function isStudent() {
+      return signedIn() && request.auth.token.role == 'student' && request.auth.token.studentCode is string;
+    }
+
+    function ownsGroup(groupId) {
+      return isTeacher() && get(/databases/$(database)/documents/grupos/$(groupId)).data.teacherId == request.auth.uid;
+    }
+
+    function isOwnStudentRecord(groupId, code) {
+      return isStudent()
+        && request.auth.token.studentCode == code
+        && get(/databases/$(database)/documents/studentAccessCodes/$(code)).data.groupId == groupId
+        && get(/databases/$(database)/documents/studentAccessCodes/$(code)).data.authUid == request.auth.uid
+        && get(/databases/$(database)/documents/studentAccessCodes/$(code)).data.active == true;
+    }
+
+    match /teachers/{teacherId} {
+      allow read, create, update: if isAdmin() || (isTeacher() && request.auth.uid == teacherId);
+      allow delete: if isAdmin();
+      match /{document=**} {
+        allow read, write: if isAdmin() || (isTeacher() && request.auth.uid == teacherId);
+      }
+    }
+
+    match /grupos/{groupId} {
+      allow create: if isTeacher() && request.resource.data.teacherId == request.auth.uid;
+      allow read, delete: if isTeacher() && resource.data.teacherId == request.auth.uid;
+      allow update: if isTeacher()
+        && resource.data.teacherId == request.auth.uid
+        && request.resource.data.teacherId == request.auth.uid;
+      allow read: if isStudent()
+        && get(/databases/$(database)/documents/studentAccessCodes/$(request.auth.token.studentCode)).data.groupId == groupId
+        && get(/databases/$(database)/documents/studentAccessCodes/$(request.auth.token.studentCode)).data.active == true;
+
+      match /alumnos/{code} {
+        allow read, write: if ownsGroup(groupId);
+        allow read: if isOwnStudentRecord(groupId, code);
+      }
+    }
+
+    // El banco pedagógico es compartido entre profesores invitados. Los alumnos
+    // acceden a sus resultados mediante una función que devuelve solo su registro.
     match /ejercicios/{document=**} {
-      allow read, write: if temporaryDevelopmentAccess();
+      allow read, write: if isTeacher();
     }
-
     match /plantillas/{document=**} {
-      allow read, write: if temporaryDevelopmentAccess();
+      allow read, write: if isTeacher();
     }
-
     match /documentos/{document=**} {
-      allow read, write: if temporaryDevelopmentAccess();
+      allow read, write: if isTeacher();
+    }
+    match /especialidades/{document=**} {
+      allow read, write: if isTeacher();
     }
 
-    match /especialidades/{document=**} {
-      allow read, write: if temporaryDevelopmentAccess();
+    // Estas colecciones contienen tokens o trabajos internos y se administran
+    // exclusivamente desde Cloud Functions con el Admin SDK.
+    match /teacherInvitations/{document=**} {
+      allow read, write: if false;
+    }
+    match /studentAccessCodes/{document=**} {
+      allow read, write: if false;
+    }
+    match /compileJobs/{document=**} {
+      allow read, write: if false;
     }
   }
 }

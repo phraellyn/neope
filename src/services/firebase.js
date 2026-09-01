@@ -1,5 +1,6 @@
 import { getApp, getApps, initializeApp } from 'firebase/app'
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check'
+import { getAuth } from 'firebase/auth'
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
 import { getFunctions } from 'firebase/functions'
 import { getStorage } from 'firebase/storage'
@@ -45,7 +46,8 @@ try {
   firestore = getFirestore(firebaseApp)
 }
 
-// Servicios habilitados por ahora. Auth se añadirá cuando corresponda.
 export const db = firestore
+export const auth = getAuth(firebaseApp)
+auth.useDeviceLanguage()
 export const storage = getStorage(firebaseApp)
 export const functions = getFunctions(firebaseApp, 'europe-west1')

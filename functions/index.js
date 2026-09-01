@@ -1,10 +1,24 @@
 import { defineSecret } from 'firebase-functions/params'
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https'
 import { onDocumentCreated } from 'firebase-functions/v2/firestore'
-import { initializeApp } from 'firebase-admin/app'
+import { getApps, initializeApp } from 'firebase-admin/app'
 import { getFirestore } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
+import { getAuth } from 'firebase-admin/auth'
 import { randomUUID } from 'node:crypto'
+export {
+  acceptTeacherInvitation,
+  bootstrapAdminAccount,
+  claimStudentAccount,
+  createTeacherInvitation,
+  getStudentDashboard,
+  inspectStudentAccess,
+  inspectTeacherInvitation,
+  listTeacherInvitations,
+  resetStudentAccess,
+  revokeTeacherInvitation,
+  syncStudentAccessCodes,
+} from './auth.js'
 import { codeForCompiler, compilationArtifacts, sourceHash } from './exerciseCompilation.js'
 import { curriculumPromptContext } from './curriculumContext.js'
 import {
@@ -15,10 +29,16 @@ import {
   splitOverloadedCompactRows,
 } from './solutionLayout.js'
 
-initializeApp()
+if (!getApps().length) initializeApp()
 
 const adminDb = getFirestore()
 const adminStorage = getStorage()
+
+function requireTeacherAccess(request) {
+  if (!request.auth || request.auth.token.role !== 'teacher') {
+    throw new HttpsError('permission-denied', 'Esta operación requiere una cuenta de profesor.')
+  }
+}
 
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
 const compilerOrigin = 'http://51.170.57.25:5000'
@@ -60,6 +80,22 @@ export const compilerProxy = onRequest({
   maxInstances: 2,
   cors: false,
 }, async (request, response) => {
+  try {
+    const authorization = String(request.get('authorization') || '')
+    const match = authorization.match(/^Bearer\s+(.+)$/i)
+    if (!match) {
+      response.status(401).send('Autenticación necesaria')
+      return
+    }
+    const token = await getAuth().verifyIdToken(match[1])
+    if (token.role !== 'teacher') {
+      response.status(403).send('Acceso reservado al profesorado')
+      return
+    }
+  } catch {
+    response.status(401).send('Sesión no válida')
+    return
+  }
   const path = proxyPath(request, '/compiler-api')
   const allowedMethod = ['GET', 'POST', 'PUT', 'DELETE'].includes(request.method)
   if (!allowedMethod) {
@@ -254,6 +290,7 @@ export const saveExerciseThumbnail = onCall({
   invoker: 'public',
   enforceAppCheck: true,
 }, async (request) => {
+  requireTeacherAccess(request)
   const exerciseId = String(request.data?.exerciseId || '').trim()
   const sourceUrl = String(request.data?.sourceUrl || '').trim()
   const encodedImage = String(request.data?.imageBase64 || '')
@@ -311,6 +348,7 @@ export const queueExerciseCompilation = onCall({
   invoker: 'public',
   enforceAppCheck: true,
 }, async (request) => {
+  requireTeacherAccess(request)
   const exerciseId = String(request.data?.exerciseId || '').trim()
   const rawVariationIndex = request.data?.variationIndex
   const variationIndex = Number.isInteger(rawVariationIndex) && rawVariationIndex >= 0 ? rawVariationIndex : null
@@ -879,6 +917,7 @@ export const generateExerciseVariation = onCall({
   secrets: [openRouterApiKey],
   enforceAppCheck: true,
 }, async (request) => {
+  requireTeacherAccess(request)
   const startedAt = Date.now()
   const enunciado = typeof request.data?.enunciado === 'string' ? request.data.enunciado.trim() : ''
   const tags = Array.isArray(request.data?.tags) ? request.data.tags.filter((tag) => typeof tag === 'string').slice(0, 40) : []
@@ -1088,6 +1127,7 @@ export const generateExerciseSolution = onCall({
   secrets: [openRouterApiKey],
   enforceAppCheck: true,
 }, async (request) => {
+  requireTeacherAccess(request)
   const startedAt = Date.now()
   const enunciado = typeof request.data?.enunciado === 'string' ? request.data.enunciado.trim() : ''
   const model = typeof request.data?.model === 'string' ? request.data.model : 'google/gemini-3-flash-preview'

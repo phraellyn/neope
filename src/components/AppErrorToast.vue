@@ -1,7 +1,7 @@
 <script setup>
 import { useAppErrorToast } from '../composables/useAppErrorToast'
 
-const { visible, message, copyText } = useAppErrorToast()
+const { visible, message, copyText, color } = useAppErrorToast()
 
 async function copyError() {
   if (!copyText.value) return
@@ -21,7 +21,7 @@ async function copyError() {
 </script>
 
 <template>
-  <v-snackbar v-model="visible" location="bottom" color="error" timeout="-1" class="app-error-toast">
+  <v-snackbar v-model="visible" location="bottom" :color="color" timeout="-1" class="app-error-toast">
     <div class="app-error-toast-message">{{ message }}</div>
     <template #actions>
       <v-btn v-if="copyText" variant="text" size="small" @click="copyError">Copiar</v-btn>

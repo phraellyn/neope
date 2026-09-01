@@ -17,6 +17,7 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
+import { getIdTokenResult, onIdTokenChanged, signOut } from 'firebase/auth'
 import { deleteObject, getDownloadURL, listAll, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
@@ -28,7 +29,7 @@ import { tags } from '@lezer/highlight'
 import { latex } from 'codemirror-lang-latex'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
-import { db, functions, isAppCheckConfigured, storage } from './services/firebase'
+import { auth, db, functions, isAppCheckConfigured, storage } from './services/firebase'
 import MasonryGrid from './components/MasonryGrid.vue'
 import ExerciseCurriculumPicker from './components/ExerciseCurriculumPicker.vue'
 import ExerciseVariantSelector from './components/ExerciseVariantSelector.vue'
@@ -38,12 +39,15 @@ import Gradebook from './components/Gradebook.vue'
 import Classroom from './components/Classroom.vue'
 import StudentDetail from './components/StudentDetail.vue'
 import AppErrorToast from './components/AppErrorToast.vue'
+import AuthGateway from './components/AuthGateway.vue'
+import InvitationManager from './components/InvitationManager.vue'
+import LocalStudentDataTransfer from './components/LocalStudentDataTransfer.vue'
+import StudentPortal from './components/StudentPortal.vue'
 import { mathSubjects, normalizeHierarchySelection } from './data/mathCurriculum'
 import { saveStudentIdentities } from './services/localStudentIdentity'
 import { normalizeDisplayMathDelimiters } from './utils/latexNormalization'
 import { showAppErrorToast } from './composables/useAppErrorToast'
 import {
-  DEVELOPMENT_TEACHER_ID,
   currentAcademicYear,
   loadGroupsForTeacher,
   loadNonTeachingSchedule,
@@ -76,6 +80,14 @@ import {
 const ExercisePdfPreview = defineAsyncComponent(() => import('./components/ExercisePdfPreview.vue'))
 
 const drawer = ref(true)
+const authReady = ref(false)
+const authUser = ref(null)
+const authClaims = ref({})
+const authRole = computed(() => authClaims.value.role || '')
+const isAdministrator = computed(() => authClaims.value.admin === true)
+const currentTeacherId = computed(() => authRole.value === 'teacher' ? authUser.value?.uid || null : null)
+const currentUserName = computed(() => authUser.value?.displayName || authUser.value?.email || 'Profesor')
+const currentUserInitials = computed(() => currentUserName.value.split(/\s+/u).map((part) => part[0]).join('').slice(0, 2).toUpperCase())
 const active = ref('Ejercicios')
 const mathConceptConfigurationMode = ref(false)
 const mathConceptViewRef = ref(null)
@@ -119,7 +131,7 @@ const selectedCourseCalendarPreset = ref(null)
 const courseCalendarForm = ref(emptyCourseCalendarForm())
 const isSavingSchedule = ref(false)
 const firestoreError = ref('')
-const teacherDocument = doc(db, 'teachers', DEVELOPMENT_TEACHER_ID)
+const teacherDocument = computed(() => currentTeacherId.value ? doc(db, 'teachers', currentTeacherId.value) : null)
 const teacherProfile = ref({ centros: [] })
 const teacherProfileEditing = ref(false)
 const teacherProfileEditingCenterId = ref(null)
@@ -469,7 +481,7 @@ async function saveCourseCalendarDay() {
   const days = { ...(previous.days || {}), [selectedCourseCalendarDate.value]: typeId }
   schoolCalendar.value = { types, days }
   try {
-    await setDoc(teacherDocument, { calendariosEscolares: { [academicCalendarYear.value]: schoolCalendar.value } }, { merge: true })
+    await setDoc(teacherDocument.value, { calendariosEscolares: { [academicCalendarYear.value]: schoolCalendar.value } }, { merge: true })
     courseCalendarDialog.value = false
   } catch (error) {
     schoolCalendar.value = previous
@@ -485,7 +497,7 @@ async function clearCourseCalendarDay() {
   delete days[selectedCourseCalendarDate.value]
   schoolCalendar.value = { ...previous, days }
   try {
-    await setDoc(teacherDocument, { calendariosEscolares: { [academicCalendarYear.value]: schoolCalendar.value } }, { merge: true })
+    await setDoc(teacherDocument.value, { calendariosEscolares: { [academicCalendarYear.value]: schoolCalendar.value } }, { merge: true })
     courseCalendarDialog.value = false
   } catch (error) {
     schoolCalendar.value = previous
@@ -905,12 +917,35 @@ function searchExercisePdfAspectRatio(exercise) {
 }
 
 function searchExerciseThumbnail(exercise) {
+  return searchExerciseThumbnailMetadata(exercise)?.url || ''
+}
+
+function searchExerciseThumbnailMetadata(exercise) {
   const version = searchExerciseVersion(exercise)
   const thumbnail = version?.preview?.enunciado
-  if (!thumbnail?.url) return ''
+  if (!thumbnail?.url) return null
   return !thumbnail.sourceUrl || thumbnail.sourceUrl === version?.pdf?.enunciado
-    ? thumbnail.url
-    : ''
+    ? thumbnail
+    : null
+}
+
+function searchExerciseThumbnailAspectRatio(exercise) {
+  const thumbnail = searchExerciseThumbnailMetadata(exercise)
+  const storedRatio = Number(thumbnail?.aspectRatio) || 0
+  if (storedRatio > 0) return storedRatio
+  const width = Number(thumbnail?.width) || 0
+  const height = Number(thumbnail?.height) || 0
+  if (width > 0 && height > 0) return width / height
+  return searchExercisePdfAspectRatio(exercise)
+}
+
+function searchExerciseThumbnailStyle(exercise) {
+  const aspectRatio = searchExerciseThumbnailAspectRatio(exercise)
+  return aspectRatio > 0 ? { aspectRatio: String(aspectRatio) } : undefined
+}
+
+function revealSearchExerciseThumbnail(event) {
+  event.currentTarget?.parentElement?.classList.add('is-loaded')
 }
 
 const pendingExerciseThumbnailWrites = new Set()
@@ -1074,7 +1109,7 @@ async function uploadProfileImages(event) {
     for (const file of files) {
       if (!file.type.startsWith('image/')) continue
       const imageId = crypto.randomUUID()
-      const path = `teachers/test/profile/${center.id}/${imageId}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const path = `teachers/${currentTeacherId.value}/profile/${center.id}/${imageId}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
       const reference = storageRef(storage, path)
       await uploadBytes(reference, file, { contentType: file.type })
       const url = await getDownloadURL(reference)
@@ -1102,7 +1137,7 @@ async function saveTeacherProfile() {
   isSavingTeacherProfile.value = true
   teacherProfileError.value = ''
   try {
-    await setDoc(teacherDocument, { perfil: { centros: teacherProfile.value.centros } }, { merge: true })
+    await setDoc(teacherDocument.value, { perfil: { centros: teacherProfile.value.centros } }, { merge: true })
   } catch (error) {
     teacherProfileError.value = 'No se ha podido guardar el perfil del profesor.'
     console.error('Error al guardar el perfil del profesor:', error)
@@ -1378,7 +1413,11 @@ function setPartPreviewPdf(part, field, blob = null) {
 }
 
 async function compilerRequest(path, options = {}) {
-  const response = await fetch(`${compilerBaseUrl}${path}`, options)
+  const token = await auth.currentUser?.getIdToken()
+  const response = await fetch(`${compilerBaseUrl}${path}`, {
+    ...options,
+    headers: { ...(options.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  })
   if (response.ok) return response
   let details = {}
   try { details = await response.json() } catch { /* La API puede devolver texto plano. */ }
@@ -1489,7 +1528,10 @@ async function loadExercises({ reset = false } = {}) {
     } else {
       const byId = new Map(exercises.value.map((exercise) => [exercise.id, exercise]))
       loadedExercises.forEach((exercise) => byId.set(exercise.id, exercise))
-      exercises.value = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+      // La consulta ya llega ordenada por documentId y cada página comienza
+      // después de la anterior. Conservar el orden de inserción permite añadir
+      // la tanda al final sin recolocar las tarjetas que ya estaban visibles.
+      exercises.value = [...byId.values()]
     }
     lastExerciseDocument = snapshot.docs.at(-1) || lastExerciseDocument
     hasMoreExercises.value = snapshot.size === exerciseBatchSize
@@ -3001,7 +3043,7 @@ async function saveExercise(options = {}) {
     const data = {
       ...persistedStructure,
       id: reference.id,
-      ownerId: previousData.ownerId || DEVELOPMENT_TEACHER_ID,
+      ownerId: previousData.ownerId || currentTeacherId.value,
       visibility: previousData.visibility === 'public' ? 'public' : 'private',
       curriculum,
       tags: normalizeTags(exerciseEditor.value.tags),
@@ -3173,7 +3215,7 @@ function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
       ...(previous || {
         id: groupId,
         academicYear: currentAcademicYear(),
-        teacherId: DEVELOPMENT_TEACHER_ID,
+        teacherId: currentTeacherId.value,
         alumnos: [],
         evaluaciones: { estructura: [], resultados: {}, pesos: {} },
         disposicion: { rows: 4, cols: 5, aisles: [], asientos: [] },
@@ -3199,25 +3241,26 @@ function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
 async function loadTeacherSchedule() {
   firestoreError.value = ''
   try {
-    const snapshot = await getDoc(teacherDocument)
+    if (!teacherDocument.value || !currentTeacherId.value) return
+    const snapshot = await getDoc(teacherDocument.value)
     if (snapshot.exists()) {
       let teacherData = snapshot.data() || {}
       const storedCourses = teacherData?.carrera?.cursos || []
       teacherProfile.value = normalizeTeacherProfile(teacherData.perfil)
       await migrateLegacyStudentIdentities(storedCourses)
-      const migrated = await migrateLegacyGroups(snapshot, DEVELOPMENT_TEACHER_ID)
-      if (migrated) teacherData = (await getDoc(teacherDocument)).data() || teacherData
+      const migrated = await migrateLegacyGroups(snapshot, currentTeacherId.value)
+      if (migrated) teacherData = (await getDoc(teacherDocument.value)).data() || teacherData
       schoolCalendar.value = normalizeSchoolCalendar(
         teacherData?.calendariosEscolares?.[academicCalendarYear.value] || teacherData?.calendarioEscolar || {},
       )
     } else {
       teacherProfile.value = normalizeTeacherProfile()
       schoolCalendar.value = normalizeSchoolCalendar()
-      await setDoc(teacherDocument, { groupMigration: { schemaVersion: 2 } }, { merge: true })
+      await setDoc(teacherDocument.value, { groupMigration: { schemaVersion: 2 } }, { merge: true })
     }
     const [loadedGroups, nonTeachingSchedule] = await Promise.all([
-      loadGroupsForTeacher(DEVELOPMENT_TEACHER_ID, currentAcademicYear()),
-      loadNonTeachingSchedule(DEVELOPMENT_TEACHER_ID, currentAcademicYear()),
+      loadGroupsForTeacher(currentTeacherId.value, currentAcademicYear()),
+      loadNonTeachingSchedule(currentTeacherId.value, currentAcademicYear()),
     ])
     teacherGroups.value = loadedGroups
     scheduleBlocks.value = [
@@ -3306,10 +3349,10 @@ async function saveScheduleBlock() {
   try {
     const updatedGroups = groupsFromSchedule(scheduleBlocks.value)
     await Promise.all([
-      saveGroupMetadata(updatedGroups, DEVELOPMENT_TEACHER_ID),
+      saveGroupMetadata(updatedGroups, currentTeacherId.value),
       saveNonTeachingSchedule(
         scheduleBlocks.value.filter((item) => item.type === 'nonTeaching'),
-        DEVELOPMENT_TEACHER_ID,
+        currentTeacherId.value,
         currentAcademicYear(),
       ),
     ])
@@ -3318,7 +3361,7 @@ async function saveScheduleBlock() {
   } catch (error) {
     scheduleBlocks.value = previousBlocks
     firestoreError.value = 'No se ha podido guardar el horario en Firestore.'
-    console.error('Error al guardar teachers/test:', error)
+    console.error('Error al guardar el horario:', error)
   } finally {
     isSavingSchedule.value = false
   }
@@ -3375,10 +3418,10 @@ async function pasteScheduleBlock(dayIndex, moduleIndex) {
   try {
     const updatedGroups = groupsFromSchedule(scheduleBlocks.value)
     await Promise.all([
-      saveGroupMetadata(updatedGroups, DEVELOPMENT_TEACHER_ID),
+      saveGroupMetadata(updatedGroups, currentTeacherId.value),
       saveNonTeachingSchedule(
         scheduleBlocks.value.filter((item) => item.type === 'nonTeaching'),
-        DEVELOPMENT_TEACHER_ID,
+        currentTeacherId.value,
         currentAcademicYear(),
       ),
     ])
@@ -3418,10 +3461,10 @@ async function performClearScheduleBlock() {
   try {
     const updatedGroups = groupsFromSchedule(scheduleBlocks.value)
     await Promise.all([
-      saveGroupMetadata(updatedGroups, DEVELOPMENT_TEACHER_ID),
+      saveGroupMetadata(updatedGroups, currentTeacherId.value),
       saveNonTeachingSchedule(
         scheduleBlocks.value.filter((item) => item.type === 'nonTeaching'),
-        DEVELOPMENT_TEACHER_ID,
+        currentTeacherId.value,
         currentAcademicYear(),
       ),
     ])
@@ -3430,7 +3473,7 @@ async function performClearScheduleBlock() {
   } catch (error) {
     scheduleBlocks.value = previousBlocks
     firestoreError.value = 'No se ha podido eliminar el segmento en Firestore.'
-    console.error('Error al eliminar un segmento de teachers/test:', error)
+    console.error('Error al eliminar un segmento del horario:', error)
   } finally {
     isSavingSchedule.value = false
   }
@@ -3494,11 +3537,12 @@ function currentTimePosition(date, module) {
   return `${((nowInMinutes - start) / (end - start)) * 100}%`
 }
 
-const navigation = [
+const navigation = computed(() => [
   { title: 'Matemáticas', icon: 'mdi-function-variant' },
   { title: 'Ejercicios', icon: 'mdi-pencil-ruler' },
   { title: 'Documentos', icon: 'mdi-file-document-outline' },
-]
+  ...(isAdministrator.value ? [{ title: 'Invitaciones', icon: 'mdi-account-multiple-plus-outline' }] : []),
+])
 
 const groups = computed(() => {
   return teacherGroups.value
@@ -3613,7 +3657,11 @@ async function saveGradebook({ includeIdentities = false } = {}) {
       if (!updatedGroup) return false
       const previousGroup = teacherGroups.value.find((group) => group.id === updatedGroup.id)
       const previousStudentIds = (previousGroup?.alumnos || []).map((student) => student.id).filter(Boolean)
-      const savedGroup = await saveGroup(updatedGroup, previousStudentIds, DEVELOPMENT_TEACHER_ID)
+      const savedGroup = await saveGroup(updatedGroup, previousStudentIds, currentTeacherId.value)
+      const savedStudentIds = (savedGroup.alumnos || []).map((student) => student.id).filter(Boolean)
+      if (previousStudentIds.slice().sort().join('|') !== savedStudentIds.slice().sort().join('|')) {
+        await httpsCallable(functions, 'syncStudentAccessCodes')({ groupId: savedGroup.id, codes: savedStudentIds })
+      }
       teacherGroups.value = teacherGroups.value.map((group) => group.id === savedGroup.id ? savedGroup : group)
       if (includeIdentities) {
         try {
@@ -3706,12 +3754,70 @@ function saveActiveDocument() {
   documentCreatorRef.value?.save?.()
 }
 
+async function closeSession() {
+  if (gradebookDirty.value) await saveGradebook({ includeIdentities: gradebookConfigurationMode.value })
+  await signOut(auth)
+  active.value = 'Ejercicios'
+}
+
 let currentTimeInterval
+let stopAuthWatch = null
+let loadedTeacherUid = null
+
+async function initializeTeacherWorkspace() {
+  await Promise.all([
+    loadTeacherSchedule(),
+    loadExercises({ reset: true }),
+    loadMathConcepts(),
+    loadTemplates(),
+  ])
+}
+
+async function handleAuthenticatedUser(user) {
+  authUser.value = user
+  authClaims.value = {}
+  if (!user) {
+    loadedTeacherUid = null
+    teacherGroups.value = []
+    scheduleBlocks.value = []
+    exercises.value = []
+    templates.value = []
+    return
+  }
+  let token = await getIdTokenResult(user)
+  if (user.email?.toLowerCase() === 'carlosanchezcatala@gmail.com'
+    && (token.claims.role !== 'teacher' || token.claims.admin !== true)) {
+    await httpsCallable(functions, 'bootstrapAdminAccount')()
+    await user.getIdToken(true)
+    token = await getIdTokenResult(user)
+  }
+  authClaims.value = token.claims || {}
+  if (!['teacher', 'student'].includes(authClaims.value.role)) {
+    await signOut(auth)
+    throw new Error('Esta cuenta no tiene una invitación válida de Neope.')
+  }
+  if (authClaims.value.role === 'teacher' && loadedTeacherUid !== user.uid) {
+    loadedTeacherUid = user.uid
+    if (isAdministrator.value) {
+      await httpsCallable(functions, 'bootstrapAdminAccount')()
+      await user.getIdToken(true)
+      authClaims.value = (await getIdTokenResult(user)).claims || authClaims.value
+    }
+    await initializeTeacherWorkspace()
+  }
+}
+
 onMounted(() => {
-  loadTeacherSchedule()
-  loadExercises({ reset: true })
-  loadMathConcepts()
-  loadTemplates()
+  stopAuthWatch = onIdTokenChanged(auth, async (user) => {
+    try {
+      await handleAuthenticatedUser(user)
+    } catch (error) {
+      console.error('No se ha podido inicializar la sesión:', error)
+      showAppErrorToast(error?.message || 'No se ha podido iniciar la sesión de Neope.')
+    } finally {
+      authReady.value = true
+    }
+  })
   currentTimeInterval = window.setInterval(() => { currentTime.value = new Date() }, 30_000)
   window.addEventListener('scroll', handleExerciseScroll, { passive: true })
   window.addEventListener('wheel', handleExerciseScroll, { passive: true })
@@ -3721,6 +3827,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopAuthWatch?.()
   window.clearInterval(currentTimeInterval)
   window.cancelAnimationFrame(exerciseScrollFrame)
   window.removeEventListener('scroll', handleExerciseScroll)
@@ -3741,6 +3848,9 @@ onBeforeUnmount(() => {
 
 <template>
   <v-app>
+    <AuthGateway v-if="!authReady || !authUser || !authRole" />
+    <StudentPortal v-else-if="authRole === 'student'" />
+    <template v-else>
     <v-navigation-drawer
       v-model="drawer"
       :permanent="$vuetify.display.mdAndUp"
@@ -3788,9 +3898,11 @@ onBeforeUnmount(() => {
 
       <template #append>
         <div class="drawer-footer">
-          <v-btn variant="text" prepend-icon="mdi-cog-outline" block justify="start">Ajustes</v-btn>
+          <v-btn variant="text" prepend-icon="mdi-logout" block justify="start" @click="closeSession">Cerrar sesión</v-btn>
           <v-divider class="my-3" />
-          <v-list-item prepend-avatar="/brand/carlos-sanchez-catala.png" title="Carlos Sánchez Catalá" subtitle="Profesor" @click="setActiveView('Perfil')" />
+          <v-list-item :title="currentUserName" subtitle="Profesor" @click="setActiveView('Perfil')">
+            <template #prepend><v-avatar color="primary" size="36"><img v-if="isAdministrator" src="/brand/carlos-sanchez-catala.png" alt=""><span v-else>{{ currentUserInitials }}</span></v-avatar></template>
+          </v-list-item>
         </div>
       </template>
     </v-navigation-drawer>
@@ -4139,6 +4251,9 @@ onBeforeUnmount(() => {
             @update-subject-node-ids="updateMathSubjectNodeIds"
           />
         </section>
+        <section v-else-if="active === 'Invitaciones'" class="invitations-page">
+          <InvitationManager />
+        </section>
         <section v-else-if="active === 'Perfil'" class="teacher-profile-page">
           <input ref="profileImageInput" type="file" accept="image/*" multiple hidden @change="uploadProfileImages">
           <header class="teacher-profile-intro">
@@ -4147,7 +4262,7 @@ onBeforeUnmount(() => {
               <h1>Centros y cursos</h1>
               <p>Añade los centros donde trabajas o has trabajado. Sus logotipos podrán utilizarse más adelante en los documentos.</p>
             </div>
-            <v-avatar size="64" class="teacher-profile-avatar"><img src="/brand/carlos-sanchez-catala.png" alt="Carlos Sánchez Catalá"></v-avatar>
+            <v-avatar size="64" class="teacher-profile-avatar" color="primary"><img v-if="isAdministrator" src="/brand/carlos-sanchez-catala.png" alt=""><span v-else>{{ currentUserInitials }}</span></v-avatar>
           </header>
           <div v-if="!teacherProfile.centros.length" class="teacher-profile-empty">
             <v-icon icon="mdi-school-outline" size="48" />
@@ -4192,6 +4307,7 @@ onBeforeUnmount(() => {
               </v-card-text>
             </v-card>
           </div>
+          <LocalStudentDataTransfer />
         </section>
         <section v-else-if="active === 'Ejercicios'" class="exercises-page">
           <template v-if="exerciseView === 'search'">
@@ -4211,14 +4327,22 @@ onBeforeUnmount(() => {
                     />
                   </header>
                   <div class="exercise-result-pdf">
-                    <img
+                    <div
                       v-if="searchExerciseThumbnail(exercise)"
-                      :src="searchExerciseThumbnail(exercise)"
-                      :alt="`Enunciado del ejercicio ${exercise.id}`"
-                      class="exercise-result-thumbnail"
-                      loading="lazy"
-                      decoding="async"
+                      class="exercise-result-thumbnail-frame"
+                      :style="searchExerciseThumbnailStyle(exercise)"
                     >
+                      <img
+                        :src="searchExerciseThumbnail(exercise)"
+                        :alt="`Enunciado del ejercicio ${exercise.id}`"
+                        :width="searchExerciseThumbnailMetadata(exercise)?.width || undefined"
+                        :height="searchExerciseThumbnailMetadata(exercise)?.height || undefined"
+                        class="exercise-result-thumbnail"
+                        loading="lazy"
+                        decoding="async"
+                        @load="revealSearchExerciseThumbnail"
+                      >
+                    </div>
                     <ExercisePdfPreview
                       v-else-if="searchExercisePdf(exercise)"
                       :src="searchExercisePdf(exercise)"
@@ -4747,8 +4871,6 @@ onBeforeUnmount(() => {
       </v-card>
     </v-dialog>
 
-    <AppErrorToast />
-
     <v-snackbar v-model="exerciseCompilerErrorSnackbar" location="bottom" color="error" timeout="-1" class="exercise-error-snackbar">
       <div class="exercise-error-snackbar-message">{{ compilerError }}</div>
       <template #actions>
@@ -4756,5 +4878,7 @@ onBeforeUnmount(() => {
         <v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar error de compilación" @click="exerciseCompilerErrorSnackbar = false" />
       </template>
     </v-snackbar>
+    </template>
+    <AppErrorToast />
   </v-app>
 </template>
