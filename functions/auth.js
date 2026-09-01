@@ -5,7 +5,8 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 
 const REGION = 'europe-west1'
-const ADMIN_EMAIL = 'carlosanchezcatala@gmail.com'
+const ADMIN_EMAIL = 'carlos.s@educa.madrid.org'
+const LEGACY_ADMIN_EMAIL = 'carlosanchezcatala@gmail.com'
 const INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000
 const STUDENT_CODE_PATTERN = /^[A-HJ-NP-Za-km-z1-9]{6}$/
 if (!getApps().length) initializeApp()
@@ -72,19 +73,33 @@ async function ensureTeacher(request) {
 }
 
 async function migrateLegacyTeacher(uid) {
-  const legacyReference = db.doc('teachers/test')
   const teacherReference = db.doc(`teachers/${uid}`)
-  const [legacySnapshot, teacherSnapshot] = await Promise.all([legacyReference.get(), teacherReference.get()])
-  if (Number(teacherSnapshot.data()?.authMigration?.schemaVersion) >= 1) return
-  if (legacySnapshot.exists) {
+  const teacherSnapshot = await teacherReference.get()
+  if (Number(teacherSnapshot.data()?.authMigration?.schemaVersion) >= 2) return
+
+  let legacyAdmin = null
+  try {
+    legacyAdmin = await auth.getUserByEmail(LEGACY_ADMIN_EMAIL)
+  } catch (error) {
+    if (error?.code !== 'auth/user-not-found') throw error
+  }
+  const sourceIds = ['test']
+  if (legacyAdmin?.uid && legacyAdmin.uid !== uid) sourceIds.push(legacyAdmin.uid)
+
+  let foundLegacyTeacher = false
+  for (const sourceId of sourceIds) {
+    const sourceReference = db.doc(`teachers/${sourceId}`)
+    const sourceSnapshot = await sourceReference.get()
+    if (!sourceSnapshot.exists) continue
+    foundLegacyTeacher = true
     await teacherReference.set({
-      ...legacySnapshot.data(),
+      ...sourceSnapshot.data(),
       email: ADMIN_EMAIL,
       role: 'teacher',
-      migratedFrom: 'test',
+      migratedFrom: sourceId,
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true })
-    const academicYears = await legacyReference.collection('academicYears').get()
+    const academicYears = await sourceReference.collection('academicYears').get()
     for (let index = 0; index < academicYears.docs.length; index += 400) {
       const batch = db.batch()
       academicYears.docs.slice(index, index + 400).forEach((entry) => {
@@ -92,7 +107,8 @@ async function migrateLegacyTeacher(uid) {
       })
       await batch.commit()
     }
-  } else if (!teacherSnapshot.exists) {
+  }
+  if (!foundLegacyTeacher && !teacherSnapshot.exists) {
     await teacherReference.set({
       email: ADMIN_EMAIL,
       role: 'teacher',
@@ -100,15 +116,17 @@ async function migrateLegacyTeacher(uid) {
     }, { merge: true })
   }
 
-  for (const collectionName of ['grupos', 'ejercicios', 'documentos']) {
-    const fieldName = collectionName === 'grupos' ? 'teacherId' : 'ownerId'
-    const snapshots = await db.collection(collectionName).where(fieldName, '==', 'test').get()
-    for (let index = 0; index < snapshots.docs.length; index += 400) {
-      const batch = db.batch()
-      snapshots.docs.slice(index, index + 400).forEach((entry) => {
-        batch.update(entry.ref, { [fieldName]: uid, updatedAt: FieldValue.serverTimestamp() })
-      })
-      await batch.commit()
+  for (const sourceId of sourceIds) {
+    for (const collectionName of ['grupos', 'ejercicios', 'documentos']) {
+      const fieldName = collectionName === 'grupos' ? 'teacherId' : 'ownerId'
+      const snapshots = await db.collection(collectionName).where(fieldName, '==', sourceId).get()
+      for (let index = 0; index < snapshots.docs.length; index += 400) {
+        const batch = db.batch()
+        snapshots.docs.slice(index, index + 400).forEach((entry) => {
+          batch.update(entry.ref, { [fieldName]: uid, updatedAt: FieldValue.serverTimestamp() })
+        })
+        await batch.commit()
+      }
     }
   }
 
@@ -127,8 +145,13 @@ async function migrateLegacyTeacher(uid) {
     }
   }
   await teacherReference.set({
-    authMigration: { schemaVersion: 1, completedAt: FieldValue.serverTimestamp() },
+    authMigration: { schemaVersion: 2, completedAt: FieldValue.serverTimestamp() },
   }, { merge: true })
+
+  if (legacyAdmin?.uid && legacyAdmin.uid !== uid) {
+    await auth.setCustomUserClaims(legacyAdmin.uid, { role: 'teacher', admin: false })
+    await auth.updateUser(legacyAdmin.uid, { disabled: true })
+  }
 }
 
 export const bootstrapAdminAccount = onCall(callableOptions, async () => {

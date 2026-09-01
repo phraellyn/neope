@@ -56,7 +56,7 @@ async function recoverPassword() {
   await run(async () => {
     const target = email.value.trim().toLowerCase()
     if (!target) throw new Error('Introduce primero tu correo electrónico.')
-    if (target === 'carlosanchezcatala@gmail.com') {
+    if (target === 'carlos.s@educa.madrid.org') {
       await httpsCallable(functions, 'bootstrapAdminAccount')()
     }
     await sendPasswordResetEmail(auth, target)
@@ -228,4 +228,3 @@ onMounted(() => {
   .auth-card { margin: 24px auto; padding: 28px 22px; }
 }
 </style>
-

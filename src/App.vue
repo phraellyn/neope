@@ -3785,7 +3785,7 @@ async function handleAuthenticatedUser(user) {
     return
   }
   let token = await getIdTokenResult(user)
-  if (user.email?.toLowerCase() === 'carlosanchezcatala@gmail.com'
+  if (user.email?.toLowerCase() === 'carlos.s@educa.madrid.org'
     && (token.claims.role !== 'teacher' || token.claims.admin !== true)) {
     await httpsCallable(functions, 'bootstrapAdminAccount')()
     await user.getIdToken(true)
