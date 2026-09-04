@@ -10,6 +10,14 @@ const loading = ref(true)
 
 const resultEntries = computed(() => Object.entries(dashboard.value?.results || {}))
 
+function displayResult(value) {
+  if (!value || typeof value !== 'object') return value
+  const total = Number(value.total)
+  return Number.isFinite(total)
+    ? new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(total)
+    : '—'
+}
+
 async function loadDashboard() {
   try {
     dashboard.value = (await httpsCallable(functions, 'getStudentDashboard')()).data
@@ -24,7 +32,7 @@ onMounted(loadDashboard)
 <template>
   <div class="student-portal">
     <v-app-bar flat border color="white"><img src="/brand/neope-logo.png" alt="Neope" class="student-logo"><v-spacer /><span class="student-code">{{ dashboard?.code }}</span><v-btn icon="mdi-logout" variant="text" aria-label="Cerrar sesión" @click="signOut(auth)" /></v-app-bar>
-    <v-main><div class="student-content"><v-progress-linear v-if="loading" indeterminate color="primary" /><template v-else-if="dashboard"><header><span>{{ dashboard.group.academicYear }}</span><h1>{{ dashboard.group.subject }}</h1><p>{{ dashboard.group.name }}</p></header><v-card variant="outlined" class="student-results"><v-card-title>Mis resultados</v-card-title><v-list v-if="resultEntries.length" lines="two"><v-list-item v-for="([key, value]) in resultEntries" :key="key" :title="key"><template #append><strong>{{ value }}</strong></template></v-list-item></v-list><v-card-text v-else class="empty">Todavía no hay resultados publicados.</v-card-text></v-card></template></div></v-main>
+    <v-main><div class="student-content"><v-progress-linear v-if="loading" indeterminate color="primary" /><template v-else-if="dashboard"><header><span>{{ dashboard.group.academicYear }}</span><h1>{{ dashboard.group.subject }}</h1><p>{{ dashboard.group.name }}</p></header><v-card variant="outlined" class="student-results"><v-card-title>Mis resultados</v-card-title><v-list v-if="resultEntries.length" lines="two"><v-list-item v-for="([key, value]) in resultEntries" :key="key" :title="key"><template #append><strong>{{ displayResult(value) }}</strong></template></v-list-item></v-list><v-card-text v-else class="empty">Todavía no hay resultados publicados.</v-card-text></v-card></template></div></v-main>
   </div>
 </template>
 

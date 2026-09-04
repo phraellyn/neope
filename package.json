@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:exercise-structure": "node tests/exerciseStructure.test.mjs"
+    "test:exercise-structure": "node tests/exerciseStructure.test.mjs",
+    "test:rubric-assessment": "node tests/rubricAssessment.test.mjs",
+    "test:document-assessment": "node tests/documentAssessmentMatrix.test.mjs",
+    "test:student-competency-progress": "node tests/studentCompetencyProgress.test.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

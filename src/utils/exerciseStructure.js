@@ -13,6 +13,36 @@ function unique(values = []) {
   return [...new Set((Array.isArray(values) ? values : []).filter(Boolean))]
 }
 
+function normalizeEvidenceStrength(value) {
+  return ['weak', 'medium', 'strong'].includes(value) ? value : null
+}
+
+export function normalizeExerciseAchievements(achievements = []) {
+  return (Array.isArray(achievements) ? achievements : [])
+    .filter((achievement) => achievement && typeof achievement === 'object')
+    .map((achievement) => {
+      const alignment = achievement.alignment || {}
+      const descriptorEvidence = (Array.isArray(alignment.descriptorEvidence) ? alignment.descriptorEvidence : [])
+        .map((evidence) => ({
+          descriptorId: text(evidence?.descriptorId).trim(),
+          strength: normalizeEvidenceStrength(evidence?.strength),
+        }))
+        .filter((evidence) => evidence.descriptorId && evidence.strength)
+        .filter((evidence, index, values) => values.findIndex((candidate) => candidate.descriptorId === evidence.descriptorId) === index)
+      return {
+        id: text(achievement.id).trim() || createExercisePartId(),
+        description: text(achievement.description).trim(),
+        points: Math.max(0, number(achievement.points)),
+        alignment: {
+          criterionIds: unique(alignment.criterionIds),
+          descriptorEvidence,
+          source: alignment.source === 'ai' ? 'ai' : 'manual',
+          ...(text(alignment.model).trim() ? { model: text(alignment.model).trim() } : {}),
+        },
+      }
+    })
+}
+
 function numberText(value) {
   const parsed = number(value)
   return Number.isInteger(parsed) ? String(parsed) : String(parsed).replace('.', ',')
@@ -253,6 +283,7 @@ function parsePart(source, markerId = '') {
     ...parseSegment(working),
     puntuacion,
     tiempo,
+    achievements: [],
     contenidos: [],
     pdfenunciado: null,
     pdfsolucion: null,
@@ -304,6 +335,7 @@ export function parseExerciseLatex(value = '') {
     partsEnvironment: partsEnvironment?.name || null,
     final,
     info: infoResult.info,
+    achievements: [],
     contenidosGenerales: [],
     contenidos: [],
     pdfenunciado: null,
@@ -380,6 +412,7 @@ export function exerciseStructureFromDocument(document = {}) {
         solucion: partSolution.latex,
         puntuacion: number(part.points),
         tiempo: number(part.durationMinutes),
+        achievements: normalizeExerciseAchievements(part.achievements),
         contenidos: unique(part.contenidos || part.contentIds),
         pdfenunciado: pdfReferenceUrl(partStatement.pdf),
         pdfsolucion: pdfReferenceUrl(partSolution.pdf),
@@ -387,6 +420,7 @@ export function exerciseStructureFromDocument(document = {}) {
     }),
     final: text(document.final),
     info: text(document.info),
+    achievements: normalizeExerciseAchievements(document.achievements),
     contenidosGenerales: unique(document.contenidosGenerales || document.generalContentIds),
     contenidos: unique(document.contenidos || document.contentIds),
     pdfenunciado: pdfReferenceUrl(statement.pdf),
@@ -409,6 +443,7 @@ function mergePart(parsed, previous = {}, keepPreviousId = false) {
     ...previous,
     ...parsed,
     id: keepPreviousId ? previous.id : (parsed.id || previous.id || createExercisePartId()),
+    achievements: normalizeExerciseAchievements(parsed.achievements?.length ? parsed.achievements : previous.achievements),
     contenidos: unique(parsed.contenidos?.length ? parsed.contenidos : previous.contenidos),
     pdfenunciado: parsed.pdfenunciado || previous.pdfenunciado || null,
     pdfsolucion: parsed.pdfsolucion || previous.pdfsolucion || null,
@@ -433,6 +468,7 @@ export function mergeExerciseStructure(parsedValue = {}, previousValue = {}) {
     apartados,
     apartadosEnv: parsed.apartadosEnv || parsed.partsEnvironment || null,
     partsEnvironment: parsed.apartadosEnv || parsed.partsEnvironment || null,
+    achievements: normalizeExerciseAchievements(parsed.achievements?.length ? parsed.achievements : previous.achievements),
     contenidosGenerales: unique(parsed.contenidosGenerales?.length ? parsed.contenidosGenerales : previous.contenidosGenerales),
     contenidos: unique(parsed.contenidos?.length ? parsed.contenidos : previous.contenidos),
     pdfenunciado: parsed.pdfenunciado || previous.pdfenunciado || null,
@@ -445,8 +481,10 @@ export function mergeExerciseStructure(parsedValue = {}, previousValue = {}) {
 export function aggregateExerciseStructure(value = {}) {
   const structure = { ...value }
   structure.apartados = Array.isArray(value.apartados) ? value.apartados.map((part) => ({ ...part })) : []
+  structure.achievements = normalizeExerciseAchievements(value.achievements)
   structure.contenidosGenerales = unique(value.contenidosGenerales)
   structure.apartados.forEach((part) => {
+    part.achievements = normalizeExerciseAchievements(part.achievements)
     part.contenidos = unique([...structure.contenidosGenerales, ...unique(part.contenidos)])
   })
   structure.contenidos = structure.apartados.length
@@ -568,6 +606,7 @@ export function exerciseDocumentStructure(value = {}, previousDocument = {}, rev
     workedSolution: structuredBlock(structure.solucion, persistedPdfReference(structure.pdfsolucion, previous.workedSolution?.pdf)),
     points: number(structure.puntuacion),
     durationMinutes: number(structure.tiempo),
+    achievements: normalizeExerciseAchievements(structure.achievements),
     partsEnvironment: structure.apartados.length ? (structure.apartadosEnv === 'apartadosc' ? 'apartadosc' : 'apartados') : null,
     parts: structure.apartados.map((part) => {
       const old = previousParts.get(part.id) || {}
@@ -578,6 +617,7 @@ export function exerciseDocumentStructure(value = {}, previousDocument = {}, rev
         workedSolution: structuredBlock(part.solucion, persistedPdfReference(part.pdfsolucion, old.workedSolution?.pdf)),
         points: number(part.puntuacion),
         durationMinutes: number(part.tiempo),
+        achievements: normalizeExerciseAchievements(part.achievements),
         contenidos: unique(part.contenidos),
       }
     }),
@@ -600,11 +640,13 @@ function exerciseDocumentStructureFromLegacy(previous = {}) {
     statement: structuredBlock(legacy.enunciado, legacy.pdfenunciado, true),
     answer: structuredBlock(legacy.respuesta),
     workedSolution: structuredBlock(legacy.solucion, legacy.pdfsolucion),
+    achievements: normalizeExerciseAchievements(legacy.achievements),
     parts: (legacy.apartados || []).map((part) => ({
       id: part.id,
       statement: structuredBlock(part.enunciado, part.pdfenunciado, true),
       answer: structuredBlock(part.respuesta),
       workedSolution: structuredBlock(part.solucion, part.pdfsolucion),
+      achievements: normalizeExerciseAchievements(part.achievements),
     })),
     pdf: {
       statement: pdfReference(legacy.pdfenunciadocompleto || previous.pdf?.enunciado),

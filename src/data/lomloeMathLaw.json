@@ -1,0 +1,4644 @@
+{
+  "global": {
+    "schemaVersion": 1,
+    "keyCompetencies": [
+      {
+        "id": "ccl",
+        "code": "CCL",
+        "title": "Competencia en comunicación lingüística"
+      },
+      {
+        "id": "cp",
+        "code": "CP",
+        "title": "Competencia plurilingüe"
+      },
+      {
+        "id": "stem",
+        "code": "STEM",
+        "title": "Competencia matemática y competencia en ciencia, tecnología e ingeniería"
+      },
+      {
+        "id": "cd",
+        "code": "CD",
+        "title": "Competencia digital"
+      },
+      {
+        "id": "cpsaa",
+        "code": "CPSAA",
+        "title": "Competencia personal, social y de aprender a aprender"
+      },
+      {
+        "id": "cc",
+        "code": "CC",
+        "title": "Competencia ciudadana"
+      },
+      {
+        "id": "ce",
+        "code": "CE",
+        "title": "Competencia emprendedora"
+      },
+      {
+        "id": "ccec",
+        "code": "CCEC",
+        "title": "Competencia en conciencia y expresión culturales"
+      }
+    ],
+    "operationalDescriptors": [
+      {
+        "id": "eso-ccl1",
+        "code": "CCL1",
+        "keyCompetencyId": "ccl",
+        "stage": "ESO",
+        "description": "Se expresa de forma oral, escrita, signada o multimodal con coherencia, corrección y adecuación a los diferentes contextos sociales, y participa en interacciones comunicativas con actitud cooperativa y respetuosa tanto para intercambiar información, crear conocimiento y transmitir opiniones, como para construir vínculos personales."
+      },
+      {
+        "id": "eso-ccl2",
+        "code": "CCL2",
+        "keyCompetencyId": "ccl",
+        "stage": "ESO",
+        "description": "Comprende, interpreta y valora con actitud crítica textos orales, escritos, signados o multimodales de los ámbitos personal, social, educativo y profesional para participar en diferentes contextos de manera activa e informada y para construir conocimiento."
+      },
+      {
+        "id": "eso-ccl3",
+        "code": "CCL3",
+        "keyCompetencyId": "ccl",
+        "stage": "ESO",
+        "description": "Localiza, selecciona y contrasta de manera progresivamente autónoma información procedente de diferentes fuentes, evaluando su fiabilidad y pertinencia en función de los objetivos de lectura y evitando los riesgos de manipulación y desinformación, y la integra y transforma en conocimiento para comunicarla adoptando un punto de vista creativo, crítico y personal a la par que respetuoso con la propiedad intelectual."
+      },
+      {
+        "id": "eso-ccl4",
+        "code": "CCL4",
+        "keyCompetencyId": "ccl",
+        "stage": "ESO",
+        "description": "Lee con autonomía obras diversas adecuadas a su edad, seleccionando las que mejor se ajustan a sus gustos e intereses; aprecia el patrimonio literario como cauce privilegiado de la experiencia individual y colectiva; y moviliza su propia experiencia biográfica y sus conocimientos literarios y culturales para construir y compartir su interpretación de las obras y para crear textos de intención literaria de progresiva complejidad."
+      },
+      {
+        "id": "eso-ccl5",
+        "code": "CCL5",
+        "keyCompetencyId": "ccl",
+        "stage": "ESO",
+        "description": "Pone sus prácticas comunicativas al servicio de la convivencia democrática, la resolución dialogada de los conflictos y la igualdad de derechos de todas las personas, evitando los usos discriminatorios, así como los abusos de poder, para favorecer la utilización no solo eficaz sino también ética de los diferentes sistemas de comunicación."
+      },
+      {
+        "id": "eso-cp1",
+        "code": "CP1",
+        "keyCompetencyId": "cp",
+        "stage": "ESO",
+        "description": "Usa eficazmente una o más lenguas, además de la lengua o lenguas familiares, para responder a sus necesidades comunicativas, de manera apropiada y adecuada tanto a su desarrollo e intereses como a diferentes situaciones y contextos de los ámbitos personal, social, educativo y profesional."
+      },
+      {
+        "id": "eso-cp2",
+        "code": "CP2",
+        "keyCompetencyId": "cp",
+        "stage": "ESO",
+        "description": "A partir de sus experiencias, realiza transferencias entre distintas lenguas como estrategia para comunicarse y ampliar su repertorio lingüístico individual."
+      },
+      {
+        "id": "eso-cp3",
+        "code": "CP3",
+        "keyCompetencyId": "cp",
+        "stage": "ESO",
+        "description": "Conoce, valora y respeta la diversidad lingüística y cultural presente en la sociedad, integrándola en su desarrollo personal como factor de diálogo, para fomentar la cohesión social."
+      },
+      {
+        "id": "eso-stem1",
+        "code": "STEM1",
+        "keyCompetencyId": "stem",
+        "stage": "ESO",
+        "description": "Utiliza métodos inductivos y deductivos propios del razonamiento matemático en situaciones conocidas, y selecciona y emplea diferentes estrategias para resolver problemas analizando críticamente las soluciones y reformulando el procedimiento, si fuera necesario."
+      },
+      {
+        "id": "eso-stem2",
+        "code": "STEM2",
+        "keyCompetencyId": "stem",
+        "stage": "ESO",
+        "description": "Utiliza el pensamiento científico para entender y explicar los fenómenos que ocurren a su alrededor, confiando en el conocimiento como motor de desarrollo, planteándose preguntas y comprobando hipótesis mediante la experimentación y la indagación, utilizando herramientas e instrumentos adecuados, apreciando la importancia de la precisión y la veracidad y mostrando una actitud crítica acerca del alcance y las limitaciones de la ciencia."
+      },
+      {
+        "id": "eso-stem3",
+        "code": "STEM3",
+        "keyCompetencyId": "stem",
+        "stage": "ESO",
+        "description": "Plantea y desarrolla proyectos diseñando, fabricando y evaluando diferentes prototipos o modelos para generar o utilizar productos que den solución a una necesidad o problema de forma creativa y en equipo, procurando la participación de todo el grupo, resolviendo pacíficamente los conflictos que puedan surgir, adaptándose ante la incertidumbre y valorando la importancia de la sostenibilidad."
+      },
+      {
+        "id": "eso-stem4",
+        "code": "STEM4",
+        "keyCompetencyId": "stem",
+        "stage": "ESO",
+        "description": "Interpreta y transmite los elementos más relevantes de procesos, razonamientos, demostraciones, métodos y resultados científicos, matemáticos y tecnológicos de forma clara y precisa y en diferentes formatos (gráficos, tablas, diagramas, fórmulas, esquemas, símbolos...), aprovechando de forma crítica la cultura digital e incluyendo el lenguaje matemático-formal con ética y responsabilidad, para compartir y construir nuevos conocimientos."
+      },
+      {
+        "id": "eso-stem5",
+        "code": "STEM5",
+        "keyCompetencyId": "stem",
+        "stage": "ESO",
+        "description": "Emprende acciones fundamentadas científicamente para promover la salud física, mental y social, y preservar el medio ambiente y los seres vivos; y aplica principios de ética y seguridad en la realización de proyectos para transformar su entorno próximo de forma sostenible, valorando su impacto global y practicando el consumo responsable."
+      },
+      {
+        "id": "eso-cd1",
+        "code": "CD1",
+        "keyCompetencyId": "cd",
+        "stage": "ESO",
+        "description": "Realiza búsquedas en internet atendiendo a criterios de validez, calidad, actualidad y fiabilidad, seleccionando los resultados de manera crítica y archivándolos, para recuperarlos, referenciarlos y reutilizarlos, respetando la propiedad intelectual."
+      },
+      {
+        "id": "eso-cd2",
+        "code": "CD2",
+        "keyCompetencyId": "cd",
+        "stage": "ESO",
+        "description": "Gestiona y utiliza su entorno personal digital de aprendizaje para construir conocimiento y crear contenidos digitales, mediante estrategias de tratamiento de la información y el uso de diferentes herramientas digitales, seleccionando y configurando la más adecuada en función de la tarea y de sus necesidades de aprendizaje permanente."
+      },
+      {
+        "id": "eso-cd3",
+        "code": "CD3",
+        "keyCompetencyId": "cd",
+        "stage": "ESO",
+        "description": "Se comunica, participa, colabora e interactúa compartiendo contenidos, datos e información mediante herramientas o plataformas virtuales, y gestiona de manera responsable sus acciones, presencia y visibilidad en la red, para ejercer una ciudadanía digital activa, cívica y reflexiva."
+      },
+      {
+        "id": "eso-cd4",
+        "code": "CD4",
+        "keyCompetencyId": "cd",
+        "stage": "ESO",
+        "description": "Identifica riesgos y adopta medidas preventivas al usar las tecnologías digitales para proteger los dispositivos, los datos personales, la salud y el medioambiente, y para tomar conciencia de la importancia y necesidad de hacer un uso crítico, legal, seguro, saludable y sostenible de dichas tecnologías."
+      },
+      {
+        "id": "eso-cd5",
+        "code": "CD5",
+        "keyCompetencyId": "cd",
+        "stage": "ESO",
+        "description": "Desarrolla aplicaciones informáticas sencillas y soluciones tecnológicas creativas y sostenibles para resolver problemas concretos o responder a retos propuestos, mostrando interés y curiosidad por la evolución de las tecnologías digitales y por su desarrollo sostenible y uso ético."
+      },
+      {
+        "id": "eso-cpsaa1",
+        "code": "CPSAA1",
+        "keyCompetencyId": "cpsaa",
+        "stage": "ESO",
+        "description": "Regula y expresa sus emociones, fortaleciendo el optimismo, la resiliencia, la autoeficacia y la búsqueda de propósito y motivación hacia el aprendizaje, para gestionar los retos y cambios y armonizarlos con sus propios objetivos."
+      },
+      {
+        "id": "eso-cpsaa2",
+        "code": "CPSAA2",
+        "keyCompetencyId": "cpsaa",
+        "stage": "ESO",
+        "description": "Comprende los riesgos para la salud relacionados con factores sociales, consolida estilos de vida saludable a nivel físico y mental, reconoce conductas contrarias a la convivencia y aplica estrategias para abordarlas."
+      },
+      {
+        "id": "eso-cpsaa3",
+        "code": "CPSAA3",
+        "keyCompetencyId": "cpsaa",
+        "stage": "ESO",
+        "description": "Comprende proactivamente las perspectivas y las experiencias de las demás personas y las incorpora a su aprendizaje, para participar en el trabajo en grupo, distribuyendo y aceptando tareas y responsabilidades de manera equitativa y empleando estrategias cooperativas."
+      },
+      {
+        "id": "eso-cpsaa4",
+        "code": "CPSAA4",
+        "keyCompetencyId": "cpsaa",
+        "stage": "ESO",
+        "description": "Realiza autoevaluaciones sobre su proceso de aprendizaje, buscando fuentes fiables para validar, sustentar y contrastar la información y para obtener conclusiones relevantes."
+      },
+      {
+        "id": "eso-cpsaa5",
+        "code": "CPSAA5",
+        "keyCompetencyId": "cpsaa",
+        "stage": "ESO",
+        "description": "Planea objetivos a medio plazo y desarrolla procesos metacognitivos de retroalimentación para aprender de sus errores en el proceso de construcción del conocimiento."
+      },
+      {
+        "id": "eso-cc1",
+        "code": "CC1",
+        "keyCompetencyId": "cc",
+        "stage": "ESO",
+        "description": "Analiza y comprende ideas relativas a la dimensión social y ciudadana de su propia identidad, así como a los hechos culturales, históricos y normativos que la determinan, demostrando respeto por las normas, empatía, equidad y espíritu constructivo en la interacción con los demás en cualquier contexto."
+      },
+      {
+        "id": "eso-cc2",
+        "code": "CC2",
+        "keyCompetencyId": "cc",
+        "stage": "ESO",
+        "description": "Analiza y asume fundadamente los principios y valores que emanan del proceso de integración europea, la Constitución española y los derechos humanos y de la infancia, participando en actividades comunitarias, como la toma de decisiones o la resolución de conflictos, con actitud democrática, respeto por la diversidad, y compromiso con la igualdad de género, la cohesión social, el desarrollo sostenible y el logro de la ciudadanía mundial."
+      },
+      {
+        "id": "eso-cc3",
+        "code": "CC3",
+        "keyCompetencyId": "cc",
+        "stage": "ESO",
+        "description": "Comprende y analiza problemas éticos fundamentales y de actualidad, considerando críticamente los valores propios y ajenos, y desarrollando juicios propios para afrontar la controversia moral con actitud dialogante, argumentativa, respetuosa y opuesta a cualquier tipo de discriminación o violencia."
+      },
+      {
+        "id": "eso-cc4",
+        "code": "CC4",
+        "keyCompetencyId": "cc",
+        "stage": "ESO",
+        "description": "Comprende las relaciones sistémicas de interdependencia, ecodependencia e interconexión entre actuaciones locales y globales, y adopta, de forma consciente y motivada, un estilo de vida sostenible y ecosocialmente responsable."
+      },
+      {
+        "id": "eso-ce1",
+        "code": "CE1",
+        "keyCompetencyId": "ce",
+        "stage": "ESO",
+        "description": "Analiza necesidades y oportunidades y afronta retos con sentido crítico, haciendo balance de su sostenibilidad, valorando el impacto que puedan suponer en el entorno, para presentar ideas y soluciones innovadoras, éticas y sostenibles, dirigidas a crear valor en el ámbito personal, social, educativo y profesional."
+      },
+      {
+        "id": "eso-ce2",
+        "code": "CE2",
+        "keyCompetencyId": "ce",
+        "stage": "ESO",
+        "description": "Evalúa las fortalezas y debilidades propias, haciendo uso de estrategias de autoconocimiento y autoeficacia, y comprende los elementos fundamentales de la economía y las finanzas, aplicando conocimientos económicos y financieros a actividades y situaciones concretas, utilizando destrezas que favorezcan el trabajo colaborativo y en equipo, para reunir y optimizar los recursos necesarios que lleven a la acción una experiencia emprendedora que genere valor."
+      },
+      {
+        "id": "eso-ce3",
+        "code": "CE3",
+        "keyCompetencyId": "ce",
+        "stage": "ESO",
+        "description": "Desarrolla el proceso de creación de ideas y soluciones valiosas y toma decisiones, de manera razonada, utilizando estrategias ágiles de planificación y gestión, y reflexiona sobre el proceso realizado y el resultado obtenido, para llevar a término el proceso de creación de prototipos innovadores y de valor, considerando la experiencia como una oportunidad para aprender."
+      },
+      {
+        "id": "eso-ccec1",
+        "code": "CCEC1",
+        "keyCompetencyId": "ccec",
+        "stage": "ESO",
+        "description": "Conoce, aprecia críticamente y respeta el patrimonio cultural y artístico, implicándose en su conservación y valorando el enriquecimiento inherente a la diversidad cultural y artística."
+      },
+      {
+        "id": "eso-ccec2",
+        "code": "CCEC2",
+        "keyCompetencyId": "ccec",
+        "stage": "ESO",
+        "description": "Disfruta, reconoce y analiza con autonomía las especificidades e intencionalidades de las manifestaciones artísticas y culturales más destacadas del patrimonio, distinguiendo los medios y soportes, así como los lenguajes y elementos técnicos que las caracterizan."
+      },
+      {
+        "id": "eso-ccec3",
+        "code": "CCEC3",
+        "keyCompetencyId": "ccec",
+        "stage": "ESO",
+        "description": "Expresa ideas, opiniones, sentimientos y emociones por medio de producciones culturales y artísticas, integrando su propio cuerpo y desarrollando la autoestima, la creatividad y el sentido del lugar que ocupa en la sociedad, con una actitud empática, abierta y colaborativa."
+      },
+      {
+        "id": "eso-ccec4",
+        "code": "CCEC4",
+        "keyCompetencyId": "ccec",
+        "stage": "ESO",
+        "description": "Conoce, selecciona y utiliza con creatividad diversos medios y soportes, así como técnicas plásticas, visuales, audiovisuales, sonoras o corporales, para la creación de productos artísticos y culturales, tanto de forma individual como colaborativa, identificando oportunidades de desarrollo personal, social y laboral, así como de emprendimiento."
+      },
+      {
+        "id": "bachillerato-ccl1",
+        "code": "CCL1",
+        "keyCompetencyId": "ccl",
+        "stage": "Bachillerato",
+        "description": "Se expresa de forma oral, escrita, signada o multimodal con fluidez, coherencia, corrección y adecuación a los diferentes contextos sociales y académicos, y participa en interacciones comunicativas con actitud cooperativa y respetuosa tanto para intercambiar información, crear conocimiento y argumentar sus opiniones como para establecer y cuidar sus relaciones interpersonales."
+      },
+      {
+        "id": "bachillerato-ccl2",
+        "code": "CCL2",
+        "keyCompetencyId": "ccl",
+        "stage": "Bachillerato",
+        "description": "Comprende, interpreta y valora con actitud crítica textos orales, escritos, signados o multimodales de los distintos ámbitos, con especial énfasis en los textos académicos y de los medios de comunicación, para participar en diferentes contextos de manera activa e informada y para construir conocimiento."
+      },
+      {
+        "id": "bachillerato-ccl3",
+        "code": "CCL3",
+        "keyCompetencyId": "ccl",
+        "stage": "Bachillerato",
+        "description": "Localiza, selecciona y contrasta de manera autónoma información procedente de diferentes fuentes evaluando su fiabilidad y pertinencia en función de los objetivos de lectura y evitando los riesgos de manipulación y desinformación, y la integra y transforma en conocimiento para comunicarla de manera clara y rigurosa adoptando un punto de vista creativo y crítico a la par que respetuoso con la propiedad intelectual."
+      },
+      {
+        "id": "bachillerato-ccl4",
+        "code": "CCL4",
+        "keyCompetencyId": "ccl",
+        "stage": "Bachillerato",
+        "description": "Lee con autonomía obras relevantes de la literatura poniéndolas en relación con su contexto sociohistórico de producción, con la tradición literaria anterior y posterior y examinando la huella de su legado en la actualidad, para construir y compartir su propia interpretación argumentada de las obras, crear y recrear obras de intención literaria y conformar progresivamente un mapa cultural."
+      },
+      {
+        "id": "bachillerato-ccl5",
+        "code": "CCL5",
+        "keyCompetencyId": "ccl",
+        "stage": "Bachillerato",
+        "description": "Pone sus prácticas comunicativas al servicio de la convivencia democrática, la resolución dialogada de los conflictos y la igualdad de derechos de todas las personas, evitando y rechazando los usos discriminatorios, así como los abusos de poder, para favorecer la utilización no solo eficaz sino también ética de los diferentes sistemas de comunicación."
+      },
+      {
+        "id": "bachillerato-cp1",
+        "code": "CP1",
+        "keyCompetencyId": "cp",
+        "stage": "Bachillerato",
+        "description": "Utiliza con fluidez, adecuación y aceptable corrección una o más lenguas, además de la lengua familiar o de las lenguas familiares, para responder a sus necesidades comunicativas con espontaneidad y autonomía en diferentes situaciones y contextos de los ámbitos personal, social, educativo y profesional."
+      },
+      {
+        "id": "bachillerato-cp2",
+        "code": "CP2",
+        "keyCompetencyId": "cp",
+        "stage": "Bachillerato",
+        "description": "A partir de sus experiencias, desarrolla estrategias que le permitan ampliar y enriquecer de forma sistemática su repertorio lingüístico individual con el fin de comunicarse de manera eficaz."
+      },
+      {
+        "id": "bachillerato-cp3",
+        "code": "CP3",
+        "keyCompetencyId": "cp",
+        "stage": "Bachillerato",
+        "description": "Conoce y valora críticamente la diversidad lingüística y cultural presente en la sociedad, integrándola en su desarrollo personal y anteponiendo la comprensión mutua como característica central de la comunicación, para fomentar la cohesión social."
+      },
+      {
+        "id": "bachillerato-stem1",
+        "code": "STEM1",
+        "keyCompetencyId": "stem",
+        "stage": "Bachillerato",
+        "description": "Selecciona y utiliza métodos inductivos y deductivos propios del razonamiento matemático en situaciones propias de la modalidad elegida y emplea estrategias variadas para la resolución de problemas analizando críticamente las soluciones y reformulando el procedimiento, si fuera necesario."
+      },
+      {
+        "id": "bachillerato-stem2",
+        "code": "STEM2",
+        "keyCompetencyId": "stem",
+        "stage": "Bachillerato",
+        "description": "Utiliza el pensamiento científico para entender y explicar fenómenos relacionados con la modalidad elegida, confiando en el conocimiento como motor de desarrollo, planteándose hipótesis y contrastándolas o comprobándolas mediante la observación, la experimentación y la investigación, utilizando herramientas e instrumentos adecuados, apreciando la importancia de la precisión y la veracidad y mostrando una actitud crítica acerca del alcance y limitaciones de los métodos empleados."
+      },
+      {
+        "id": "bachillerato-stem3",
+        "code": "STEM3",
+        "keyCompetencyId": "stem",
+        "stage": "Bachillerato",
+        "description": "Plantea y desarrolla proyectos diseñando y creando prototipos o modelos para generar o utilizar productos que den solución a una necesidad o problema de forma colaborativa, procurando la participación de todo el grupo, resolviendo pacíficamente los conflictos que puedan surgir, adaptándose ante la incertidumbre y evaluando el producto obtenido de acuerdo a los objetivos propuestos, la sostenibilidad y el impacto transformador en la sociedad."
+      },
+      {
+        "id": "bachillerato-stem4",
+        "code": "STEM4",
+        "keyCompetencyId": "stem",
+        "stage": "Bachillerato",
+        "description": "Interpreta y transmite los elementos más relevantes de investigaciones de forma clara y precisa, en diferentes formatos (gráficos, tablas, diagramas, fórmulas, esquemas, símbolos...) y aprovechando la cultura digital con ética y responsabilidad y valorando de forma crítica la contribución de la ciencia y la tecnología en el cambio de las condiciones de vida para compartir y construir nuevos conocimientos."
+      },
+      {
+        "id": "bachillerato-stem5",
+        "code": "STEM5",
+        "keyCompetencyId": "stem",
+        "stage": "Bachillerato",
+        "description": "Planea y emprende acciones fundamentadas científicamente para promover la salud física y mental, y preservar el medio ambiente y los seres vivos, practicando el consumo responsable, aplicando principios de ética y seguridad para crear valor y transformar su entorno de forma sostenible adquiriendo compromisos como ciudadano en el ámbito local y global."
+      },
+      {
+        "id": "bachillerato-cd1",
+        "code": "CD1",
+        "keyCompetencyId": "cd",
+        "stage": "Bachillerato",
+        "description": "Realiza búsquedas avanzadas comprendiendo cómo funcionan los motores de búsqueda en internet aplicando criterios de validez, calidad, actualidad y fiabilidad, seleccionando los resultados de manera crítica y organizando el almacenamiento de la información de manera adecuada y segura para referenciarla y reutilizarla posteriormente."
+      },
+      {
+        "id": "bachillerato-cd2",
+        "code": "CD2",
+        "keyCompetencyId": "cd",
+        "stage": "Bachillerato",
+        "description": "Crea, integra y reelabora contenidos digitales de forma individual o colectiva, aplicando medidas de seguridad y respetando, en todo momento, los derechos de autoría digital para ampliar sus recursos y generar nuevo conocimiento."
+      },
+      {
+        "id": "bachillerato-cd3",
+        "code": "CD3",
+        "keyCompetencyId": "cd",
+        "stage": "Bachillerato",
+        "description": "Selecciona, configura y utiliza dispositivos digitales, herramientas, aplicaciones y servicios en línea y los incorpora en su entorno personal de aprendizaje digital para comunicarse, trabajar colaborativamente y compartir información, gestionando de manera responsable sus acciones, presencia y visibilidad en la red y ejerciendo una ciudadanía digital activa, cívica y reflexiva."
+      },
+      {
+        "id": "bachillerato-cd4",
+        "code": "CD4",
+        "keyCompetencyId": "cd",
+        "stage": "Bachillerato",
+        "description": "Evalúa riesgos y aplica medidas al usar las tecnologías digitales para proteger los dispositivos, los datos personales, la salud y el medioambiente y hace un uso crítico, legal, seguro, saludable y sostenible de dichas tecnologías."
+      },
+      {
+        "id": "bachillerato-cd5",
+        "code": "CD5",
+        "keyCompetencyId": "cd",
+        "stage": "Bachillerato",
+        "description": "Desarrolla soluciones tecnológicas innovadoras y sostenibles para dar respuesta a necesidades concretas, mostrando interés y curiosidad por la evolución de las tecnologías digitales y por su desarrollo sostenible y uso ético."
+      },
+      {
+        "id": "bachillerato-cpsaa1-1",
+        "code": "CPSAA1.1",
+        "keyCompetencyId": "cpsaa",
+        "stage": "Bachillerato",
+        "description": "Fortalece el optimismo, la resiliencia, la autoeficacia y la búsqueda de objetivos de forma autónoma para hacer eficaz su aprendizaje."
+      },
+      {
+        "id": "bachillerato-cpsaa1-2",
+        "code": "CPSAA1.2",
+        "keyCompetencyId": "cpsaa",
+        "stage": "Bachillerato",
+        "description": "Desarrolla una personalidad autónoma, gestionando constructivamente los cambios, la participación social y su propia actividad para dirigir su vida."
+      },
+      {
+        "id": "bachillerato-cpsaa2",
+        "code": "CPSAA2",
+        "keyCompetencyId": "cpsaa",
+        "stage": "Bachillerato",
+        "description": "Adopta de forma autónoma un estilo de vida sostenible y atiende al bienestar físico y mental propio y de los demás, buscando y ofreciendo apoyo en la sociedad para construir un mundo más saludable."
+      },
+      {
+        "id": "bachillerato-cpsaa3-1",
+        "code": "CPSAA3.1",
+        "keyCompetencyId": "cpsaa",
+        "stage": "Bachillerato",
+        "description": "Muestra sensibilidad hacia las emociones y experiencias de los demás, siendo consciente de la influencia que ejerce el grupo en las personas, para consolidar una personalidad empática e independiente y desarrollar su inteligencia."
+      },
+      {
+        "id": "bachillerato-cpsaa3-2",
+        "code": "CPSAA3.2",
+        "keyCompetencyId": "cpsaa",
+        "stage": "Bachillerato",
+        "description": "Distribuye en un grupo las tareas, recursos y responsabilidades de manera ecuánime, según sus objetivos, favoreciendo un enfoque sistémico para contribuir a la consecución de objetivos compartidos."
+      },
+      {
+        "id": "bachillerato-cpsaa4",
+        "code": "CPSAA4",
+        "keyCompetencyId": "cpsaa",
+        "stage": "Bachillerato",
+        "description": "Compara, analiza, evalúa y sintetiza datos, información e ideas de los medios de comunicación, para obtener conclusiones lógicas de forma autónoma, valorando la fiabilidad de las fuentes."
+      },
+      {
+        "id": "bachillerato-cpsaa5",
+        "code": "CPSAA5",
+        "keyCompetencyId": "cpsaa",
+        "stage": "Bachillerato",
+        "description": "Planifica a largo plazo evaluando los propósitos y los procesos de la construcción del conocimiento, relacionando los diferentes campos del mismo para desarrollar procesos autorregulados de aprendizaje que le permitan transmitir ese conocimiento, proponer ideas creativas y resolver problemas con autonomía."
+      },
+      {
+        "id": "bachillerato-cc1",
+        "code": "CC1",
+        "keyCompetencyId": "cc",
+        "stage": "Bachillerato",
+        "description": "Analiza hechos, normas e ideas relativas a la dimensión social, histórica, cívica y moral de su propia identidad, para contribuir a la consolidación de su madurez personal y social, adquirir una conciencia ciudadana y responsable, desarrollar la autonomía y el espíritu crítico, y establecer una interacción pacífica y respetuosa con los demás y con el entorno."
+      },
+      {
+        "id": "bachillerato-cc2",
+        "code": "CC2",
+        "keyCompetencyId": "cc",
+        "stage": "Bachillerato",
+        "description": "Reconoce, analiza y aplica en diversos contextos, de forma crítica y consecuente, los principios, ideales y valores relativos al proceso de integración europea, la Constitución Española , los derechos humanos, y la historia y el patrimonio cultural propios, a la vez que participa en todo tipo de actividades grupales con una actitud fundamentada en los principios y procedimientos democráticos, el compromiso ético con la igualdad, la cohesión social, el desarrollo sostenible y el logro de la ciudadanía mundial."
+      },
+      {
+        "id": "bachillerato-cc3",
+        "code": "CC3",
+        "keyCompetencyId": "cc",
+        "stage": "Bachillerato",
+        "description": "Adopta un juicio propio y argumentado ante problemas éticos y filosóficos fundamentales y de actualidad, afrontando con actitud dialogante la pluralidad de valores, creencias e ideas, rechazando todo tipo de discriminación y violencia, y promoviendo activamente la igualdad y corresponsabilidad efectiva entre mujeres y hombres."
+      },
+      {
+        "id": "bachillerato-cc4",
+        "code": "CC4",
+        "keyCompetencyId": "cc",
+        "stage": "Bachillerato",
+        "description": "Analiza las relaciones de interdependencia y ecodependencia entre nuestras formas de vida y el entorno, realizando un análisis crítico de la huella ecológica de las acciones humanas, y demostrando un compromiso ético y ecosocialmente responsable con actividades y hábitos que conduzcan al logro de los Objetivos de Desarrollo Sostenible y la lucha contra el cambio climático."
+      },
+      {
+        "id": "bachillerato-ce1",
+        "code": "CE1",
+        "keyCompetencyId": "ce",
+        "stage": "Bachillerato",
+        "description": "Evalúa necesidades y oportunidades y afronta retos, con sentido crítico y ético, evaluando su sostenibilidad y comprobando, a partir de conocimientos técnicos específicos, el impacto que puedan suponer en el entorno, para presentar y ejecutar ideas y soluciones innovadoras dirigidas a distintos contextos, tanto locales como globales, en el ámbito personal, social y académico con proyección profesional emprendedora."
+      },
+      {
+        "id": "bachillerato-ce2",
+        "code": "CE2",
+        "keyCompetencyId": "ce",
+        "stage": "Bachillerato",
+        "description": "Evalúa y reflexiona sobre las fortalezas y debilidades propias y las de los demás, haciendo uso de estrategias de autoconocimiento y autoeficacia, interioriza los conocimientos económicos y financieros específicos y los transfiere a contextos locales y globales, aplicando estrategias y destrezas que agilicen el trabajo colaborativo y en equipo, para reunir y optimizar los recursos necesarios, que lleven a la acción una experiencia o iniciativa emprendedora de valor."
+      },
+      {
+        "id": "bachillerato-ce3",
+        "code": "CE3",
+        "keyCompetencyId": "ce",
+        "stage": "Bachillerato",
+        "description": "Lleva a cabo el proceso de creación de ideas y soluciones innovadoras y toma decisiones, con sentido crítico y ético, aplicando conocimientos técnicos específicos y estrategias ágiles de planificación y gestión de proyectos, y reflexiona sobre el proceso realizado y el resultado obtenido, para elaborar un prototipo final de valor para los demás, considerando tanto la experiencia de éxito como de fracaso, una oportunidad para aprender."
+      },
+      {
+        "id": "bachillerato-ccec1",
+        "code": "CCEC1",
+        "keyCompetencyId": "ccec",
+        "stage": "Bachillerato",
+        "description": "Reflexiona, promueve y valora críticamente el patrimonio cultural y artístico de cualquier época, contrastando sus singularidades y partiendo de su propia identidad, para defender la libertad de expresión, la igualdad y el enriquecimiento inherente a la diversidad."
+      },
+      {
+        "id": "bachillerato-ccec2",
+        "code": "CCEC2",
+        "keyCompetencyId": "ccec",
+        "stage": "Bachillerato",
+        "description": "Investiga las especificidades e intencionalidades de diversas manifestaciones artísticas y culturales del patrimonio, mediante una postura de recepción activa y deleite, diferenciando y analizando los distintos contextos, medios y soportes en que se materializan, así como los lenguajes y elementos técnicos y estéticos que las caracterizan."
+      },
+      {
+        "id": "bachillerato-ccec3-1",
+        "code": "CCEC3.1",
+        "keyCompetencyId": "ccec",
+        "stage": "Bachillerato",
+        "description": "Expresa ideas, opiniones, sentimientos y emociones con creatividad y espíritu crítico, realizando con rigor sus propias producciones culturales y artísticas, para participar de forma activa en la promoción de los derechos humanos y los procesos de socialización y de construcción de la identidad personal que se derivan de la práctica artística."
+      },
+      {
+        "id": "bachillerato-ccec3-2",
+        "code": "CCEC3.2",
+        "keyCompetencyId": "ccec",
+        "stage": "Bachillerato",
+        "description": "Descubre la autoexpresión, a través de la interactuación corporal y la experimentación con diferentes herramientas y lenguajes artísticos, enfrentándose a situaciones creativas con una actitud empática y colaborativa, y con autoestima, iniciativa e imaginación."
+      },
+      {
+        "id": "bachillerato-ccec4-1",
+        "code": "CCEC4.1",
+        "keyCompetencyId": "ccec",
+        "stage": "Bachillerato",
+        "description": "Selecciona e integra con creatividad diversos medios y soportes, así como técnicas plásticas, visuales, audiovisuales, sonoras o corporales, para diseñar y producir proyectos artísticos y culturales sostenibles, analizando las oportunidades de desarrollo personal, social y laboral que ofrecen sirviéndose de la interpretación, la ejecución, la improvisación o la composición."
+      },
+      {
+        "id": "bachillerato-ccec4-2",
+        "code": "CCEC4.2",
+        "keyCompetencyId": "ccec",
+        "stage": "Bachillerato",
+        "description": "Planifica, adapta y organiza sus conocimientos, destrezas y actitudes para responder con creatividad y eficacia a los desempeños derivados de una producción cultural o artística, individual o colectiva, utilizando diversos lenguajes, códigos, técnicas, herramientas y recursos plásticos, visuales, audiovisuales, musicales, corporales o escénicos, valorando tanto el proceso como el producto final y comprendiendo las oportunidades personales, sociales, inclusivas y económicas que ofrecen."
+      }
+    ],
+    "sources": [
+      {
+        "title": "Real Decreto 217/2022",
+        "url": "https://www.boe.es/eli/es/rd/2022/03/29/217/con"
+      },
+      {
+        "title": "Real Decreto 243/2022",
+        "url": "https://www.boe.es/eli/es/rd/2022/04/05/243/con"
+      }
+    ]
+  },
+  "subjects": {
+    "1eso-matematicas": {
+      "schemaVersion": 1,
+      "subjectId": "1eso-matematicas",
+      "course": "1ºESO",
+      "subjectTitle": "Matemáticas",
+      "stage": "ESO",
+      "specificCompetencies": [
+        {
+          "id": "1eso-matematicas-ce-1",
+          "code": "CE1",
+          "description": "Interpretar, modelizar y resolver problemas de la vida cotidiana y propios de las matemáticas, aplicando diferentes estrategias y formas de razonamiento, para explorar distintas maneras de proceder y obtener posibles soluciones.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "1eso-matematicas-ce-2",
+          "code": "CE2",
+          "description": "Analizar las soluciones de un problema usando diferentes técnicas y herramientas, evaluando las respuestas obtenidas, para verificar su validez e idoneidad desde un punto de vista matemático y su repercusión global.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "1eso-matematicas-ce-3",
+          "code": "CE3",
+          "description": "Formular y comprobar conjeturas sencillas o plantear problemas de forma autónoma, reconociendo el valor del razonamiento y la argumentación, para generar nuevo conocimiento.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "1eso-matematicas-ce-4",
+          "code": "CE4",
+          "description": "Utilizar los principios del pensamiento computacional organizando datos, descomponiendo en partes, reconociendo patrones, interpretando, modificando y creando algoritmos, para modelizar situaciones y resolver problemas de forma eficaz.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "1eso-matematicas-ce-5",
+          "code": "CE5",
+          "description": "Reconocer y utilizar conexiones entre los diferentes elementos matemáticos, interconectando conceptos y procedimientos, para desarrollar una visión de las matemáticas como un todo integrado.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "1eso-matematicas-ce-6",
+          "code": "CE6",
+          "description": "Identificar las matemáticas implicadas en otras materias y en situaciones reales susceptibles de ser abordadas en términos matemáticos, interrelacionando conceptos y procedimientos, para aplicarlos en situaciones diversas.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "1eso-matematicas-ce-7",
+          "code": "CE7",
+          "description": "Representar, de forma individual y colectiva, conceptos, procedimientos, información y resultados matemáticos, usando diferentes tecnologías, para visualizar ideas y estructurar procesos matemáticos.",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "1eso-matematicas-ce-8",
+          "code": "CE8",
+          "description": "Comunicar de forma individual y colectiva conceptos, procedimientos y argumentos matemáticos, usando lenguaje oral, escrito o gráfico, utilizando la terminología matemática apropiada, para dar significado y coherencia a las ideas matemáticas.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ]
+        },
+        {
+          "id": "1eso-matematicas-ce-9",
+          "code": "CE9",
+          "description": "Desarrollar destrezas personales, identificando y gestionando emociones, poniendo en práctica estrategias de aceptación del error como parte del proceso de aprendizaje y adaptándose ante situaciones de incertidumbre, para mejorar la perseverancia en la consecución de objetivos y el disfrute en el aprendizaje de las matemáticas.",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "1eso-matematicas-ce-10",
+          "code": "CE10",
+          "description": "Desarrollar destrezas sociales reconociendo y respetando las emociones y experiencias de los demás, participando activa y reflexivamente en proyectos en equipos heterogéneos con roles asignados, para construir una identidad positiva como estudiante de matemáticas, fomentar el bienestar personal y grupal y crear relaciones saludables.",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ]
+        }
+      ],
+      "evaluationCriteria": [
+        {
+          "id": "1eso-matematicas-cr-1-1",
+          "code": "1.1",
+          "competenceId": "1eso-matematicas-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Interpretar enunciados de problemas matemáticos sencillos organizando los datos dados, estableciendo las relaciones básicas y directas entre ellos y analizando las preguntas formuladas."
+        },
+        {
+          "id": "1eso-matematicas-cr-1-2",
+          "code": "1.2",
+          "competenceId": "1eso-matematicas-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Aplicar herramientas y estrategias apropiadas que contribuyan a la resolución de problemas sencillos y relacionados con la vida cotidiana."
+        },
+        {
+          "id": "1eso-matematicas-cr-1-3",
+          "code": "1.3",
+          "competenceId": "1eso-matematicas-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Obtener soluciones matemáticas de un problema sencillo usando las estrategias adecuadas."
+        },
+        {
+          "id": "1eso-matematicas-cr-2-1",
+          "code": "2.1",
+          "competenceId": "1eso-matematicas-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ],
+          "description": "Conocer y aplicar las herramientas básicas para la comprobación de la corrección matemática de las soluciones obtenidas en la resolución de un problema."
+        },
+        {
+          "id": "1eso-matematicas-cr-3-1",
+          "code": "3.1",
+          "competenceId": "1eso-matematicas-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Formular y comprobar conjeturas sencillas de forma guiada analizando patrones, propiedades y relaciones."
+        },
+        {
+          "id": "1eso-matematicas-cr-5-1",
+          "code": "5.1",
+          "competenceId": "1eso-matematicas-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ],
+          "description": "Comenzar a realizar conexiones sencillas entre diferentes procesos matemáticos aplicando conocimientos y experiencias previas."
+        },
+        {
+          "id": "1eso-matematicas-cr-7-1",
+          "code": "7.1",
+          "competenceId": "1eso-matematicas-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Elaborar representaciones matemáticas sencillas que ayuden en la búsqueda de estrategias de resolución de una situación problematizada."
+        },
+        {
+          "id": "1eso-matematicas-cr-8-1",
+          "code": "8.1",
+          "competenceId": "1eso-matematicas-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ],
+          "description": "Comunicar la información utilizando el lenguaje matemático apropiado, oralmente y por escrito, al describir, explicar y justificar razonamientos, procedimientos y conclusiones."
+        },
+        {
+          "id": "1eso-matematicas-cr-9-1",
+          "code": "9.1",
+          "competenceId": "1eso-matematicas-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Gestionar las emociones propias, desarrollar el autoconcepto matemático como herramienta, generando expectativas positivas ante nuevos retos matemáticos."
+        },
+        {
+          "id": "1eso-matematicas-cr-9-2",
+          "code": "9.2",
+          "competenceId": "1eso-matematicas-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Mostrar una actitud positiva y perseverante, aceptando la crítica razonada al hacer frente a las diferentes situaciones de aprendizaje de las matemáticas."
+        },
+        {
+          "id": "1eso-matematicas-cr-10-1",
+          "code": "10.1",
+          "competenceId": "1eso-matematicas-ce-10",
+          "competenceCode": "CE10",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ],
+          "description": "Participar en el reparto de tareas que deban desarrollarse en equipo, aportando valor, favoreciendo la inclusión, la escucha activa, asumiendo el rol asignado y responsabilizándose de la propia contribución al equipo."
+        }
+      ],
+      "sources": [
+        {
+          "title": "Decreto 65/2022 de la Comunidad de Madrid",
+          "url": "https://www.bocm.es/boletin/CM_Orden_BOCM/2022/07/26/BOCM-20220726-2.PDF"
+        }
+      ]
+    },
+    "2eso-matematicas": {
+      "schemaVersion": 1,
+      "subjectId": "2eso-matematicas",
+      "course": "2ºESO",
+      "subjectTitle": "Matemáticas",
+      "stage": "ESO",
+      "specificCompetencies": [
+        {
+          "id": "2eso-matematicas-ce-1",
+          "code": "CE1",
+          "description": "Interpretar, modelizar y resolver problemas de la vida cotidiana y propios de las matemáticas, aplicando diferentes estrategias y formas de razonamiento, para explorar distintas maneras de proceder y obtener posibles soluciones.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "2eso-matematicas-ce-2",
+          "code": "CE2",
+          "description": "Analizar las soluciones de un problema usando diferentes técnicas y herramientas, evaluando las respuestas obtenidas, para verificar su validez e idoneidad desde un punto de vista matemático y su repercusión global.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "2eso-matematicas-ce-3",
+          "code": "CE3",
+          "description": "Formular y comprobar conjeturas sencillas o plantear problemas de forma autónoma, reconociendo el valor del razonamiento y la argumentación, para generar nuevo conocimiento.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "2eso-matematicas-ce-4",
+          "code": "CE4",
+          "description": "Utilizar los principios del pensamiento computacional organizando datos, descomponiendo en partes, reconociendo patrones, interpretando, modificando y creando algoritmos, para modelizar situaciones y resolver problemas de forma eficaz.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "2eso-matematicas-ce-5",
+          "code": "CE5",
+          "description": "Reconocer y utilizar conexiones entre los diferentes elementos matemáticos, interconectando conceptos y procedimientos, para desarrollar una visión de las matemáticas como un todo integrado.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "2eso-matematicas-ce-6",
+          "code": "CE6",
+          "description": "Identificar las matemáticas implicadas en otras materias y en situaciones reales susceptibles de ser abordadas en términos matemáticos, interrelacionando conceptos y procedimientos, para aplicarlos en situaciones diversas.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "2eso-matematicas-ce-7",
+          "code": "CE7",
+          "description": "Representar, de forma individual y colectiva, conceptos, procedimientos, información y resultados matemáticos, usando diferentes tecnologías, para visualizar ideas y estructurar procesos matemáticos.",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "2eso-matematicas-ce-8",
+          "code": "CE8",
+          "description": "Comunicar de forma individual y colectiva conceptos, procedimientos y argumentos matemáticos, usando lenguaje oral, escrito o gráfico, utilizando la terminología matemática apropiada, para dar significado y coherencia a las ideas matemáticas.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ]
+        },
+        {
+          "id": "2eso-matematicas-ce-9",
+          "code": "CE9",
+          "description": "Desarrollar destrezas personales, identificando y gestionando emociones, poniendo en práctica estrategias de aceptación del error como parte del proceso de aprendizaje y adaptándose ante situaciones de incertidumbre, para mejorar la perseverancia en la consecución de objetivos y el disfrute en el aprendizaje de las matemáticas.",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "2eso-matematicas-ce-10",
+          "code": "CE10",
+          "description": "Desarrollar destrezas sociales reconociendo y respetando las emociones y experiencias de los demás, participando activa y reflexivamente en proyectos en equipos heterogéneos con roles asignados, para construir una identidad positiva como estudiante de matemáticas, fomentar el bienestar personal y grupal y crear relaciones saludables.",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ]
+        }
+      ],
+      "evaluationCriteria": [
+        {
+          "id": "2eso-matematicas-cr-1-1",
+          "code": "1.1",
+          "competenceId": "2eso-matematicas-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Interpretar y analizar detenidamente enunciados de problemas matemáticos de diversa índole organizando lo datos dados, estableciendo las relaciones entre ellos y comprendiendo las preguntas formuladas."
+        },
+        {
+          "id": "2eso-matematicas-cr-1-2",
+          "code": "1.2",
+          "competenceId": "2eso-matematicas-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Conocer y aplicar diversas herramientas y estrategias que contribuyan a la resolución de problema."
+        },
+        {
+          "id": "2eso-matematicas-cr-1-3",
+          "code": "1.3",
+          "competenceId": "2eso-matematicas-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Obtener soluciones matemáticas de un problema, ordenando los pasos que se van a seguir y activando los conocimientos necesarios."
+        },
+        {
+          "id": "2eso-matematicas-cr-2-1",
+          "code": "2.1",
+          "competenceId": "2eso-matematicas-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ],
+          "description": "Analizar y comprobar la corrección matemática de las soluciones de un problema en el contexto del mismo."
+        },
+        {
+          "id": "2eso-matematicas-cr-2-2",
+          "code": "2.2",
+          "competenceId": "2eso-matematicas-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ],
+          "description": "Comprobar la validez de las soluciones de un problema, su aplicación en situaciones de la vida cotidiana, y su coherencia en el contexto planteado, evaluando el alcance y repercusión de estas desde diferentes perspectivas."
+        },
+        {
+          "id": "2eso-matematicas-cr-3-1",
+          "code": "3.1",
+          "competenceId": "2eso-matematicas-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Formular y comprobar conjeturas sencillas de forma guiada analizando patrones, propiedades y relaciones."
+        },
+        {
+          "id": "2eso-matematicas-cr-3-2",
+          "code": "3.2",
+          "competenceId": "2eso-matematicas-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Plantear variantes de un problema dado modificando alguno de sus datos o alguna condición del problema."
+        },
+        {
+          "id": "2eso-matematicas-cr-4-1",
+          "code": "4.1",
+          "competenceId": "2eso-matematicas-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Reconocer patrones, organizar datos y descomponer un problema en partes más simples facilitando su interpretación computacional."
+        },
+        {
+          "id": "2eso-matematicas-cr-4-2",
+          "code": "4.2",
+          "competenceId": "2eso-matematicas-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Modelizar situaciones de manera guiada, para resolver problemas de forma eficaz interpretando y modificando algoritmos."
+        },
+        {
+          "id": "2eso-matematicas-cr-5-1",
+          "code": "5.1",
+          "competenceId": "2eso-matematicas-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ],
+          "description": "Continuar y consolidar el establecimiento de conexiones entre diferentes procesos matemáticos aplicando conocimientos y experiencias previas."
+        },
+        {
+          "id": "2eso-matematicas-cr-6-1",
+          "code": "6.1",
+          "competenceId": "2eso-matematicas-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Identificar conexiones coherentes entre las matemáticas y otras materias resolviendo problemas contextualizados sencillos. 2-62702202-MCOB"
+        },
+        {
+          "id": "2eso-matematicas-cr-6-2",
+          "code": "6.2",
+          "competenceId": "2eso-matematicas-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Reconocer la aportación de las matemáticas al progreso de la humanidad y su contribución a la superación de los retos que demanda la sociedad actual."
+        },
+        {
+          "id": "2eso-matematicas-cr-7-1",
+          "code": "7.1",
+          "competenceId": "2eso-matematicas-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Elaborar representaciones matemáticas que ayuden en la búsqueda de estrategias de resolución de una situación problematizada."
+        },
+        {
+          "id": "2eso-matematicas-cr-8-1",
+          "code": "8.1",
+          "competenceId": "2eso-matematicas-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ],
+          "description": "Comunicar información utilizando el lenguaje matemático cada vez con mayor precisión, utilizando diferentes medios, oralmente y por escrito, al describir, explicar y justificar razonamientos, procedimientos y conclusiones."
+        },
+        {
+          "id": "2eso-matematicas-cr-9-1",
+          "code": "9.1",
+          "competenceId": "2eso-matematicas-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Gestionar las emociones propias, desarrollar el autoconcepto matemático como herramienta, generando expectativas positivas ante nuevos retos matemáticos. Colaborar activamente durante el proceso de aprendizaje del resto del alumnado."
+        },
+        {
+          "id": "2eso-matematicas-cr-9-2",
+          "code": "9.2",
+          "competenceId": "2eso-matematicas-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Mostrar una actitud positiva, perseverante y participativa en el aula, aceptando la crítica razonada al hacer frente a las diferentes situaciones de aprendizaje de las matemáticas."
+        },
+        {
+          "id": "2eso-matematicas-cr-10-1",
+          "code": "10.1",
+          "competenceId": "2eso-matematicas-ce-10",
+          "competenceCode": "CE10",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ],
+          "description": "Colaborar activamente y construir relaciones trabajando con las matemáticas en equipos heterogéneos, respetando diferentes opiniones, comunicándose de manera efectiva, pensando de forma crítica y creativa y tomando decisiones y realizando juicios informados."
+        }
+      ],
+      "sources": [
+        {
+          "title": "Decreto 65/2022 de la Comunidad de Madrid",
+          "url": "https://www.bocm.es/boletin/CM_Orden_BOCM/2022/07/26/BOCM-20220726-2.PDF"
+        }
+      ]
+    },
+    "3eso-matematicas": {
+      "schemaVersion": 1,
+      "subjectId": "3eso-matematicas",
+      "course": "3ºESO",
+      "subjectTitle": "Matemáticas",
+      "stage": "ESO",
+      "specificCompetencies": [
+        {
+          "id": "3eso-matematicas-ce-1",
+          "code": "CE1",
+          "description": "Interpretar, modelizar y resolver problemas de la vida cotidiana y propios de las matemáticas, aplicando diferentes estrategias y formas de razonamiento, para explorar distintas maneras de proceder y obtener posibles soluciones.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "3eso-matematicas-ce-2",
+          "code": "CE2",
+          "description": "Analizar las soluciones de un problema usando diferentes técnicas y herramientas, evaluando las respuestas obtenidas, para verificar su validez e idoneidad desde un punto de vista matemático y su repercusión global.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "3eso-matematicas-ce-3",
+          "code": "CE3",
+          "description": "Formular y comprobar conjeturas sencillas o plantear problemas de forma autónoma, reconociendo el valor del razonamiento y la argumentación, para generar nuevo conocimiento.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "3eso-matematicas-ce-4",
+          "code": "CE4",
+          "description": "Utilizar los principios del pensamiento computacional organizando datos, descomponiendo en partes, reconociendo patrones, interpretando, modificando y creando algoritmos, para modelizar situaciones y resolver problemas de forma eficaz.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "3eso-matematicas-ce-5",
+          "code": "CE5",
+          "description": "Reconocer y utilizar conexiones entre los diferentes elementos matemáticos, interconectando conceptos y procedimientos, para desarrollar una visión de las matemáticas como un todo integrado.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "3eso-matematicas-ce-6",
+          "code": "CE6",
+          "description": "Identificar las matemáticas implicadas en otras materias y en situaciones reales susceptibles de ser abordadas en términos matemáticos, interrelacionando conceptos y procedimientos, para aplicarlos en situaciones diversas.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "3eso-matematicas-ce-7",
+          "code": "CE7",
+          "description": "Representar, de forma individual y colectiva, conceptos, procedimientos, información y resultados matemáticos, usando diferentes tecnologías, para visualizar ideas y estructurar procesos matemáticos.",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "3eso-matematicas-ce-8",
+          "code": "CE8",
+          "description": "Comunicar de forma individual y colectiva conceptos, procedimientos y argumentos matemáticos, usando lenguaje oral, escrito o gráfico, utilizando la terminología matemática apropiada, para dar significado y coherencia a las ideas matemáticas.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ]
+        },
+        {
+          "id": "3eso-matematicas-ce-9",
+          "code": "CE9",
+          "description": "Desarrollar destrezas personales, identificando y gestionando emociones, poniendo en práctica estrategias de aceptación del error como parte del proceso de aprendizaje y adaptándose ante situaciones de incertidumbre, para mejorar la perseverancia en la consecución de objetivos y el disfrute en el aprendizaje de las matemáticas.",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "3eso-matematicas-ce-10",
+          "code": "CE10",
+          "description": "Desarrollar destrezas sociales reconociendo y respetando las emociones y experiencias de los demás, participando activa y reflexivamente en proyectos en equipos heterogéneos con roles asignados, para construir una identidad positiva como estudiante de matemáticas, fomentar el bienestar personal y grupal y crear relaciones saludables.",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ]
+        }
+      ],
+      "evaluationCriteria": [
+        {
+          "id": "3eso-matematicas-cr-1-1",
+          "code": "1.1",
+          "competenceId": "3eso-matematicas-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Interpretar los enunciados de problemas matemáticos con variedad de datos y preguntas encadenadas, organizando y estableciendo las relaciones entre los datos dados y aquellos que se deben obtener, categorizando y comprendiendo las diferentes preguntas formuladas estableciendo una secuencia adecuada para la resolución completa del problema."
+        },
+        {
+          "id": "3eso-matematicas-cr-1-2",
+          "code": "1.2",
+          "competenceId": "3eso-matematicas-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Seleccionar y aplicar las herramientas y estrategias apropiadas que contribuyan a la resolución de problemas en función de las cuestiones planteadas."
+        },
+        {
+          "id": "3eso-matematicas-cr-1-3",
+          "code": "1.3",
+          "competenceId": "3eso-matematicas-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Obtener y analizar las soluciones matemáticas de un problema con cuestiones encadenadas activando los conocimientos y utilizando las herramientas tecnológicas necesarias."
+        },
+        {
+          "id": "3eso-matematicas-cr-2-1",
+          "code": "2.1",
+          "competenceId": "3eso-matematicas-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ],
+          "description": "Comprobar la corrección matemática de las soluciones de un problema y expresarla de forma adecuada al contexto, empleando las unidades y la forma de escribir el resultado más conveniente."
+        },
+        {
+          "id": "3eso-matematicas-cr-2-2",
+          "code": "2.2",
+          "competenceId": "3eso-matematicas-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ],
+          "description": "Comprobar la validez de las soluciones de un problema y elaborar las respuestas comprobando su coherencia en el contexto planteado, evaluando el alcance y repercusión de estas desde diferentes perspectivas. 2-62702202-MCOB"
+        },
+        {
+          "id": "3eso-matematicas-cr-3-1",
+          "code": "3.1",
+          "competenceId": "3eso-matematicas-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Formular y comprobar conjeturas sencillas de forma guiada analizando patrones, propiedades y relaciones, manualmente y con el apoyo de herramientas tecnológicas."
+        },
+        {
+          "id": "3eso-matematicas-cr-3-2",
+          "code": "3.2",
+          "competenceId": "3eso-matematicas-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Plantear variantes de un problema dado modificando alguno de sus datos o alguna condición del problema analizando la repercusión de la modificación planteada."
+        },
+        {
+          "id": "3eso-matematicas-cr-3-3",
+          "code": "3.3",
+          "competenceId": "3eso-matematicas-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Emplear herramientas tecnológicas adecuadas en la investigación y comprobación de conjeturas o problemas."
+        },
+        {
+          "id": "3eso-matematicas-cr-4-1",
+          "code": "4.1",
+          "competenceId": "3eso-matematicas-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Reconocer patrones, organizar datos y descomponer un problema en partes más simples facilitando su interpretación computacional"
+        },
+        {
+          "id": "3eso-matematicas-cr-4-2",
+          "code": "4.2",
+          "competenceId": "3eso-matematicas-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Modelizar situaciones y resolver problemas de forma eficaz interpretando y modificando algoritmos."
+        },
+        {
+          "id": "3eso-matematicas-cr-5-1",
+          "code": "5.1",
+          "competenceId": "3eso-matematicas-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ],
+          "description": "Reconocer y usar con autonomía creciente las relaciones entre los conocimientos y experiencias matemáticas formando un todo coherente."
+        },
+        {
+          "id": "3eso-matematicas-cr-5-2",
+          "code": "5.2",
+          "competenceId": "3eso-matematicas-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ],
+          "description": "Realizar conexiones entre diferentes procesos matemáticos aplicando conocimientos y experiencias previas."
+        },
+        {
+          "id": "3eso-matematicas-cr-6-1",
+          "code": "6.1",
+          "competenceId": "3eso-matematicas-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Reconocer situaciones susceptibles de ser formuladas y resueltas mediante herramientas y estrategias matemáticas, estableciendo conexiones entre el mundo real y las matemáticas y usando los procesos inherentes a la investigación: inferir, medir, comunicar, clasificar y predecir."
+        },
+        {
+          "id": "3eso-matematicas-cr-6-2",
+          "code": "6.2",
+          "competenceId": "3eso-matematicas-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Identificar conexiones coherentes entre las matemáticas y otras materias resolviendo problemas contextualizados, mostrando curiosidad e interés en un conocimiento integral de la realidad."
+        },
+        {
+          "id": "3eso-matematicas-cr-6-3",
+          "code": "6.3",
+          "competenceId": "3eso-matematicas-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Reconocer la aportación de las matemáticas al progreso de la humanidad y su contribución a la superación de los retos que demanda la sociedad actual."
+        },
+        {
+          "id": "3eso-matematicas-cr-7-1",
+          "code": "7.1",
+          "competenceId": "3eso-matematicas-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Representar conceptos, procedimientos, información y resultados matemáticos de modos distintos y con diferentes herramientas, incluidas las digitales, visualizando ideas, estructurando procesos matemáticos y valorando su utilidad para compartir información."
+        },
+        {
+          "id": "3eso-matematicas-cr-7-2",
+          "code": "7.2",
+          "competenceId": "3eso-matematicas-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Elaborar representaciones matemáticas cada vez más complejas que ayuden en la búsqueda de estrategias de resolución de una situación problematizada."
+        },
+        {
+          "id": "3eso-matematicas-cr-8-1",
+          "code": "8.1",
+          "competenceId": "3eso-matematicas-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ],
+          "description": "Comunicar información utilizando el lenguaje matemático apropiado, utilizando diferentes medios, incluidos los digitales, oralmente y por escrito, al describir, explicar y justificar razonamientos, procedimientos y conclusiones."
+        },
+        {
+          "id": "3eso-matematicas-cr-8-2",
+          "code": "8.2",
+          "competenceId": "3eso-matematicas-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ],
+          "description": "Reconocer y emplear el lenguaje matemático presente en la vida cotidiana comunicando mensajes con contenido matemático con precisión y rigor creciente."
+        },
+        {
+          "id": "3eso-matematicas-cr-9-1",
+          "code": "9.1",
+          "competenceId": "3eso-matematicas-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Gestionar las emociones propias, desarrollar el autoconcepto matemático como herramienta, generando expectativas positivas ante nuevos retos matemáticos."
+        },
+        {
+          "id": "3eso-matematicas-cr-9-2",
+          "code": "9.2",
+          "competenceId": "3eso-matematicas-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Mostrar una actitud positiva y perseverante, aceptando la crítica razonada al hacer frente a las diferentes situaciones de aprendizaje de las matemáticas."
+        },
+        {
+          "id": "3eso-matematicas-cr-10-1",
+          "code": "10.1",
+          "competenceId": "3eso-matematicas-ce-10",
+          "competenceCode": "CE10",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ],
+          "description": "Colaborar activamente y construir relaciones trabajando con las matemáticas en equipos heterogéneos, respetando diferentes opiniones, comunicándose de manera efectiva, pensando de forma crítica y creativa y tomando decisiones y realizando juicios informados. 2-62702202-MCOB"
+        },
+        {
+          "id": "3eso-matematicas-cr-10-2",
+          "code": "10.2",
+          "competenceId": "3eso-matematicas-ce-10",
+          "competenceCode": "CE10",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ],
+          "description": "Participar en el reparto de tareas que deban desarrollarse en equipo, aportando valor, favoreciendo la inclusión, la escucha activa, asumiendo el rol asignado y responsabilizándose de la propia contribución al equipo."
+        }
+      ],
+      "sources": [
+        {
+          "title": "Decreto 65/2022 de la Comunidad de Madrid",
+          "url": "https://www.bocm.es/boletin/CM_Orden_BOCM/2022/07/26/BOCM-20220726-2.PDF"
+        }
+      ]
+    },
+    "4eso-matematicas-a": {
+      "schemaVersion": 1,
+      "subjectId": "4eso-matematicas-a",
+      "course": "4ºESO",
+      "subjectTitle": "Matemáticas A",
+      "stage": "ESO",
+      "specificCompetencies": [
+        {
+          "id": "4eso-matematicas-a-ce-1",
+          "code": "CE1",
+          "description": "Interpretar, modelizar y resolver problemas de la vida cotidiana y propios de las matemáticas, aplicando diferentes estrategias y formas de razonamiento, para explorar distintas maneras de proceder y obtener posibles soluciones.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-a-ce-2",
+          "code": "CE2",
+          "description": "Analizar las soluciones de un problema usando diferentes técnicas y herramientas, evaluando las respuestas obtenidas, para verificar su validez e idoneidad desde un punto de vista matemático y su repercusión global.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-a-ce-3",
+          "code": "CE3",
+          "description": "Formular y comprobar conjeturas sencillas o plantear problemas de forma autónoma, reconociendo el valor del razonamiento y la argumentación, para generar nuevo conocimiento.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-a-ce-4",
+          "code": "CE4",
+          "description": "Utilizar los principios del pensamiento computacional organizando datos, descomponiendo en partes, reconociendo patrones, interpretando, modificando y creando algoritmos, para modelizar situaciones y resolver problemas de forma eficaz.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-a-ce-5",
+          "code": "CE5",
+          "description": "Reconocer y utilizar conexiones entre los diferentes elementos matemáticos, interconectando conceptos y procedimientos, para desarrollar una visión de las matemáticas como un todo integrado.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-a-ce-6",
+          "code": "CE6",
+          "description": "Identificar las matemáticas implicadas en otras materias y en situaciones reales susceptibles de ser abordadas en términos matemáticos, interrelacionando conceptos y procedimientos, para aplicarlos en situaciones diversas.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-a-ce-7",
+          "code": "CE7",
+          "description": "Representar, de forma individual y colectiva, conceptos, procedimientos, información y resultados matemáticos, usando diferentes tecnologías, para visualizar ideas y estructurar procesos matemáticos.",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-a-ce-8",
+          "code": "CE8",
+          "description": "Comunicar de forma individual y colectiva conceptos, procedimientos y argumentos matemáticos, usando lenguaje oral, escrito o gráfico, utilizando la terminología matemática apropiada, para dar significado y coherencia a las ideas matemáticas.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-a-ce-9",
+          "code": "CE9",
+          "description": "Desarrollar destrezas personales, identificando y gestionando emociones, poniendo en práctica estrategias de aceptación del error como parte del proceso de aprendizaje y adaptándose ante situaciones de incertidumbre, para mejorar la perseverancia en la consecución de objetivos y el disfrute en el aprendizaje de las matemáticas.",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-a-ce-10",
+          "code": "CE10",
+          "description": "Desarrollar destrezas sociales reconociendo y respetando las emociones y experiencias de los demás, participando activa y reflexivamente en proyectos en equipos heterogéneos con roles asignados, para construir una identidad positiva como estudiante de matemáticas, fomentar el bienestar personal y grupal y crear relaciones saludables.",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ]
+        }
+      ],
+      "evaluationCriteria": [
+        {
+          "id": "4eso-matematicas-a-cr-1-1",
+          "code": "1.1",
+          "competenceId": "4eso-matematicas-a-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Reformular problemas matemáticos de forma verbal y gráfica, interpretando los datos, las relaciones entre ellos y las preguntas planteadas."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-1-2",
+          "code": "1.2",
+          "competenceId": "4eso-matematicas-a-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Seleccionar herramientas y estrategias elaboradas valorando su eficacia e idoneidad en la resolución de problemas."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-1-3",
+          "code": "1.3",
+          "competenceId": "4eso-matematicas-a-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Obtener todas las posibles soluciones matemáticas de un problema activando los conocimientos y utilizando las herramientas tecnológicas necesarias."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-2-1",
+          "code": "2.1",
+          "competenceId": "4eso-matematicas-a-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ],
+          "description": "Comprobar la corrección matemática de las soluciones de un problema."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-2-2",
+          "code": "2.2",
+          "competenceId": "4eso-matematicas-a-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ],
+          "description": "Seleccionar las soluciones óptimas de un problema valorando tanto la corrección matemática como sus implicaciones desde diferentes perspectivas."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-3-1",
+          "code": "3.1",
+          "competenceId": "4eso-matematicas-a-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Formular, comprobar e investigar conjeturas de forma guiada estudiando patrones, propiedades y relaciones. 2-62702202-MCOB"
+        },
+        {
+          "id": "4eso-matematicas-a-cr-3-2",
+          "code": "3.2",
+          "competenceId": "4eso-matematicas-a-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Crear variantes de un problema dado, modificando alguno de sus datos y observando la relación entre los diferentes resultados obtenidos."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-3-3",
+          "code": "3.3",
+          "competenceId": "4eso-matematicas-a-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Emplear herramientas tecnológicas adecuadas en la investigación y comprobación de conjeturas o problemas."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-4-1",
+          "code": "4.1",
+          "competenceId": "4eso-matematicas-a-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Reconocer e investigar patrones, organizar datos y descomponer un problema en partes más simples facilitando su interpretación y su tratamiento computacional."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-4-2",
+          "code": "4.2",
+          "competenceId": "4eso-matematicas-a-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Modelizar situaciones y resolver problemas de forma eficaz interpretando, modificando y creando algoritmos sencillos."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-5-1",
+          "code": "5.1",
+          "competenceId": "4eso-matematicas-a-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ],
+          "description": "Deducir relaciones entre los conocimientos y experiencias matemáticas, formando un todo coherente."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-5-2",
+          "code": "5.2",
+          "competenceId": "4eso-matematicas-a-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ],
+          "description": "Analizar y poner en práctica conexiones entre diferentes procesos matemáticos aplicando conocimientos y experiencias previas."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-6-1",
+          "code": "6.1",
+          "competenceId": "4eso-matematicas-a-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Proponer situaciones susceptibles de ser formuladas y resueltas mediante herramientas y estrategias matemáticas, estableciendo y aplicando conexiones entre el mundo real y las matemáticas, y usando los procesos inherentes a la investigación científica y matemática: inferir, medir, comunicar, clasificar y predecir."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-6-2",
+          "code": "6.2",
+          "competenceId": "4eso-matematicas-a-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Identificar y aplicar conexiones coherentes entre las matemáticas y otras materias realizando un análisis crítico."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-6-3",
+          "code": "6.3",
+          "competenceId": "4eso-matematicas-a-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Valorar la aportación de las matemáticas al progreso de la humanidad y su contribución en la superación de los retos que demanda la sociedad actual."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-7-1",
+          "code": "7.1",
+          "competenceId": "4eso-matematicas-a-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Representar matemáticamente la información más relevante de un problema, conceptos, procedimientos y resultados matemáticos visualizando ideas y estructurando procesos matemáticos."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-7-2",
+          "code": "7.2",
+          "competenceId": "4eso-matematicas-a-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Seleccionar entre diferentes herramientas, incluidas las digitales, y formas de representación (pictórica, gráfica, verbal o simbólica) valorando su utilidad para compartir información."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-8-1",
+          "code": "8.1",
+          "competenceId": "4eso-matematicas-a-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ],
+          "description": "Comunicar ideas, conclusiones, conjeturas y razonamientos matemáticos, utilizando diferentes medios, incluidos los digitales, con coherencia, claridad y terminología apropiada."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-8-2",
+          "code": "8.2",
+          "competenceId": "4eso-matematicas-a-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ],
+          "description": "Reconocer y emplear el lenguaje matemático presente en la vida cotidiana y en diversos contextos comunicando mensajes con contenido matemático con precisión y rigor."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-9-1",
+          "code": "9.1",
+          "competenceId": "4eso-matematicas-a-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Identificar y gestionar las emociones propias y desarrollar el autoconcepto matemático generando expectativas positivas ante nuevos retos matemáticos."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-9-2",
+          "code": "9.2",
+          "competenceId": "4eso-matematicas-a-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Mostrar una actitud positiva y perseverante al hacer frente a las diferentes situaciones de aprendizaje de las matemáticas aceptando la crítica razonada."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-10-1",
+          "code": "10.1",
+          "competenceId": "4eso-matematicas-a-ce-10",
+          "competenceCode": "CE10",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ],
+          "description": "Colaborar activamente y construir relaciones trabajando con las matemáticas en equipos heterogéneos, respetando diferentes opiniones, comunicándose de manera efectiva, pensando de forma crítica y creativa, tomando decisiones y realizando juicios informados."
+        },
+        {
+          "id": "4eso-matematicas-a-cr-10-2",
+          "code": "10.2",
+          "competenceId": "4eso-matematicas-a-ce-10",
+          "competenceCode": "CE10",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ],
+          "description": "Gestionar el reparto de tareas en el trabajo en equipo, aportando valor, favoreciendo la inclusión, la escucha activa, responsabilizándose del rol asignado y de la propia contribución al equipo. 2-62702202-MCOB"
+        }
+      ],
+      "sources": [
+        {
+          "title": "Decreto 65/2022 de la Comunidad de Madrid",
+          "url": "https://www.bocm.es/boletin/CM_Orden_BOCM/2022/07/26/BOCM-20220726-2.PDF"
+        }
+      ]
+    },
+    "4eso-matematicas-b": {
+      "schemaVersion": 1,
+      "subjectId": "4eso-matematicas-b",
+      "course": "4ºESO",
+      "subjectTitle": "Matemáticas B",
+      "stage": "ESO",
+      "specificCompetencies": [
+        {
+          "id": "4eso-matematicas-b-ce-1",
+          "code": "CE1",
+          "description": "Interpretar, modelizar y resolver problemas de la vida cotidiana y propios de las matemáticas, aplicando diferentes estrategias y formas de razonamiento, para explorar distintas maneras de proceder y obtener posibles soluciones.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-b-ce-2",
+          "code": "CE2",
+          "description": "Analizar las soluciones de un problema usando diferentes técnicas y herramientas, evaluando las respuestas obtenidas, para verificar su validez e idoneidad desde un punto de vista matemático y su repercusión global.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-b-ce-3",
+          "code": "CE3",
+          "description": "Formular y comprobar conjeturas sencillas o plantear problemas de forma autónoma, reconociendo el valor del razonamiento y la argumentación, para generar nuevo conocimiento.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-b-ce-4",
+          "code": "CE4",
+          "description": "Utilizar los principios del pensamiento computacional organizando datos, descomponiendo en partes, reconociendo patrones, interpretando, modificando y creando algoritmos, para modelizar situaciones y resolver problemas de forma eficaz.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-b-ce-5",
+          "code": "CE5",
+          "description": "Reconocer y utilizar conexiones entre los diferentes elementos matemáticos, interconectando conceptos y procedimientos, para desarrollar una visión de las matemáticas como un todo integrado.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-b-ce-6",
+          "code": "CE6",
+          "description": "Identificar las matemáticas implicadas en otras materias y en situaciones reales susceptibles de ser abordadas en términos matemáticos, interrelacionando conceptos y procedimientos, para aplicarlos en situaciones diversas.",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-b-ce-7",
+          "code": "CE7",
+          "description": "Representar, de forma individual y colectiva, conceptos, procedimientos, información y resultados matemáticos, usando diferentes tecnologías, para visualizar ideas y estructurar procesos matemáticos.",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-b-ce-8",
+          "code": "CE8",
+          "description": "Comunicar de forma individual y colectiva conceptos, procedimientos y argumentos matemáticos, usando lenguaje oral, escrito o gráfico, utilizando la terminología matemática apropiada, para dar significado y coherencia a las ideas matemáticas.",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-b-ce-9",
+          "code": "CE9",
+          "description": "Desarrollar destrezas personales, identificando y gestionando emociones, poniendo en práctica estrategias de aceptación del error como parte del proceso de aprendizaje y adaptándose ante situaciones de incertidumbre, para mejorar la perseverancia en la consecución de objetivos y el disfrute en el aprendizaje de las matemáticas.",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ]
+        },
+        {
+          "id": "4eso-matematicas-b-ce-10",
+          "code": "CE10",
+          "description": "Desarrollar destrezas sociales reconociendo y respetando las emociones y experiencias de los demás, participando activa y reflexivamente en proyectos en equipos heterogéneos con roles asignados, para construir una identidad positiva como estudiante de matemáticas, fomentar el bienestar personal y grupal y crear relaciones saludables.",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ]
+        }
+      ],
+      "evaluationCriteria": [
+        {
+          "id": "4eso-matematicas-b-cr-1-1",
+          "code": "1.1",
+          "competenceId": "4eso-matematicas-b-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Reformular de forma verbal y gráfica problemas matemáticos, interpretando los datos, las relaciones entre ellos y las preguntas planteadas."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-1-2",
+          "code": "1.2",
+          "competenceId": "4eso-matematicas-b-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Analizar y seleccionar diferentes herramientas y estrategias elaboradas para resolver un mismo problema valorando su eficiencia."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-1-3",
+          "code": "1.3",
+          "competenceId": "4eso-matematicas-b-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cpsaa5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Obtener todas las posibles soluciones matemáticas de un problema movilizando los conocimientos y utilizando las herramientas tecnológicas necesarias."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-2-1",
+          "code": "2.1",
+          "competenceId": "4eso-matematicas-b-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ],
+          "description": "Comprobar la corrección matemática de las soluciones de un problema."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-2-2",
+          "code": "2.2",
+          "competenceId": "4eso-matematicas-b-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd2",
+            "eso-cpsaa4",
+            "eso-cc3",
+            "eso-ce3"
+          ],
+          "description": "Justificar las soluciones óptimas de un problema desde diferentes perspectivas."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-3-1",
+          "code": "3.1",
+          "competenceId": "4eso-matematicas-b-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Formular, comprobar e investigar conjeturas de forma guiada."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-3-2",
+          "code": "3.2",
+          "competenceId": "4eso-matematicas-b-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Plantear variantes de un problema que lleven a una generalización."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-3-3",
+          "code": "3.3",
+          "competenceId": "4eso-matematicas-b-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Emplear herramientas tecnológicas adecuadas en la investigación y comprobación de conjeturas o problemas."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-4-1",
+          "code": "4.1",
+          "competenceId": "4eso-matematicas-b-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Generalizar patrones y proporcionar una representación computacional de situaciones problematizadas. 2-62702202-MCOB"
+        },
+        {
+          "id": "4eso-matematicas-b-cr-4-2",
+          "code": "4.2",
+          "competenceId": "4eso-matematicas-b-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-ce3"
+          ],
+          "description": "Modelizar situaciones y resolver problemas de forma eficaz interpretando, modificando, generalizando y creando algoritmos."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-5-1",
+          "code": "5.1",
+          "competenceId": "4eso-matematicas-b-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ],
+          "description": "Deducir relaciones entre los conocimientos y experiencias matemáticas, formando un todo coherente."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-5-2",
+          "code": "5.2",
+          "competenceId": "4eso-matematicas-b-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem3",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ccec1"
+          ],
+          "description": "Analizar y poner en práctica conexiones entre diferentes procesos matemáticos aplicando conocimientos y experiencias previas."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-6-1",
+          "code": "6.1",
+          "competenceId": "4eso-matematicas-b-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Proponer situaciones susceptibles de ser formuladas y resueltas mediante herramientas y estrategias matemáticas, estableciendo y aplicando conexiones entre el mundo real y las matemáticas, y usando los procesos inherentes a la investigación científica y matemática: inferir, medir, comunicar, clasificar y predecir."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-6-2",
+          "code": "6.2",
+          "competenceId": "4eso-matematicas-b-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Analizar y aplicar conexiones coherentes entre las matemáticas y otras materias realizando un análisis crítico."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-6-3",
+          "code": "6.3",
+          "competenceId": "4eso-matematicas-b-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "eso-stem1",
+            "eso-stem2",
+            "eso-cd3",
+            "eso-cd5",
+            "eso-cc4",
+            "eso-ce2",
+            "eso-ce3",
+            "eso-ccec1"
+          ],
+          "description": "Valorar la aportación de las matemáticas al progreso de la humanidad y su contribución a la superación de los retos que demanda la sociedad actual."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-7-1",
+          "code": "7.1",
+          "competenceId": "4eso-matematicas-b-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Representar matemáticamente la información más relevante de un problema, conceptos, procedimientos y resultados matemáticos visualizando ideas y estructurando procesos matemáticos."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-7-2",
+          "code": "7.2",
+          "competenceId": "4eso-matematicas-b-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "eso-stem3",
+            "eso-cd1",
+            "eso-cd2",
+            "eso-cd5",
+            "eso-ce3",
+            "eso-ccec4"
+          ],
+          "description": "Seleccionar entre diferentes herramientas, incluidas las digitales, y formas de representación (pictórica, gráfica, verbal o simbólica) valorando su utilidad para compartir información."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-8-1",
+          "code": "8.1",
+          "competenceId": "4eso-matematicas-b-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ],
+          "description": "Comunicar ideas, conclusiones, conjeturas y razonamientos matemáticos, utilizando diferentes medios, incluidos los digitales, con coherencia, claridad y terminología apropiada."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-8-2",
+          "code": "8.2",
+          "competenceId": "4eso-matematicas-b-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "eso-ccl1",
+            "eso-ccl3",
+            "eso-cp1",
+            "eso-stem2",
+            "eso-stem4",
+            "eso-cd2",
+            "eso-cd3",
+            "eso-ce3",
+            "eso-ccec3"
+          ],
+          "description": "Reconocer y emplear el lenguaje matemático presente en la vida cotidiana y en diversos contextos comunicando mensajes con contenido matemático con precisión y rigor."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-9-1",
+          "code": "9.1",
+          "competenceId": "4eso-matematicas-b-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Identificar y gestionar las emociones propias y desarrollar el autoconcepto matemático generando expectativas positivas ante nuevos retos matemáticos."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-9-2",
+          "code": "9.2",
+          "competenceId": "4eso-matematicas-b-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "eso-stem5",
+            "eso-cpsaa1",
+            "eso-cpsaa4",
+            "eso-cpsaa5",
+            "eso-ce2",
+            "eso-ce3"
+          ],
+          "description": "Mostrar una actitud positiva y perseverante al hacer frente a las diferentes situaciones de aprendizaje de las matemáticas aceptando la crítica razonada."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-10-1",
+          "code": "10.1",
+          "competenceId": "4eso-matematicas-b-ce-10",
+          "competenceCode": "CE10",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ],
+          "description": "Colaborar activamente y construir relaciones trabajando con las matemáticas en equipos heterogéneos, respetando diferentes opiniones, comunicándose de manera efectiva, pensando de forma crítica y creativa, tomando decisiones y realizando juicios informados."
+        },
+        {
+          "id": "4eso-matematicas-b-cr-10-2",
+          "code": "10.2",
+          "competenceId": "4eso-matematicas-b-ce-10",
+          "competenceCode": "CE10",
+          "descriptorIds": [
+            "eso-ccl5",
+            "eso-cp3",
+            "eso-stem3",
+            "eso-cpsaa1",
+            "eso-cpsaa3",
+            "eso-cc2",
+            "eso-cc3"
+          ],
+          "description": "Gestionar el reparto de tareas en el trabajo en equipo, aportando valor, favoreciendo la inclusión, la escucha activa, responsabilizándose del rol asignado y de la propia contribución al equipo."
+        }
+      ],
+      "sources": [
+        {
+          "title": "Decreto 65/2022 de la Comunidad de Madrid",
+          "url": "https://www.bocm.es/boletin/CM_Orden_BOCM/2022/07/26/BOCM-20220726-2.PDF"
+        }
+      ]
+    },
+    "1bto-matematicas-i": {
+      "schemaVersion": 1,
+      "subjectId": "1bto-matematicas-i",
+      "course": "1ºBTO",
+      "subjectTitle": "Matemáticas I",
+      "stage": "Bachillerato",
+      "specificCompetencies": [
+        {
+          "id": "1bto-matematicas-i-ce-1",
+          "code": "CE1",
+          "description": "Modelizar y resolver problemas de la vida cotidiana y de la ciencia y la tecnología aplicando diferentes estrategias y formas de razonamiento para obtener posibles soluciones.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-i-ce-2",
+          "code": "CE2",
+          "description": "Verificar la validez de las posibles soluciones de un problema empleando el razonamiento y la argumentación para contrastar su idoneidad.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-i-ce-3",
+          "code": "CE3",
+          "description": "Formular o investigar conjeturas o problemas, utilizando el razonamiento, la argumentación, la creatividad y el uso de herramientas tecnológicas, para generar nuevo conocimiento matemático.",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-i-ce-4",
+          "code": "CE4",
+          "description": "Utilizar el pensamiento computacional de forma eficaz, modificando, creando y generalizando algoritmos que resuelvan problemas mediante el uso de las matemáticas, para modelizar y resolver situaciones de la vida cotidiana y del ámbito de la ciencia y la tecnología.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-i-ce-5",
+          "code": "CE5",
+          "description": "Establecer, investigar y utilizar conexiones entre las diferentes ideas matemáticas estableciendo vínculos entre conceptos, procedimientos, argumentos y modelos para dar significado y estructurar el aprendizaje matemático.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-i-ce-6",
+          "code": "CE6",
+          "description": "Descubrir los vínculos de las matemáticas con otras áreas de conocimiento y profundizar en sus conexiones, interrelacionando conceptos y procedimientos, para modelizar, resolver problemas y desarrollar la capacidad crítica, creativa e innovadora en situaciones diversas.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-i-ce-7",
+          "code": "CE7",
+          "description": "Representar conceptos, procedimientos e información matemáticos seleccionando diferentes tecnologías, para visualizar ideas y estructurar razonamientos matemáticos.",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-i-ce-8",
+          "code": "CE8",
+          "description": "Comunicar las ideas matemáticas, de forma individual y colectiva, empleando el soporte, la terminología y el rigor apropiados, para organizar y consolidar el pensamiento matemático.",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-i-ce-9",
+          "code": "CE9",
+          "description": "Utilizar destrezas personales y sociales, identificando y gestionando las propias emociones, respetando las de los demás y organizando activamente el trabajo en equipos heterogéneos, aprendiendo del error como parte del proceso de aprendizaje y afrontando situaciones de incertidumbre, para perseverar en la consecución de objetivos en el aprendizaje de las matemáticas.",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ]
+        }
+      ],
+      "evaluationCriteria": [
+        {
+          "id": "1bto-matematicas-i-cr-1-1",
+          "code": "1.1",
+          "competenceId": "1bto-matematicas-i-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ],
+          "description": "Manejar algunas estrategias y herramientas, incluidas las digitales, en la modelización y resolución de problemas de la vida cotidiana y de la ciencia y la tecnología, evaluando su eficiencia en cada caso."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-1-2",
+          "code": "1.2",
+          "competenceId": "1bto-matematicas-i-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ],
+          "description": "Obtener todas las posibles soluciones matemáticas de problemas de la vida cotidiana y de la ciencia y la tecnología, describiendo el procedimiento utilizado."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-2-1",
+          "code": "2.1",
+          "competenceId": "1bto-matematicas-i-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ],
+          "description": "Comprobar la validez matemática de las posibles soluciones de un problema utilizando el razonamiento y la argumentación."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-2-2",
+          "code": "2.2",
+          "competenceId": "1bto-matematicas-i-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ],
+          "description": "Seleccionar la solución más adecuada de un problema en función del contexto, usando el razonamiento y la argumentación."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-3-1",
+          "code": "3.1",
+          "competenceId": "1bto-matematicas-i-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Adquirir nuevo conocimiento matemático a partir de la formulación de conjeturas y problemas de forma guiada."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-3-2",
+          "code": "3.2",
+          "competenceId": "1bto-matematicas-i-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Emplear herramientas tecnológicas adecuadas en la formulación o investigación de conjeturas o problemas."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-4-1",
+          "code": "4.1",
+          "competenceId": "1bto-matematicas-i-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Interpretar, modelizar y resolver situaciones problematizadas de la vida cotidiana y de la ciencia y la tecnología, utilizando el pensamiento computacional, modificando y creando algoritmos."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-5-1",
+          "code": "5.1",
+          "competenceId": "1bto-matematicas-i-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Manifestar una visión matemática integrada, investigando y conectando las diferentes ideas matemáticas."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-5-2",
+          "code": "5.2",
+          "competenceId": "1bto-matematicas-i-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Resolver problemas en contextos matemáticos estableciendo y aplicando conexiones entre las diferentes ideas matemáticas."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-6-1",
+          "code": "6.1",
+          "competenceId": "1bto-matematicas-i-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Resolver problemas en situaciones diversas, utilizando procesos matemáticos, estableciendo y aplicando conexiones entre el mundo real, otras áreas de conocimiento y las matemáticas."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-6-2",
+          "code": "6.2",
+          "competenceId": "1bto-matematicas-i-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Analizar la aportación de las matemáticas al progreso de la humanidad reflexionando sobre su contribución en la propuesta de soluciones a situaciones complejas y a los retos científicos y tecnológicos que se plantean en la sociedad."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-7-1",
+          "code": "7.1",
+          "competenceId": "1bto-matematicas-i-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ],
+          "description": "Representar ideas matemáticas, estructurando diferentes razonamientos matemáticos y seleccionando las tecnologías más adecuadas. 1-62702202-MCOB"
+        },
+        {
+          "id": "1bto-matematicas-i-cr-7-2",
+          "code": "7.2",
+          "competenceId": "1bto-matematicas-i-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ],
+          "description": "Seleccionar y utilizar diversas formas de representación, valorando su utilidad para compartir información."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-8-1",
+          "code": "8.1",
+          "competenceId": "1bto-matematicas-i-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ],
+          "description": "Mostrar organización al comunicar las ideas matemáticas empleando el soporte, la terminología y el rigor apropiados."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-8-2",
+          "code": "8.2",
+          "competenceId": "1bto-matematicas-i-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ],
+          "description": "Reconocer y emplear el lenguaje matemático en diferentes contextos, comunicando la información con precisión y rigor."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-9-1",
+          "code": "9.1",
+          "competenceId": "1bto-matematicas-i-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Afrontar las situaciones de incertidumbre, aceptando y aprendiendo del error como parte del proceso de aprendizaje de las matemáticas."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-9-2",
+          "code": "9.2",
+          "competenceId": "1bto-matematicas-i-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Mostrar una actitud positiva y perseverante, aceptando y aprendiendo de la crítica razonada al hacer frente a las diferentes actividades de las matemáticas."
+        },
+        {
+          "id": "1bto-matematicas-i-cr-9-3",
+          "code": "9.3",
+          "competenceId": "1bto-matematicas-i-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Participar en tareas matemáticas de forma activa en equipos heterogéneos, escuchando su razonamiento."
+        }
+      ],
+      "sources": [
+        {
+          "title": "Decreto 64/2022 de la Comunidad de Madrid",
+          "url": "https://www.bocm.es/boletin/CM_Orden_BOCM/2022/07/26/BOCM-20220726-1.PDF"
+        }
+      ]
+    },
+    "2bto-matematicas-ii": {
+      "schemaVersion": 1,
+      "subjectId": "2bto-matematicas-ii",
+      "course": "2ºBTO",
+      "subjectTitle": "Matemáticas II",
+      "stage": "Bachillerato",
+      "specificCompetencies": [
+        {
+          "id": "2bto-matematicas-ii-ce-1",
+          "code": "CE1",
+          "description": "Modelizar y resolver problemas de la vida cotidiana y de la ciencia y la tecnología aplicando diferentes estrategias y formas de razonamiento para obtener posibles soluciones.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ii-ce-2",
+          "code": "CE2",
+          "description": "Verificar la validez de las posibles soluciones de un problema empleando el razonamiento y la argumentación para contrastar su idoneidad.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ii-ce-3",
+          "code": "CE3",
+          "description": "Formular o investigar conjeturas o problemas, utilizando el razonamiento, la argumentación, la creatividad y el uso de herramientas tecnológicas, para generar nuevo conocimiento matemático.",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ii-ce-4",
+          "code": "CE4",
+          "description": "Utilizar el pensamiento computacional de forma eficaz, modificando, creando y generalizando algoritmos que resuelvan problemas mediante el uso de las matemáticas, para modelizar y resolver situaciones de la vida cotidiana y del ámbito de la ciencia y la tecnología.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ii-ce-5",
+          "code": "CE5",
+          "description": "Establecer, investigar y utilizar conexiones entre las diferentes ideas matemáticas estableciendo vínculos entre conceptos, procedimientos, argumentos y modelos para dar significado y estructurar el aprendizaje matemático.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ii-ce-6",
+          "code": "CE6",
+          "description": "Descubrir los vínculos de las matemáticas con otras áreas de conocimiento y profundizar en sus conexiones, interrelacionando conceptos y procedimientos, para modelizar, resolver problemas y desarrollar la capacidad crítica, creativa e innovadora en situaciones diversas.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ii-ce-7",
+          "code": "CE7",
+          "description": "Representar conceptos, procedimientos e información matemáticos seleccionando diferentes tecnologías, para visualizar ideas y estructurar razonamientos matemáticos.",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ii-ce-8",
+          "code": "CE8",
+          "description": "Comunicar las ideas matemáticas, de forma individual y colectiva, empleando el soporte, la terminología y el rigor apropiados, para organizar y consolidar el pensamiento matemático.",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ii-ce-9",
+          "code": "CE9",
+          "description": "Utilizar destrezas personales y sociales, identificando y gestionando las propias emociones, respetando las de los demás y organizando activamente el trabajo en equipos heterogéneos, aprendiendo del error como parte del proceso de aprendizaje y afrontando situaciones de incertidumbre, para perseverar en la consecución de objetivos en el aprendizaje de las matemáticas.",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ]
+        }
+      ],
+      "evaluationCriteria": [
+        {
+          "id": "2bto-matematicas-ii-cr-1-1",
+          "code": "1.1",
+          "competenceId": "2bto-matematicas-ii-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ],
+          "description": "Manejar diferentes estrategias y herramientas, incluidas las digitales, que modelizan y resuelven problemas de la vida cotidiana y de la ciencia y la tecnología, seleccionando las más adecuadas según su eficiencia."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-1-2",
+          "code": "1.2",
+          "competenceId": "2bto-matematicas-ii-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ],
+          "description": "Obtener todas las posibles soluciones matemáticas de problemas de la vida cotidiana y de la ciencia y la tecnología, describiendo el procedimiento utilizado."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-2-1",
+          "code": "2.1",
+          "competenceId": "2bto-matematicas-ii-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ],
+          "description": "Demostrar la validez matemática de las posibles soluciones de un problema utilizando el razonamiento y la argumentación."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-2-2",
+          "code": "2.2",
+          "competenceId": "2bto-matematicas-ii-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ],
+          "description": "Seleccionar la solución más adecuada de un problema en función del contexto, usando el razonamiento y la argumentación."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-3-1",
+          "code": "3.1",
+          "competenceId": "2bto-matematicas-ii-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Adquirir nuevo conocimiento matemático mediante la formulación, razonamiento y justificación de conjeturas y problemas de forma autónoma."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-3-2",
+          "code": "3.2",
+          "competenceId": "2bto-matematicas-ii-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Integrar el uso de herramientas tecnológicas en la formulación o investigación de conjeturas y problemas. 1-62702202-MCOB"
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-4-1",
+          "code": "4.1",
+          "competenceId": "2bto-matematicas-ii-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Interpretar, modelizar y resolver situaciones de la vida cotidiana y de la ciencia y la tecnología, utilizando el pensamiento computacional, modificando, creando y generalizando algoritmos."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-5-1",
+          "code": "5.1",
+          "competenceId": "2bto-matematicas-ii-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Demostrar una visión matemática integrada, investigando y conectando las diferentes ideas matemáticas."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-5-2",
+          "code": "5.2",
+          "competenceId": "2bto-matematicas-ii-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Resolver problemas en contextos matemáticos estableciendo y aplicando conexiones entre las diferentes ideas matemáticas."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-6-1",
+          "code": "6.1",
+          "competenceId": "2bto-matematicas-ii-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Resolver problemas en situaciones diversas utilizando procesos matemáticos, reflexionando, estableciendo y aplicando conexiones entre el mundo real, otras áreas de conocimiento y las matemáticas."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-6-2",
+          "code": "6.2",
+          "competenceId": "2bto-matematicas-ii-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Analizar la aportación de las matemáticas al progreso de la humanidad, valorando su contribución en la propuesta de soluciones a situaciones complejas y a los retos científicos y tecnológicos que se plantean en la sociedad."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-7-1",
+          "code": "7.1",
+          "competenceId": "2bto-matematicas-ii-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ],
+          "description": "Representar ideas matemáticas, estructurando diferentes razonamientos matemáticos y seleccionando las tecnologías más adecuadas."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-7-2",
+          "code": "7.2",
+          "competenceId": "2bto-matematicas-ii-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ],
+          "description": "Seleccionar y utilizar diversas formas de representación, valorando su utilidad para compartir información."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-8-1",
+          "code": "8.1",
+          "competenceId": "2bto-matematicas-ii-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ],
+          "description": "Mostrar organización al comunicar las ideas matemáticas, empleando el soporte, la terminología y el rigor apropiados."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-8-2",
+          "code": "8.2",
+          "competenceId": "2bto-matematicas-ii-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ],
+          "description": "Reconocer y emplear el lenguaje matemático en diferentes contextos, comunicando la información con precisión y rigor."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-9-1",
+          "code": "9.1",
+          "competenceId": "2bto-matematicas-ii-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Afrontar las situaciones de incertidumbre y tomar decisiones evaluando distintas opciones, aceptando y aprendiendo del error como parte del proceso de aprendizaje de las matemáticas."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-9-2",
+          "code": "9.2",
+          "competenceId": "2bto-matematicas-ii-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Mostrar una actitud positiva y perseverante, aceptando y aprendiendo de la crítica razonada al hacer frente a las diferentes situaciones de aprendizaje de las matemáticas."
+        },
+        {
+          "id": "2bto-matematicas-ii-cr-9-3",
+          "code": "9.3",
+          "competenceId": "2bto-matematicas-ii-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Trabajar en tareas matemáticas de forma activa en equipos heterogéneos, escuchando su razonamiento, aplicando las habilidades sociales más propicias y fomentando el bienestar del equipo y las relaciones saludables."
+        }
+      ],
+      "sources": [
+        {
+          "title": "Decreto 64/2022 de la Comunidad de Madrid",
+          "url": "https://www.bocm.es/boletin/CM_Orden_BOCM/2022/07/26/BOCM-20220726-1.PDF"
+        }
+      ]
+    },
+    "1bto-matematicas-ccss-i": {
+      "schemaVersion": 1,
+      "subjectId": "1bto-matematicas-ccss-i",
+      "course": "1ºBTO",
+      "subjectTitle": "Matemáticas CC.SS. I",
+      "stage": "Bachillerato",
+      "specificCompetencies": [
+        {
+          "id": "1bto-matematicas-ccss-i-ce-1",
+          "code": "CE1",
+          "description": "Modelizar y resolver problemas de la vida cotidiana y de las ciencias sociales aplicando diferentes estrategias y formas de razonamiento para obtener posibles soluciones.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-ce-2",
+          "code": "CE2",
+          "description": "Verificar la validez de las posibles soluciones de un problema empleando el razonamiento y la argumentación para contrastar su idoneidad.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-ce-3",
+          "code": "CE3",
+          "description": "Formular o investigar conjeturas o problemas, utilizando el razonamiento, la argumentación, la creatividad y el uso de herramientas tecnológicas, para generar nuevo conocimiento matemático.",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-ce-4",
+          "code": "CE4",
+          "description": "Utilizar el pensamiento computacional de forma eficaz, modificando, creando y generalizando algoritmos que resuelvan problemas mediante el uso de las matemáticas, para modelizar y resolver situaciones de la vida cotidiana y del ámbito de las ciencias sociales.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-ce-5",
+          "code": "CE5",
+          "description": "Establecer, investigar y utilizar conexiones entre las diferentes ideas matemáticas estableciendo vínculos entre conceptos, procedimientos, argumentos y modelos para dar significado y estructurar el aprendizaje matemático.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-ce-6",
+          "code": "CE6",
+          "description": "Descubrir los vínculos de las matemáticas con otras áreas de conocimiento y profundizar en sus conexiones, interrelacionando conceptos y procedimientos, para modelizar, resolver problemas y desarrollar la capacidad crítica, creativa e innovadora en situaciones diversas.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-ce-7",
+          "code": "CE7",
+          "description": "Representar conceptos, procedimientos e información matemáticos seleccionando diferentes tecnologías, para visualizar ideas y estructurar razonamientos matemáticos.",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-ce-8",
+          "code": "CE8",
+          "description": "Comunicar las ideas matemáticas, de forma individual y colectiva, empleando el soporte, la terminología y el rigor apropiados, para organizar y consolidar el pensamiento matemático.",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ]
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-ce-9",
+          "code": "CE9",
+          "description": "Utilizar destrezas personales y sociales, identificando y gestionando las propias emociones, respetando las de los demás y organizando activamente el trabajo en equipos heterogéneos, aprendiendo del error como parte del proceso de aprendizaje y afrontando situaciones de incertidumbre, para perseverar en la consecución de objetivos en el aprendizaje de las matemáticas.",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ]
+        }
+      ],
+      "evaluationCriteria": [
+        {
+          "id": "1bto-matematicas-ccss-i-cr-1-1",
+          "code": "1.1",
+          "competenceId": "1bto-matematicas-ccss-i-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ],
+          "description": "Emplear algunas estrategias y herramientas, incluidas las digitales, para resolver problemas de la vida cotidiana y de las ciencias sociales, valorando su eficiencia en cada caso."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-1-2",
+          "code": "1.2",
+          "competenceId": "1bto-matematicas-ccss-i-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ],
+          "description": "Obtener todas las posibles soluciones matemáticas de problemas de la vida cotidiana y de las ciencias sociales, describiendo el procedimiento realizado."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-2-1",
+          "code": "2.1",
+          "competenceId": "1bto-matematicas-ccss-i-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ],
+          "description": "Comprobar la validez matemática de las posibles soluciones de un problema, utilizando el razonamiento y la argumentación."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-2-2",
+          "code": "2.2",
+          "competenceId": "1bto-matematicas-ccss-i-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ],
+          "description": "Seleccionar la solución más adecuada de un problema en función del contexto, usando el razonamiento y la argumentación."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-3-1",
+          "code": "3.1",
+          "competenceId": "1bto-matematicas-ccss-i-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Adquirir nuevo conocimiento matemático mediante la formulación de conjeturas y problemas de forma guiada."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-3-2",
+          "code": "3.2",
+          "competenceId": "1bto-matematicas-ccss-i-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Emplear herramientas tecnológicas adecuadas en la formulación o investigación de conjeturas o problemas."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-4-1",
+          "code": "4.1",
+          "competenceId": "1bto-matematicas-ccss-i-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Interpretar, modelizar y resolver situaciones problematizadas de la vida cotidiana y de las ciencias sociales, utilizando el pensamiento computacional, modificando y creando algoritmos."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-5-1",
+          "code": "5.1",
+          "competenceId": "1bto-matematicas-ccss-i-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Manifestar una visión matemática integrada, investigando y conectando las diferentes ideas matemáticas. 1-62702202-MCOB"
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-5-2",
+          "code": "5.2",
+          "competenceId": "1bto-matematicas-ccss-i-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Resolver problemas, estableciendo y aplicando conexiones entre las diferentes ideas matemáticas."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-6-1",
+          "code": "6.1",
+          "competenceId": "1bto-matematicas-ccss-i-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Resolver problemas en situaciones diversas, utilizando procesos matemáticos, estableciendo y aplicando conexiones entre el mundo real, otras áreas de conocimiento y las matemáticas."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-6-2",
+          "code": "6.2",
+          "competenceId": "1bto-matematicas-ccss-i-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Analizar la aportación de las matemáticas al progreso de la humanidad reflexionando sobre su contribución en la propuesta de soluciones a situaciones complejas y a los retos en las ciencias sociales que se planteen."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-7-1",
+          "code": "7.1",
+          "competenceId": "1bto-matematicas-ccss-i-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ],
+          "description": "Representar ideas matemáticas, estructurando diferentes razonamientos matemáticos y seleccionando las tecnologías más adecuadas."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-7-2",
+          "code": "7.2",
+          "competenceId": "1bto-matematicas-ccss-i-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ],
+          "description": "Seleccionar y utilizar diversas formas de representación, valorando su utilidad para compartir información."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-8-1",
+          "code": "8.1",
+          "competenceId": "1bto-matematicas-ccss-i-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ],
+          "description": "Mostrar organización al comunicar las ideas matemáticas, empleando el soporte, la terminología y el rigor apropiados."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-8-2",
+          "code": "8.2",
+          "competenceId": "1bto-matematicas-ccss-i-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ],
+          "description": "Reconocer y emplear el lenguaje matemático en diferentes contextos, comunicando la información con precisión y rigor."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-9-1",
+          "code": "9.1",
+          "competenceId": "1bto-matematicas-ccss-i-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Afrontar las situaciones de incertidumbre, y aprendiendo del error como parte del proceso de aprendizaje de las Matemáticas."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-9-2",
+          "code": "9.2",
+          "competenceId": "1bto-matematicas-ccss-i-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Mostrar una actitud positiva y perseverante, aceptando y aprendiendo de la crítica razonada al hacer frente a las diferentes actividades de las matemáticas."
+        },
+        {
+          "id": "1bto-matematicas-ccss-i-cr-9-3",
+          "code": "9.3",
+          "competenceId": "1bto-matematicas-ccss-i-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Participar en tareas matemáticas de forma activa en equipos heterogéneos, escuchando su razonamiento. 1º BACHILLERATO."
+        }
+      ],
+      "sources": [
+        {
+          "title": "Decreto 64/2022 de la Comunidad de Madrid",
+          "url": "https://www.bocm.es/boletin/CM_Orden_BOCM/2022/07/26/BOCM-20220726-1.PDF"
+        }
+      ]
+    },
+    "2bto-matematicas-ccss-ii": {
+      "schemaVersion": 1,
+      "subjectId": "2bto-matematicas-ccss-ii",
+      "course": "2ºBTO",
+      "subjectTitle": "Matemáticas CC.SS. II",
+      "stage": "Bachillerato",
+      "specificCompetencies": [
+        {
+          "id": "2bto-matematicas-ccss-ii-ce-1",
+          "code": "CE1",
+          "description": "Modelizar y resolver problemas de la vida cotidiana y de las ciencias sociales aplicando diferentes estrategias y formas de razonamiento para obtener posibles soluciones.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-ce-2",
+          "code": "CE2",
+          "description": "Verificar la validez de las posibles soluciones de un problema empleando el razonamiento y la argumentación para contrastar su idoneidad.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-ce-3",
+          "code": "CE3",
+          "description": "Formular o investigar conjeturas o problemas, utilizando el razonamiento, la argumentación, la creatividad y el uso de herramientas tecnológicas, para generar nuevo conocimiento matemático.",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-ce-4",
+          "code": "CE4",
+          "description": "Utilizar el pensamiento computacional de forma eficaz, modificando, creando y generalizando algoritmos que resuelvan problemas mediante el uso de las matemáticas, para modelizar y resolver situaciones de la vida cotidiana y del ámbito de las ciencias sociales.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-ce-5",
+          "code": "CE5",
+          "description": "Establecer, investigar y utilizar conexiones entre las diferentes ideas matemáticas estableciendo vínculos entre conceptos, procedimientos, argumentos y modelos para dar significado y estructurar el aprendizaje matemático.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-ce-6",
+          "code": "CE6",
+          "description": "Descubrir los vínculos de las matemáticas con otras áreas de conocimiento y profundizar en sus conexiones, interrelacionando conceptos y procedimientos, para modelizar, resolver problemas y desarrollar la capacidad crítica, creativa e innovadora en situaciones diversas.",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-ce-7",
+          "code": "CE7",
+          "description": "Representar conceptos, procedimientos e información matemáticos seleccionando diferentes tecnologías, para visualizar ideas y estructurar razonamientos matemáticos.",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-ce-8",
+          "code": "CE8",
+          "description": "Comunicar las ideas matemáticas, de forma individual y colectiva, empleando el soporte, la terminología y el rigor apropiados, para organizar y consolidar el pensamiento matemático.",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ]
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-ce-9",
+          "code": "CE9",
+          "description": "Utilizar destrezas personales y sociales, identificando y gestionando las propias emociones, respetando las de los demás y organizando activamente el trabajo en equipos heterogéneos, aprendiendo del error como parte del proceso de aprendizaje y afrontando situaciones de incertidumbre, para perseverar en la consecución de objetivos en el aprendizaje de las matemáticas.",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ]
+        }
+      ],
+      "evaluationCriteria": [
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-1-1",
+          "code": "1.1",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ],
+          "description": "Emplear diferentes estrategias y herramientas, incluidas las digitales que resuelvan problemas de la vida cotidiana y de las ciencias sociales, seleccionando la más adecuada según su eficiencia."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-1-2",
+          "code": "1.2",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-1",
+          "competenceCode": "CE1",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-cpsaa4",
+            "bachillerato-cpsaa5",
+            "bachillerato-ce3"
+          ],
+          "description": "Obtener todas las posibles soluciones matemáticas de problemas de la vida cotidiana y de las ciencias sociales, describiendo el procedimiento realizado."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-2-1",
+          "code": "2.1",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ],
+          "description": "Demostrar la validez matemática de las posibles soluciones de un problema, utilizando el razonamiento y la argumentación."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-2-2",
+          "code": "2.2",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-2",
+          "competenceCode": "CE2",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd3",
+            "bachillerato-cpsaa4",
+            "bachillerato-cc3",
+            "bachillerato-ce3"
+          ],
+          "description": "Seleccionar la solución más adecuada de un problema en función del contexto (de sostenibilidad, de consumo responsable, equidad...), usando el razonamiento y la argumentación."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-3-1",
+          "code": "3.1",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Adquirir nuevo conocimiento matemático mediante la formulación, razonamiento y justificación de conjeturas y problemas de forma autónoma."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-3-2",
+          "code": "3.2",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-3",
+          "competenceCode": "CE3",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Integrar el uso de herramientas tecnológicas en la formulación o investigación de conjeturas y problemas."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-4-1",
+          "code": "4.1",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-4",
+          "competenceCode": "CE4",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-cd5",
+            "bachillerato-ce3"
+          ],
+          "description": "Interpretar, modelizar y resolver situaciones problematizadas de la vida cotidiana y las ciencias sociales, utilizando el pensamiento computacional, modificando, creando y generalizando algoritmos."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-5-1",
+          "code": "5.1",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-5",
+          "competenceCode": "CE5",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem3",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Manifestar una visión matemática integrada, investigando y conectando las diferentes ideas matemáticas."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-6-1",
+          "code": "6.1",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Resolver problemas en situaciones diversas, utilizando procesos matemáticos, reflexionando, estableciendo y aplicando conexiones entre el mundo real, otras áreas de conocimiento y las matemáticas."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-6-2",
+          "code": "6.2",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-6",
+          "competenceCode": "CE6",
+          "descriptorIds": [
+            "bachillerato-stem1",
+            "bachillerato-stem2",
+            "bachillerato-cd2",
+            "bachillerato-cpsaa5",
+            "bachillerato-cc4",
+            "bachillerato-ce2",
+            "bachillerato-ce3",
+            "bachillerato-ccec1"
+          ],
+          "description": "Analizar la aportación de las matemáticas al progreso de la humanidad, valorando su contribución en la propuesta de soluciones a situaciones complejas y a los retos que se plantean en las ciencias sociales."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-7-1",
+          "code": "7.1",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ],
+          "description": "Representar y visualizar ideas matemáticas, estructurando diferentes procesos matemáticos y seleccionando las tecnologías más adecuadas."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-7-2",
+          "code": "7.2",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-7",
+          "competenceCode": "CE7",
+          "descriptorIds": [
+            "bachillerato-stem3",
+            "bachillerato-cd1",
+            "bachillerato-cd2",
+            "bachillerato-cd5",
+            "bachillerato-ce3",
+            "bachillerato-ccec4-1",
+            "bachillerato-ccec4-2"
+          ],
+          "description": "Seleccionar y utilizar diversas formas de representación, valorando su utilidad para compartir información."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-8-1",
+          "code": "8.1",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ],
+          "description": "Mostrar organización al comunicar las ideas matemáticas, empleando el soporte, la terminología y el rigor apropiados."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-8-2",
+          "code": "8.2",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-8",
+          "competenceCode": "CE8",
+          "descriptorIds": [
+            "bachillerato-ccl1",
+            "bachillerato-ccl3",
+            "bachillerato-cp1",
+            "bachillerato-stem2",
+            "bachillerato-stem4",
+            "bachillerato-cd2",
+            "bachillerato-cd3",
+            "bachillerato-ccec3-2"
+          ],
+          "description": "Reconocer y emplear el lenguaje matemático en diferentes contextos, comunicando la información con precisión y rigor."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-9-1",
+          "code": "9.1",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Afrontar las situaciones de incertidumbre y tomar decisiones evaluando distintas opciones, identificando y gestionando emociones y aceptando y aprendiendo del error como parte del proceso de aprendizaje de las matemáticas."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-9-2",
+          "code": "9.2",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Mostrar perseverancia y una motivación positiva, aceptando y aprendiendo de la crítica razonada al hacer frente a las diferentes situaciones de aprendizaje de las matemáticas."
+        },
+        {
+          "id": "2bto-matematicas-ccss-ii-cr-9-3",
+          "code": "9.3",
+          "competenceId": "2bto-matematicas-ccss-ii-ce-9",
+          "competenceCode": "CE9",
+          "descriptorIds": [
+            "bachillerato-cp3",
+            "bachillerato-stem5",
+            "bachillerato-cpsaa1-1",
+            "bachillerato-cpsaa1-2",
+            "bachillerato-cpsaa3-1",
+            "bachillerato-cpsaa3-2",
+            "bachillerato-cc2",
+            "bachillerato-cc3",
+            "bachillerato-ce2"
+          ],
+          "description": "Trabajar en tareas matemáticas de forma activa en equipos heterogéneos, respetando las emociones y experiencias de los demás, escuchando su razonamiento, aplicando las habilidades sociales más propicias y fomentando el bienestar del equipo y las relaciones saludables."
+        }
+      ],
+      "sources": [
+        {
+          "title": "Decreto 64/2022 de la Comunidad de Madrid",
+          "url": "https://www.bocm.es/boletin/CM_Orden_BOCM/2022/07/26/BOCM-20220726-1.PDF"
+        }
+      ]
+    }
+  }
+}

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { collection, deleteDoc, doc, getDocs, setDoc } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/firestore'
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { auth, db, storage } from '../services/firebase'
 import { mathSubjects } from '../data/mathCurriculum'
@@ -9,11 +9,14 @@ import ExercisePdfPreview from './ExercisePdfPreview.vue'
 import ExerciseVariantSelector from './ExerciseVariantSelector.vue'
 import DocumentPdfPreview from './DocumentPdfPreview.vue'
 import DocumentCodeEditor from './DocumentCodeEditor.vue'
+import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
 import MasonryGrid from './MasonryGrid.vue'
 import { aggregateExerciseStructure, buildExerciseLatex, mergeExerciseStructure, parseExerciseLatex } from '../utils/exerciseStructure'
 import { compactExerciseConceptLabel, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
 import { normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
+import { syncDocumentAssessment } from '../services/documentAssessmentRepository'
+import { assessmentExerciseModel } from '../utils/documentAssessmentMatrix'
 
 const props = defineProps({
   templates: { type: Array, default: () => [] },
@@ -27,14 +30,17 @@ const props = defineProps({
   libraryQuery: { type: String, default: '' },
 })
 
-const emit = defineEmits(['busy-change', 'state-change'])
+const emit = defineEmits(['busy-change', 'state-change', 'assessment-saved'])
 
-const steps = Object.freeze([
+const baseSteps = Object.freeze([
   { number: 1, title: 'Plantilla', icon: 'mdi-file-document-outline' },
   { number: 2, title: 'Contenidos', icon: 'mdi-chart-donut-variant' },
   { number: 3, title: 'Ejercicios', icon: 'mdi-format-list-numbered' },
   { number: 4, title: 'Vista previa', icon: 'mdi-file-pdf-box' },
 ])
+const steps = computed(() => baseSteps)
+const lastStep = computed(() => steps.value.at(-1)?.number || 4)
+const ASSESSMENT_PREVIEW_KEY = '__assessment_matrix__'
 
 const defaultMetadata = Object.freeze({
   name: 'Examen',
@@ -65,7 +71,9 @@ const createdAt = ref(null)
 const selectedTemplateKey = ref('')
 const selectedTemplateKeys = ref([])
 const selectedPreviewTemplateKey = ref('')
+const lastDocumentPreviewKey = ref('')
 const fieldValues = reactive({})
+const documentAssessment = reactive({ evaluable: false, groupId: null, shortName: '', gradebookItemId: null })
 const documentCurriculum = ref(emptyCurriculum())
 const curriculumPickerKey = ref(0)
 const exerciseQuery = ref('')
@@ -86,6 +94,8 @@ const isCompiling = ref(false)
 const isSaving = ref(false)
 const dragPayload = ref(null)
 const viewedDocument = ref(null)
+const viewerAssessmentExercises = ref([])
+const viewerAssessmentLoading = ref(false)
 const queueStructureCache = new WeakMap()
 const grayscaleLogoCache = new Map()
 
@@ -210,7 +220,10 @@ const selectedMetadata = computed(() => selectedTemplate.value?.metadata || defa
 const selectedTemplates = computed(() => selectedTemplateKeys.value
   .map((key) => documentTemplates.value.find((template) => template.key === key))
   .filter(Boolean))
-const previewTemplate = computed(() => selectedTemplates.value.find((template) => template.key === selectedPreviewTemplateKey.value) || selectedTemplates.value[0] || selectedTemplate.value)
+const previewTemplate = computed(() => selectedTemplates.value.find((template) => template.key === selectedPreviewTemplateKey.value)
+  || selectedTemplates.value.find((template) => template.key === lastDocumentPreviewKey.value)
+  || selectedTemplates.value[0]
+  || selectedTemplate.value)
 const unifiedFields = computed(() => {
   const result = []
   const seen = new Set()
@@ -246,6 +259,7 @@ const selectedGroupOption = computed(() => {
   const groupField = unifiedFields.value.find((field) => field.type === 'group' || field.type === 'course' || field.key === 'course')
   return groupOptions.value.find((group) => group.value === fieldValues[groupField?.key]) || null
 })
+const assessmentGroupOption = computed(() => groupOptions.value.find((group) => group.id === documentAssessment.groupId) || null)
 
 function summaryFieldValue(values, aliases) {
   const entries = Object.entries(values || {})
@@ -340,13 +354,17 @@ const documentTools = computed(() => {
     .filter((tool, index) => tools.findIndex((candidate) => candidate.id === tool.id) === index)
     .sort((left, right) => ({ obligatorios: 0, optativos: 1, 'salto-pagina': 2 }[left.id] ?? 3) - ({ obligatorios: 0, optativos: 1, 'salto-pagina': 2 }[right.id] ?? 3))
 })
+const assessmentFieldsComplete = computed(() => !documentAssessment.evaluable
+  || Boolean(documentAssessment.groupId && documentAssessment.shortName.trim()))
 const requiredFieldsComplete = computed(() => Boolean(selectedTemplate.value)
   && selectedTemplates.value.length > 0
-  && unifiedFields.value.every((field) => String(fieldValues[field.key] || '').trim()))
+  && unifiedFields.value.every((field) => String(fieldValues[field.key] || '').trim())
+  && assessmentFieldsComplete.value)
 const canContinue = computed(() => {
   if (currentStep.value === 1) return requiredFieldsComplete.value
   if (currentStep.value === 2) return Boolean(documentCurriculum.value.subjectId)
   if (currentStep.value === 3) return selectedExercises.value.length > 0
+  if (currentStep.value === 4) return documentAssessment.evaluable && previewDocuments.value.length > 0
   return false
 })
 const workflowState = computed(() => ({
@@ -356,10 +374,14 @@ const workflowState = computed(() => ({
   canGoBack: currentStep.value > 1,
   isCompiling: isCompiling.value,
   isSaving: isSaving.value,
-  canSave: currentStep.value === 4 && Boolean(previewUrl.value) && !isCompiling.value,
+  totalSteps: lastStep.value,
+  canSave: currentStep.value === lastStep.value && Boolean(previewUrl.value) && !isCompiling.value,
 }))
 
 watch(workflowState, (state) => emit('state-change', state), { immediate: true })
+watch(selectedPreviewTemplateKey, (key) => {
+  if (key && key !== ASSESSMENT_PREVIEW_KEY) lastDocumentPreviewKey.value = key
+})
 function conceptAncestors(conceptId) {
   const byId = new Map(props.conceptNodes.map((node) => [node.id, node]))
   const ids = []
@@ -616,6 +638,26 @@ function queueExercisePdf(item) {
   const exercise = exerciseForQueue(item)
   return activeVersion(exercise, item.version)?.pdf?.enunciado || ''
 }
+
+const assessmentPreviewExercises = computed(() => exerciseQueue.value
+  .filter((item) => item.type !== 'tool')
+  .map((item, index) => {
+    const exercise = exerciseForQueue(item)
+    const active = activeVersion(exercise, item.version)
+    const structure = versionStructure(exercise, item.version)
+    return assessmentExerciseModel({
+      exerciseId: item.exerciseId,
+      version: Number(item.version) || 0,
+      structure: {
+        ...structure,
+        pdfenunciadocompleto: structure.pdfenunciadocompleto || active?.pdf?.enunciado || '',
+        pdfsolucioncompleto: structure.pdfsolucioncompleto || active?.pdf?.resuelto || '',
+      },
+      order: index,
+    })
+  }))
+
+const isAssessmentPreviewSelected = computed(() => selectedPreviewTemplateKey.value === ASSESSMENT_PREVIEW_KEY)
 
 function normalizeQueueSections() {
   exerciseQueue.value = exerciseQueue.value.map((item) => ({ ...item, section: 'required' }))
@@ -1198,13 +1240,30 @@ function onFieldInput(field = null) {
   invalidatePreview()
 }
 
+function toggleEvaluable() {
+  documentAssessment.evaluable = !documentAssessment.evaluable
+  if (documentAssessment.evaluable) {
+    documentAssessment.groupId ||= selectedGroupOption.value?.id || null
+    documentAssessment.shortName ||= summaryFieldValue(fieldValues, ['title', 'titulo'])
+  }
+}
+
+function resetDocumentAssessment() {
+  documentAssessment.evaluable = false
+  documentAssessment.groupId = null
+  documentAssessment.shortName = ''
+  documentAssessment.gradebookItemId = null
+}
+
 function resetWorkflow() {
   selectedDocumentId.value = null
   createdAt.value = null
   selectedTemplateKey.value = ''
   selectedTemplateKeys.value = []
   selectedPreviewTemplateKey.value = ''
+  lastDocumentPreviewKey.value = ''
   Object.keys(fieldValues).forEach((key) => delete fieldValues[key])
+  resetDocumentAssessment()
   documentCurriculum.value = emptyCurriculum()
   exerciseQuery.value = ''
   exerciseQueue.value = []
@@ -1218,6 +1277,8 @@ function resetWorkflow() {
   documentCodeNeedsRegeneration.value = true
   showDocumentCode.value = false
   viewedDocument.value = null
+  viewerAssessmentExercises.value = []
+  viewerAssessmentLoading.value = false
   revokePreview()
 }
 
@@ -1231,7 +1292,34 @@ function backToLibrary() {
   mode.value = 'library'
 }
 
-function viewDocument(documentData) {
+async function assessmentModelsForDocument(documentData) {
+  const references = (Array.isArray(documentData?.ejercicios) ? documentData.ejercicios : [])
+    .slice()
+    .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
+  return Promise.all(references.map(async (reference, order) => {
+    let exercise = props.exercises.find((candidate) => candidate.id === reference.exerciseId)
+    if (!exercise) {
+      const snapshot = await getDoc(doc(db, 'ejercicios', reference.exerciseId))
+      if (!snapshot.exists()) return null
+      exercise = { id: snapshot.id, ...snapshot.data() }
+    }
+    const version = Number(reference.version) || 0
+    const active = activeVersion(exercise, version)
+    const structure = versionStructure(exercise, version)
+    return assessmentExerciseModel({
+      exerciseId: reference.exerciseId,
+      version,
+      structure: {
+        ...structure,
+        pdfenunciadocompleto: structure.pdfenunciadocompleto || active?.pdf?.enunciado || '',
+        pdfsolucioncompleto: structure.pdfsolucioncompleto || active?.pdf?.resuelto || '',
+      },
+      order,
+    })
+  })).then((models) => models.filter(Boolean))
+}
+
+async function viewDocument(documentData) {
   if (!documentData?.pdf?.url) return
   resetWorkflow()
   viewedDocument.value = documentData
@@ -1253,6 +1341,16 @@ function viewDocument(documentData) {
   selectedPreviewTemplateKey.value = previewDocuments.value[0]?.templateKey || ''
   previewUrl.value = previewDocuments.value[0]?.url || documentData.pdf.url
   mode.value = 'viewer'
+  if (documentData.assessment?.evaluable) {
+    viewerAssessmentLoading.value = true
+    try {
+      viewerAssessmentExercises.value = await assessmentModelsForDocument(documentData)
+    } catch (error) {
+      documentsError.value = error.message || 'No se ha podido cargar la matriz de evaluación.'
+    } finally {
+      viewerAssessmentLoading.value = false
+    }
+  }
 }
 
 function requestDeleteDocument(documentData) {
@@ -1298,7 +1396,17 @@ async function deleteDocument() {
         if (error?.code !== 'storage/object-not-found') throw error
       }
     }))
+    await syncDocumentAssessment({
+      documentId: documentData.id,
+      previousGroupId: documentData.assessment?.groupId || null,
+    })
     await deleteDoc(doc(db, 'documentos', documentData.id))
+    emit('assessment-saved', {
+      documentId: documentData.id,
+      previousGroupId: documentData.assessment?.groupId || null,
+      groupId: null,
+      item: null,
+    })
     documents.value = documents.value.filter((item) => item.id !== documentData.id)
     documentDeleteDialog.value = false
     documentDeleteTarget.value = null
@@ -1314,6 +1422,11 @@ function selectViewerDocument(entry) {
   if (!entry) return
   selectedPreviewTemplateKey.value = entry.templateKey
   previewUrl.value = entry.url
+}
+
+function selectAssessmentPreview() {
+  selectedPreviewTemplateKey.value = ASSESSMENT_PREVIEW_KEY
+  showDocumentCode.value = false
 }
 
 function previewEntryForTemplate(templateKey) {
@@ -1397,7 +1510,7 @@ function previousStep() {
 }
 
 async function nextStep() {
-  if (!canContinue.value || currentStep.value >= 4) return
+  if (!canContinue.value || currentStep.value >= lastStep.value) return
   currentStep.value += 1
   maxVisitedStep.value = Math.max(maxVisitedStep.value, currentStep.value)
   if (currentStep.value === 4) {
@@ -1552,6 +1665,11 @@ function editDocument(documentData) {
   selectedPreviewTemplateKey.value = template.key
   resetFields()
   Object.assign(fieldValues, documentData.campos || {})
+  const storedAssessment = documentData.assessment || documentData.evaluacion || {}
+  documentAssessment.evaluable = Boolean(storedAssessment.evaluable)
+  documentAssessment.groupId = storedAssessment.groupId || null
+  documentAssessment.shortName = String(storedAssessment.shortName || '').trim()
+  documentAssessment.gradebookItemId = storedAssessment.gradebookItemId || null
   unifiedFields.value.filter((field) => field.type === 'date' || field.key === 'date').forEach((field) => {
     fieldValues[field.key] = dateInputValue(fieldValues[field.key])
   })
@@ -1615,12 +1733,39 @@ function editDocument(documentData) {
   }
   showDocumentCode.value = false
   currentStep.value = 1
-  maxVisitedStep.value = 4
+  maxVisitedStep.value = lastStep.value
   mode.value = 'editor'
 }
 
+function documentAssessmentPoints() {
+  return exerciseQueue.value
+    .filter((item) => item.type !== 'tool')
+    .reduce((total, item) => total + (Number(queueMetrics(item).puntuacion) || 0), 0)
+}
+
+function documentAssessmentItem(documentId) {
+  if (!documentAssessment.evaluable) return null
+  const shortName = documentAssessment.shortName.trim()
+  const fullName = summaryFieldValue(fieldValues, ['title', 'titulo']) || shortName
+  return {
+    type: 'item',
+    id: documentAssessment.gradebookItemId
+      || globalThis.crypto?.randomUUID?.()
+      || `documento-${documentId}-${Date.now()}`,
+    nombre: fullName,
+    nombreCorto: shortName,
+    documentAssessment: {
+      documentId,
+      maxPoints: documentAssessmentPoints(),
+      exercises: exerciseQueue.value
+        .filter((item) => item.type !== 'tool')
+        .map((item, order) => ({ exerciseId: item.exerciseId, version: Number(item.version) || 0, order })),
+    },
+  }
+}
+
 async function saveDocument() {
-  if (currentStep.value !== 4 || isSaving.value) return
+  if (currentStep.value !== lastStep.value || isSaving.value) return
   if (!previewBlob.value || previewCode.value !== activeDocumentCode()) await compileDocument()
   if (!previewDocuments.value.length) return
   isSaving.value = true
@@ -1643,6 +1788,8 @@ async function saveDocument() {
     const primaryPdf = uploadedPdfs[0]
     if (!primaryPdf) return
     const now = new Date().toISOString()
+    const previousDocument = documents.value.find((item) => item.id === reference.id) || null
+    const assessmentItem = documentAssessmentItem(reference.id)
     const data = {
       plantilla: {
         archivo: selectedTemplate.value.archivo,
@@ -1661,6 +1808,14 @@ async function saveDocument() {
         conceptIds: [...new Set(documentCurriculum.value.conceptIds || [])],
         competencial: Boolean(documentCurriculum.value.competencial),
       },
+      assessment: {
+        evaluable: Boolean(documentAssessment.evaluable),
+        groupId: documentAssessment.evaluable ? documentAssessment.groupId : null,
+        groupName: documentAssessment.evaluable ? assessmentGroupOption.value?.title || '' : '',
+        shortName: documentAssessment.evaluable ? documentAssessment.shortName.trim() : '',
+        gradebookItemId: assessmentItem?.id || null,
+        maxPoints: assessmentItem?.documentAssessment?.maxPoints || 0,
+      },
       bloques: exerciseQueue.value.map((item, order) => ({ ...item, order })),
       ejercicios: exerciseQueue.value.filter((item) => item.type !== 'tool').map((item, order) => ({ ...item, order })),
       optativos: {
@@ -1675,6 +1830,22 @@ async function saveDocument() {
       updatedAt: now,
     }
     await setDoc(reference, data)
+    const syncedItem = await syncDocumentAssessment({
+      documentId: reference.id,
+      previousGroupId: previousDocument?.assessment?.groupId || null,
+      groupId: data.assessment.groupId,
+      item: assessmentItem,
+    })
+    if (syncedItem && syncedItem.id !== data.assessment.gradebookItemId) {
+      data.assessment.gradebookItemId = syncedItem.id
+      await setDoc(reference, { assessment: data.assessment }, { merge: true })
+    }
+    emit('assessment-saved', {
+      documentId: reference.id,
+      previousGroupId: previousDocument?.assessment?.groupId || null,
+      groupId: data.assessment.groupId,
+      item: syncedItem,
+    })
     const saved = { id: reference.id, ...data }
     const existingIndex = documents.value.findIndex((item) => item.id === reference.id)
     if (existingIndex === -1) documents.value.unshift(saved)
@@ -1801,14 +1972,35 @@ defineExpose({
               <v-btn icon="mdi-printer-outline" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Imprimir documento" @click.stop="printGeneratedDocument(entry)" />
             </span>
           </div>
+          <div
+            v-if="viewedDocument?.assessment?.evaluable"
+            class="document-preview-selector-item"
+            :class="{ active: isAssessmentPreviewSelected }"
+          >
+            <button type="button" class="document-preview-select" @click="selectAssessmentPreview">
+              <v-icon icon="mdi-table-check" size="18" />
+              <span>Matriz de evaluación</span>
+            </button>
+          </div>
         </aside>
-        <DocumentPdfPreview :src="previewUrl" :title="documentCardTitle(viewedDocument || {})" />
+        <div class="document-preview-render">
+          <div v-if="isAssessmentPreviewSelected && viewerAssessmentLoading" class="document-assessment-loading">
+            <v-progress-circular indeterminate color="primary" size="34" />
+            <span>Cargando matriz de evaluación…</span>
+          </div>
+          <DocumentAssessmentMatrix
+            v-else-if="isAssessmentPreviewSelected"
+            :exercises="viewerAssessmentExercises"
+            subtitle="Resoluciones segmentadas y logros del documento"
+          />
+          <DocumentPdfPreview v-else :src="previewUrl" :title="documentCardTitle(viewedDocument || {})" />
+        </div>
       </div>
       <DocumentPdfPreview v-else :src="previewUrl" :title="documentCardTitle(viewedDocument || {})" />
     </section>
 
     <section v-else class="document-workflow">
-      <ol class="document-stepper" aria-label="Proceso de creación del documento">
+      <ol class="document-stepper" :style="{ '--document-step-count': steps.length }" aria-label="Proceso de creación del documento">
           <li v-for="step in steps" :key="step.number" :class="{ active: currentStep === step.number, complete: currentStep > step.number }">
           <button type="button" :disabled="step.number > maxVisitedStep" @click="goToVisitedStep(step.number)">
             <span class="document-step-number"><v-icon v-if="currentStep > step.number" icon="mdi-check" size="16" /><span v-else>{{ step.number }}</span></span>
@@ -1906,6 +2098,39 @@ defineExpose({
                 hide-details
                 @update:model-value="onFieldInput(field)"
               />
+              <section class="document-assessment-fields">
+                <button
+                  type="button"
+                  class="document-evaluable-toggle"
+                  :class="{ active: documentAssessment.evaluable }"
+                  :aria-pressed="documentAssessment.evaluable"
+                  @click="toggleEvaluable"
+                >
+                  <v-icon :icon="documentAssessment.evaluable ? 'mdi-check-circle' : 'mdi-checkbox-blank-circle-outline'" size="19" />
+                  <span><strong>Evaluable</strong><small>Añadir el examen al cuaderno de calificaciones</small></span>
+                </button>
+                <template v-if="documentAssessment.evaluable">
+                  <v-select
+                    v-model="documentAssessment.groupId"
+                    :items="groupOptions"
+                    item-title="title"
+                    item-value="id"
+                    label="Grupo"
+                    variant="outlined"
+                    density="comfortable"
+                    hide-details
+                  />
+                  <v-text-field
+                    v-model="documentAssessment.shortName"
+                    label="Nombre corto para las listas"
+                    placeholder="Examen 1"
+                    variant="outlined"
+                    density="comfortable"
+                    maxlength="24"
+                    hide-details
+                  />
+                </template>
+              </section>
             </template>
             <template v-else>
               <v-icon icon="mdi-arrow-left" size="30" />
@@ -2109,7 +2334,7 @@ defineExpose({
           </section>
         </div>
 
-        <div v-else class="document-preview-step" :class="{ 'document-preview-with-code': showDocumentCode }">
+        <div v-else-if="currentStep === 4" class="document-preview-step" :class="{ 'document-preview-with-code': showDocumentCode }">
           <div class="document-preview-display-toolbar">
             <v-btn
               prepend-icon="mdi-refresh"
@@ -2121,6 +2346,7 @@ defineExpose({
               @click="compileDocument(true)"
             >Recompilar</v-btn>
             <v-btn
+              v-if="!isAssessmentPreviewSelected"
               :prepend-icon="showDocumentCode ? 'mdi-code-tags-check' : 'mdi-code-tags'"
               size="small"
               rounded="pill"
@@ -2184,16 +2410,34 @@ defineExpose({
                   />
                 </span>
               </div>
+              <div
+                v-if="documentAssessment.evaluable"
+                class="document-preview-selector-item"
+                :class="{ active: isAssessmentPreviewSelected }"
+              >
+                <button type="button" class="document-preview-select" @click="selectAssessmentPreview">
+                  <v-icon icon="mdi-table-check" size="18" />
+                  <span>Matriz de evaluación</span>
+                </button>
+              </div>
             </aside>
             <div class="document-preview-render">
-            <DocumentCodeEditor
-              v-if="showDocumentCode"
-              :model-value="documentCode"
-              :compiling="isCompiling"
-              @update:model-value="updateDocumentCode"
-              @compile="compileDocument"
-            />
-            <DocumentPdfPreview :src="previewUrl" />
+              <DocumentAssessmentMatrix
+                v-if="isAssessmentPreviewSelected"
+                :exercises="assessmentPreviewExercises"
+                subtitle="Resoluciones segmentadas y logros del documento"
+                :badge="documentAssessment.shortName"
+              />
+              <template v-else>
+                <DocumentCodeEditor
+                  v-if="showDocumentCode"
+                  :model-value="documentCode"
+                  :compiling="isCompiling"
+                  @update:model-value="updateDocumentCode"
+                  @compile="compileDocument"
+                />
+                <DocumentPdfPreview :src="previewUrl" />
+              </template>
             </div>
           </div>
         </div>
@@ -2252,7 +2496,7 @@ defineExpose({
 .document-viewer-layout { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); overflow: hidden; }
 
 .document-workflow { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-rows: 76px minmax(0, 1fr); overflow: hidden; }
-.document-stepper { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0 8%; border-bottom: 1px solid #d7e1ed; background: #fff; list-style: none; }
+.document-stepper { display: grid; grid-template-columns: repeat(var(--document-step-count, 4), minmax(0, 1fr)); margin: 0; padding: 0 8%; border-bottom: 1px solid #d7e1ed; background: #fff; list-style: none; }
 .document-stepper li { position: relative; display: flex; align-items: center; justify-content: center; }
 .document-stepper li:not(:last-child)::after { position: absolute; z-index: 0; top: 31px; right: -50%; width: 100%; height: 2px; background: #dbe4ef; content: ''; }
 .document-stepper li.complete:not(:last-child)::after { background: #6b94c9; }
@@ -2292,6 +2536,13 @@ defineExpose({
 .document-fields-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; color: #315981; }
 .document-fields-heading div { display: flex; flex-direction: column; }
 .document-fields-heading span { color: #7e8fa4; font-size: .69rem; }
+.document-assessment-fields { display: grid; gap: 10px; margin-top: 4px; padding-top: 12px; border-top: 1px solid #dbe4ef; }
+.document-evaluable-toggle { display: flex; width: 100%; min-height: 48px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid #ccd8e6; border-radius: 10px; outline: 0; background: #f7f9fc; color: #708299; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease, color .15s ease; }
+.document-evaluable-toggle span { display: flex; min-width: 0; flex-direction: column; }
+.document-evaluable-toggle strong { font-size: .75rem; }
+.document-evaluable-toggle small { margin-top: 1px; font-size: .61rem; line-height: 1.25; }
+.document-evaluable-toggle.active { border-color: #3f72b7; background: #e9f1fb; color: #315f97; }
+.document-evaluable-toggle:focus-visible { box-shadow: 0 0 0 3px rgba(63,114,183,.18); }
 
 .document-curriculum-step { width: 100%; height: 100%; }
 .document-exercise-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 142px; overflow: hidden; }
@@ -2502,6 +2753,7 @@ defineExpose({
 .document-preview-with-code .document-preview-render .document-pdf-preview { border-left: 1px solid #cbd7e5; }
 .document-compile-error { position: absolute; z-index: 4; top: 53px; right: 12px; left: 12px; max-height: 38%; overflow: auto; }
 .document-compile-snackbar-message { max-width: min(70vw, 920px); max-height: 28vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem; line-height: 1.35; }
+.document-assessment-loading { display: flex; width: 100%; height: 100%; min-height: 220px; align-items: center; justify-content: center; gap: 12px; color: #6f8298; font-size: .74rem; }
 
 @media (max-width: 900px) {
   .document-stepper { padding-inline: 2%; }

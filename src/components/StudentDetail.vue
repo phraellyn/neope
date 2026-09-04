@@ -3,7 +3,9 @@ import { ref, watch } from 'vue'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../services/firebase'
 import { loadStudentIdentitiesForGroup, saveStudentIdentities } from '../services/localStudentIdentity'
+import { loadStudentCompetencyProgress } from '../services/studentCompetencyProgress'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
+import StudentCompetencyRadar from './StudentCompetencyRadar.vue'
 
 const props = defineProps({
   student: { type: Object, required: true },
@@ -15,6 +17,8 @@ const emit = defineEmits(['saved', 'error'])
 const identity = ref({ id: '', nombre: '', nombreCorto: '', foto: '', repetidor: false, pendiente: false, nuevo: false })
 const isLoading = ref(true)
 const isSaving = ref(false)
+const competencyLoading = ref(false)
+const competencyValues = ref([])
 const error = ref('')
 watch(error, (message) => {
   if (message) showAppErrorToast(message)
@@ -24,6 +28,7 @@ const resetAccessDialog = ref(false)
 const isResettingAccess = ref(false)
 let ready = false
 let saveSequence = 0
+let competencyLoadSequence = 0
 
 function applyStudent(value) {
   identity.value = {
@@ -69,6 +74,23 @@ async function load() {
   }
 }
 
+async function loadCompetencies() {
+  const sequence = ++competencyLoadSequence
+  competencyLoading.value = true
+  try {
+    const values = await loadStudentCompetencyProgress(props.group, props.student.id)
+    if (sequence === competencyLoadSequence) competencyValues.value = values
+  } catch (cause) {
+    console.error('No se ha podido calcular el perfil competencial:', cause)
+    if (sequence === competencyLoadSequence) {
+      competencyValues.value = []
+      showAppErrorToast('No se ha podido calcular el perfil competencial del alumno.')
+    }
+  } finally {
+    if (sequence === competencyLoadSequence) competencyLoading.value = false
+  }
+}
+
 function setPhotoFile(file) {
   if (!file || !file.type.startsWith('image/')) return
   const reader = new FileReader()
@@ -106,6 +128,7 @@ async function resetStudentPassword() {
 }
 
 watch(() => [props.student, props.group], load, { immediate: true, deep: true })
+watch(() => [props.student.id, props.group], loadCompetencies, { immediate: true, deep: true })
 watch(identity, persist, { deep: true })
 
 defineExpose({ persist })
@@ -144,6 +167,7 @@ defineExpose({ persist })
           <input ref="photoInput" type="file" accept="image/*" hidden @change="selectPhoto">
         </v-card-actions>
         <div class="student-detail-local-note"><v-icon icon="mdi-lock-outline" size="15" /> Fotografía local y cifrada</div>
+        <StudentCompetencyRadar :values="competencyValues" :loading="competencyLoading" />
       </v-card>
     </div>
     <div v-if="isSaving" class="student-detail-saving">Guardando en este dispositivo…</div>

@@ -65,6 +65,19 @@ service cloud.firestore {
     match /documentos/{document=**} {
       allow read, write: if isTeacher();
     }
+    match /rubricas/{rubricId} {
+      allow create: if isTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow read, delete: if isTeacher() && resource.data.ownerId == request.auth.uid;
+      allow update: if isTeacher()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == request.auth.uid;
+    }
+    // Catálogo transversal de competencias clave y descriptores operativos.
+    // La normativa por asignatura vive bajo especialidades/Matemáticas/asignaturas/...
+    match /law/{document=**} {
+      allow read: if isTeacher();
+      allow write: if isAdmin();
+    }
     match /especialidades/{document=**} {
       allow read, write: if isTeacher();
     }

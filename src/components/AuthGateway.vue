@@ -136,7 +136,6 @@ onMounted(() => {
   <main class="auth-gateway">
     <section class="auth-brand-panel">
       <img src="/brand/neope-logo.png" alt="Neope" class="auth-brand-logo">
-      <p>La enseñanza, organizada alrededor de lo que importa.</p>
     </section>
 
     <v-card class="auth-card" variant="flat">
@@ -211,7 +210,6 @@ onMounted(() => {
 .auth-gateway { min-height: 100dvh; display: grid; grid-template-columns: minmax(280px, .9fr) minmax(420px, 1.1fr); background: #f4f7fb; }
 .auth-brand-panel { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 56px; color: #fff; text-align: center; background: radial-gradient(circle at 25% 20%, #5d8fd1 0, #3267aa 44%, #183d6b 100%); }
 .auth-brand-logo { width: min(360px, 75%); filter: brightness(0) invert(1); }
-.auth-brand-panel p { max-width: 360px; margin: 0; font-size: 1.15rem; line-height: 1.6; opacity: .84; }
 .auth-card { width: min(470px, calc(100% - 48px)); margin: auto; padding: 42px; border: 1px solid #dce4ef; border-radius: 18px; box-shadow: 0 22px 60px rgba(36, 67, 105, .12) !important; }
 .auth-heading { margin-bottom: 26px; }
 .auth-heading h1 { margin: 3px 0 5px; color: #244b78; font-size: clamp(1.75rem, 3vw, 2.25rem); }
@@ -223,7 +221,6 @@ onMounted(() => {
 @media (max-width: 760px) {
   .auth-gateway { grid-template-columns: 1fr; }
   .auth-brand-panel { min-height: 150px; padding: 24px; }
-  .auth-brand-panel p { display: none; }
   .auth-brand-logo { width: 190px; }
   .auth-card { margin: 24px auto; padding: 28px 22px; }
 }

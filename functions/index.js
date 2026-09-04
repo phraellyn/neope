@@ -6,6 +6,7 @@ import { getFirestore } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
 import { getAuth } from 'firebase-admin/auth'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 export {
   acceptTeacherInvitation,
   bootstrapAdminAccount,
@@ -33,6 +34,7 @@ if (!getApps().length) initializeApp()
 
 const adminDb = getFirestore()
 const adminStorage = getStorage()
+const lomloeMathLaw = JSON.parse(readFileSync(new URL('./lomloeMathLaw.json', import.meta.url), 'utf8'))
 
 function requireTeacherAccess(request) {
   if (!request.auth || request.auth.token.role !== 'teacher') {
@@ -607,6 +609,89 @@ const exerciseAnalysisResponseFormat = {
         invariants: { type: 'array', items: { type: 'string' } },
       },
       required: ['core', 'skills', 'difficulty', 'solutionOutline', 'transformationPlan', 'invariants'],
+      additionalProperties: false,
+    },
+  },
+}
+
+const rubricAlignmentResponseFormat = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'rubric_curriculum_alignment',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        criterionIds: {
+          type: 'array',
+          items: { type: 'string' },
+          uniqueItems: true,
+        },
+        descriptorEvidence: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              descriptorId: { type: 'string' },
+              strength: { type: 'string', enum: ['weak', 'medium', 'strong'] },
+            },
+            required: ['descriptorId', 'strength'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['criterionIds', 'descriptorEvidence'],
+      additionalProperties: false,
+    },
+  },
+}
+
+const exerciseCompetenciesResponseFormat = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'exercise_competency_breakdown',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        segments: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              segmentId: { type: 'string' },
+              achievements: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    description: { type: 'string' },
+                    points: { type: 'number', minimum: 0 },
+                    criterionIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+                    descriptorEvidence: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          descriptorId: { type: 'string' },
+                          strength: { type: 'string', enum: ['weak', 'medium', 'strong'] },
+                        },
+                        required: ['descriptorId', 'strength'],
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  required: ['description', 'points', 'criterionIds', 'descriptorEvidence'],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ['segmentId', 'achievements'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['segments'],
       additionalProperties: false,
     },
   },
@@ -1276,5 +1361,317 @@ ${solvedExercise}` },
     }
     console.error('OpenRouter solution generation failed', { model, elapsedMs: Date.now() - startedAt, error })
     throw new HttpsError('internal', 'No se ha podido generar la solución con IA.')
+  }
+})
+
+export const suggestRubricAlignment = onCall({
+  region: 'europe-west1',
+  timeoutSeconds: 120,
+  memory: '512MiB',
+  secrets: [openRouterApiKey],
+  enforceAppCheck: true,
+}, async (request) => {
+  requireTeacherAccess(request)
+
+  const model = typeof request.data?.model === 'string' ? request.data.model : 'google/gemini-3-flash-preview'
+  if (!Object.hasOwn(aiModels, model)) {
+    throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
+  }
+
+  const text = (value, maximum = 4_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
+  const criteria = (Array.isArray(request.data?.criteria) ? request.data.criteria : []).slice(0, 120).map((criterion) => ({
+    id: text(criterion?.id, 120),
+    code: text(criterion?.code, 80),
+    competenceId: text(criterion?.competenceId, 120),
+    description: text(criterion?.description, 2_500),
+    descriptorIds: (Array.isArray(criterion?.descriptorIds) ? criterion.descriptorIds : []).slice(0, 30).map((id) => text(id, 120)),
+  })).filter((criterion) => criterion.id && criterion.description)
+  const competencies = (Array.isArray(request.data?.competencies) ? request.data.competencies : []).slice(0, 40).map((competency) => ({
+    id: text(competency?.id, 120),
+    code: text(competency?.code, 80),
+    description: text(competency?.description || competency?.title, 3_000),
+    descriptorIds: (Array.isArray(competency?.descriptorIds) ? competency.descriptorIds : []).slice(0, 30).map((id) => text(id, 120)),
+  })).filter((competency) => competency.id)
+  const descriptors = (Array.isArray(request.data?.descriptors) ? request.data.descriptors : []).slice(0, 100).map((descriptor) => ({
+    id: text(descriptor?.id, 120),
+    code: text(descriptor?.code, 80),
+    keyCompetencyId: text(descriptor?.keyCompetencyId, 120),
+    description: text(descriptor?.description, 2_500),
+  })).filter((descriptor) => descriptor.id && descriptor.description)
+
+  const categoryTitle = text(request.data?.categoryTitle, 500)
+  const assessmentDefinition = text(request.data?.levelDescription, 8_000)
+  if (!categoryTitle || !assessmentDefinition || !criteria.length) {
+    throw new HttpsError('invalid-argument', 'La categoría, su definición de puntuación y el catálogo de criterios son obligatorios.')
+  }
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${openRouterApiKey.value()}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://neope.web.app',
+        'X-Title': 'Neope',
+      },
+      body: JSON.stringify({
+        model,
+        reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+        messages: [
+          {
+            role: 'system',
+            content: 'Eres especialista en evaluación competencial LOMLOE. Vincula una categoría completa de una rúbrica exclusivamente con los identificadores del catálogo legal proporcionado. La categoría puede definirse mediante varios niveles de desempeño con puntuaciones concretas o mediante una horquilla entera. Selecciona solo los criterios que la categoría permite observar realmente. Para cada descriptor operativo relacionado que produzca evidencia, indica weak, medium o strong según la calidad y directitud de esa evidencia. No inventes identificadores, no selecciones por mera afinidad temática y devuelve solo el JSON solicitado.',
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              context: {
+                course: text(request.data?.course, 80),
+                subjectId: text(request.data?.subjectId, 120),
+                subjectTitle: text(request.data?.subjectTitle, 200),
+                rubricTitle: text(request.data?.rubricTitle, 500),
+                categoryTitle,
+                assessmentDefinition,
+                score: request.data?.score || {},
+              },
+              competencies,
+              evaluationCriteria: criteria,
+              operationalDescriptors: descriptors,
+            }),
+          },
+        ],
+        response_format: rubricAlignmentResponseFormat,
+        provider: { require_parameters: true, data_collection: 'deny' },
+        max_tokens: 2_500,
+      }),
+      signal: AbortSignal.timeout(105_000),
+    })
+
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new HttpsError('unavailable', payload.error?.message || `OpenRouter ha respondido con HTTP ${response.status}.`)
+    }
+    const content = choiceContent(payload.choices?.[0])
+    const suggestion = content ? JSON.parse(content) : null
+    if (!suggestion) throw new HttpsError('internal', 'La IA no ha devuelto una vinculación curricular.')
+
+    const allowedCriteria = new Set(criteria.map((criterion) => criterion.id))
+    const allowedDescriptors = new Set(descriptors.map((descriptor) => descriptor.id))
+    const criterionIds = [...new Set((suggestion.criterionIds || []).filter((id) => allowedCriteria.has(id)))]
+    const descriptorEvidence = (suggestion.descriptorEvidence || [])
+      .filter((item) => allowedDescriptors.has(item?.descriptorId) && ['weak', 'medium', 'strong'].includes(item?.strength))
+      .filter((item, index, items) => items.findIndex((candidate) => candidate.descriptorId === item.descriptorId) === index)
+
+    return { criterionIds, descriptorEvidence, model }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    if (error?.name === 'TimeoutError') throw new HttpsError('deadline-exceeded', 'La IA ha tardado demasiado en proponer la vinculación curricular.')
+    console.error('Rubric alignment suggestion failed', { model, error })
+    throw new HttpsError('internal', 'No se ha podido generar la vinculación curricular con IA.')
+  }
+})
+
+export const suggestExerciseCompetencies = onCall({
+  region: 'europe-west1',
+  timeoutSeconds: 120,
+  memory: '512MiB',
+  secrets: [openRouterApiKey],
+  enforceAppCheck: true,
+}, async (request) => {
+  requireTeacherAccess(request)
+
+  const model = typeof request.data?.model === 'string' ? request.data.model : 'google/gemini-3-flash-preview'
+  if (!Object.hasOwn(aiModels, model)) {
+    throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
+  }
+
+  const cleanText = (value, maximum = 8_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
+  const subjectId = cleanText(request.data?.subjectId, 120)
+  const catalog = lomloeMathLaw.subjects?.[subjectId]
+  if (!catalog) throw new HttpsError('failed-precondition', 'No hay datos LOMLOE para la asignatura seleccionada.')
+
+  const segments = (Array.isArray(request.data?.segments) ? request.data.segments : [])
+    .slice(0, 24)
+    .map((segment) => ({
+      id: cleanText(segment?.id, 120),
+      label: cleanText(segment?.label, 120),
+      points: Math.max(0, Math.round((Number(segment?.points) || 0) * 100) / 100),
+      statement: cleanText(segment?.statement, 18_000),
+      answer: cleanText(segment?.answer, 5_000),
+      workedSolution: cleanText(segment?.workedSolution, 20_000),
+      contentIds: (Array.isArray(segment?.contentIds) ? segment.contentIds : []).slice(0, 80).map((id) => cleanText(id, 160)).filter(Boolean),
+    }))
+    .filter((segment) => segment.id && segment.statement && segment.points > 0)
+  if (!segments.length) {
+    throw new HttpsError('invalid-argument', 'No hay ningún segmento evaluable con enunciado y puntuación.')
+  }
+
+  const competencies = (catalog.specificCompetencies || []).map((competency) => ({
+    id: competency.id,
+    code: competency.code,
+    description: competency.description,
+    descriptorIds: competency.descriptorIds || [],
+  }))
+  const criteria = (catalog.evaluationCriteria || []).map((criterion) => ({
+    id: criterion.id,
+    code: criterion.code,
+    competenceId: criterion.competenceId,
+    description: criterion.description,
+    descriptorIds: criterion.descriptorIds || [],
+  }))
+  const stage = catalog.stage || (String(request.data?.course || '').includes('BTO') ? 'Bachillerato' : 'ESO')
+  const descriptors = (lomloeMathLaw.global?.operationalDescriptors || [])
+    .filter((descriptor) => !descriptor.stage || descriptor.stage === stage)
+    .map((descriptor) => ({
+      id: descriptor.id,
+      code: descriptor.code,
+      keyCompetencyId: descriptor.keyCompetencyId,
+      description: descriptor.description,
+    }))
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${openRouterApiKey.value()}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://neope.web.app',
+        'X-Title': 'Neope',
+      },
+      body: JSON.stringify({
+        model,
+        reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+        messages: [
+          {
+            role: 'system',
+            content: `Eres especialista en evaluación competencial LOMLOE y diseño de ejercicios de Matemáticas. Descompón la puntuación de cada segmento en logros atómicos: acciones pequeñas, observables, independientes y corregibles. No redactes niveles de desempeño ni criterios genéricos; describe exactamente qué debe demostrar el alumno en ese ejercicio. La suma de los puntos de los logros de cada segmento debe coincidir exactamente con la puntuación del segmento. Usa el enunciado, la respuesta breve, la resolución, el curso y los contenidos como contexto, pero no premies dos veces la misma acción. Vincula cada logro solo con los identificadores legales proporcionados que realmente permita observar. Para cada descriptor operativo relacionado que produzca evidencia, asigna weak, medium o strong según su calidad y directitud. No inventes identificadores. Devuelve todos los segmentos solicitados y únicamente el JSON del esquema.`,
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              context: {
+                course: cleanText(request.data?.course, 80),
+                subjectId,
+                subjectTitle: cleanText(request.data?.subjectTitle, 200) || catalog.subjectTitle,
+                curriculum: curriculumPromptContext(request.data?.curriculum),
+                completeLatex: cleanText(request.data?.latex, 60_000),
+              },
+              segments,
+              specificCompetencies: competencies,
+              evaluationCriteria: criteria,
+              operationalDescriptors: descriptors,
+            }),
+          },
+        ],
+        response_format: exerciseCompetenciesResponseFormat,
+        provider: { require_parameters: true, data_collection: 'deny' },
+        max_tokens: 8_000,
+      }),
+      signal: AbortSignal.timeout(105_000),
+    })
+
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new HttpsError('unavailable', payload.error?.message || `OpenRouter ha respondido con HTTP ${response.status}.`)
+    }
+    const content = choiceContent(payload.choices?.[0])
+    const suggestion = content ? JSON.parse(content) : null
+    if (!suggestion?.segments?.length) throw new HttpsError('internal', 'La IA no ha generado ningún logro evaluable.')
+
+    const segmentById = new Map(segments.map((segment) => [segment.id, segment]))
+    const criterionById = new Map(criteria.map((criterion) => [criterion.id, criterion]))
+    const competencyMap = new Map(competencies.map((competency) => [competency.id, competency]))
+    const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id))
+    const normalizedSegments = []
+
+    for (const generatedSegment of suggestion.segments) {
+      const segment = segmentById.get(generatedSegment?.segmentId)
+      if (!segment || normalizedSegments.some((item) => item.segmentId === segment.id)) continue
+      let achievements = (Array.isArray(generatedSegment.achievements) ? generatedSegment.achievements : [])
+        .slice(0, 10)
+        .map((achievement) => {
+          const criterionIds = [...new Set((achievement?.criterionIds || []).filter((id) => criterionById.has(id)))]
+          const allowedDescriptorIds = new Set(criterionIds.flatMap((criterionId) => {
+            const criterion = criterionById.get(criterionId)
+            return [
+              ...(criterion?.descriptorIds || []),
+              ...(competencyMap.get(criterion?.competenceId)?.descriptorIds || []),
+            ]
+          }))
+          const descriptorEvidence = (achievement?.descriptorEvidence || [])
+            .filter((evidence) => descriptorIds.has(evidence?.descriptorId)
+              && allowedDescriptorIds.has(evidence.descriptorId)
+              && ['weak', 'medium', 'strong'].includes(evidence?.strength))
+            .filter((evidence, index, values) => values.findIndex((candidate) => candidate.descriptorId === evidence.descriptorId) === index)
+          return {
+            id: `achievement-${randomUUID()}`,
+            description: cleanText(achievement?.description, 1_200),
+            points: Math.max(0, Number(achievement?.points) || 0),
+            alignment: { criterionIds, descriptorEvidence, source: 'ai', model },
+          }
+        })
+        .filter((achievement) => achievement.description)
+
+      if (!achievements.length) continue
+      const rawTotal = achievements.reduce((total, achievement) => total + achievement.points, 0)
+      if (rawTotal <= 0) achievements = achievements.map((achievement) => ({ ...achievement, points: 1 }))
+      const weightTotal = achievements.reduce((total, achievement) => total + achievement.points, 0)
+      let assignedCents = 0
+      const targetCents = Math.round(segment.points * 100)
+      achievements = achievements.map((achievement, index) => {
+        const cents = index === achievements.length - 1
+          ? targetCents - assignedCents
+          : Math.max(0, Math.round((achievement.points / weightTotal) * targetCents))
+        assignedCents += cents
+        return { ...achievement, points: Math.max(0, cents) / 100 }
+      }).filter((achievement) => achievement.points > 0)
+      if (!achievements.length) continue
+      const normalizedTotal = achievements.reduce((total, achievement) => total + Math.round(achievement.points * 100), 0)
+      if (normalizedTotal !== targetCents) {
+        achievements.at(-1).points = Math.max(0, Math.round((achievements.at(-1).points * 100) + targetCents - normalizedTotal) / 100)
+      }
+      normalizedSegments.push({ segmentId: segment.id, achievements })
+    }
+
+    const missingSegments = segments.filter((segment) => !normalizedSegments.some((item) => item.segmentId === segment.id))
+    if (missingSegments.length) {
+      throw new HttpsError('internal', `La IA no ha desglosado ${missingSegments.map((segment) => segment.label).join(', ')}.`)
+    }
+    return { segments: normalizedSegments, model }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    if (error?.name === 'TimeoutError') throw new HttpsError('deadline-exceeded', 'La IA ha tardado demasiado en desglosar las competencias.')
+    console.error('Exercise competency suggestion failed', { model, subjectId, error })
+    throw new HttpsError('internal', 'No se ha podido generar el desglose competencial con IA.')
+  }
+})
+
+export const syncLomloeCatalog = onCall({
+  region: 'europe-west1',
+  timeoutSeconds: 60,
+  memory: '256MiB',
+  enforceAppCheck: true,
+}, async (request) => {
+  requireTeacherAccess(request)
+
+  const batch = adminDb.batch()
+  batch.set(adminDb.doc('law/lomloe'), {
+    ...lomloeMathLaw.global,
+    catalogVersion: '2022-1',
+    updatedAt: new Date(),
+  })
+  for (const [subjectId, catalog] of Object.entries(lomloeMathLaw.subjects)) {
+    batch.set(adminDb.doc(`especialidades/Matemáticas/asignaturas/${subjectId}/law/lomloe`), {
+      ...catalog,
+      catalogVersion: '2022-1',
+      updatedAt: new Date(),
+    })
+  }
+  await batch.commit()
+
+  return {
+    subjects: Object.keys(lomloeMathLaw.subjects).length,
+    descriptors: lomloeMathLaw.global.operationalDescriptors.length,
+    criteria: Object.values(lomloeMathLaw.subjects).reduce((total, catalog) => total + catalog.evaluationCriteria.length, 0),
   }
 })

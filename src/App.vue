@@ -32,6 +32,7 @@ import 'katex/dist/katex.min.css'
 import { auth, db, functions, isAppCheckConfigured, storage } from './services/firebase'
 import MasonryGrid from './components/MasonryGrid.vue'
 import ExerciseCurriculumPicker from './components/ExerciseCurriculumPicker.vue'
+import ExerciseCompetencyEditor from './components/ExerciseCompetencyEditor.vue'
 import ExerciseVariantSelector from './components/ExerciseVariantSelector.vue'
 import MathConceptMap from './components/MathConceptMap.vue'
 import DocumentCreator from './components/DocumentCreator.vue'
@@ -43,6 +44,7 @@ import AuthGateway from './components/AuthGateway.vue'
 import InvitationManager from './components/InvitationManager.vue'
 import LocalStudentDataTransfer from './components/LocalStudentDataTransfer.vue'
 import StudentPortal from './components/StudentPortal.vue'
+import RubricManager from './components/RubricManager.vue'
 import { mathSubjects, normalizeHierarchySelection } from './data/mathCurriculum'
 import { saveStudentIdentities } from './services/localStudentIdentity'
 import { normalizeDisplayMathDelimiters } from './utils/latexNormalization'
@@ -161,6 +163,7 @@ const selectedExerciseVersion = ref(0)
 const exerciseSearchVersions = ref({})
 const exerciseEditorTab = ref('code')
 const exerciseContentTarget = ref(null)
+const exerciseCompetencyTarget = ref(null)
 const exerciseAttachmentInput = ref(null)
 const isUploadingExerciseFiles = ref(false)
 const isGeneratingPartSolution = ref(null)
@@ -219,7 +222,15 @@ const documentCreatorRef = ref(null)
 const isCompilingDocument = ref(false)
 const documentSearchQuery = ref('')
 const documentsTab = ref('documents')
-const documentWorkflow = ref({ mode: 'library', step: 0, canContinue: false, canGoBack: false, canSave: false, isSaving: false })
+const documentWorkflow = ref({ mode: 'library', step: 0, totalSteps: 4, canContinue: false, canGoBack: false, canSave: false, isSaving: false })
+const rubricManagerRef = ref(null)
+const rubricSearchQuery = ref('')
+const rubricSubjectFilter = ref('')
+const rubricWorkflow = ref({ mode: 'library', canSave: false, isSaving: false, persisted: false })
+const rubricSubjectOptions = Object.freeze(mathSubjects.map((subject) => ({
+  title: `${subject.course} · ${subject.title}`,
+  value: subject.id,
+})))
 const mathSubjectsById = new Map(mathSubjects.map((subject) => [subject.id, subject]))
 const isAppleTouchDevice = /iPad|iPhone|iPod/.test(navigator.userAgent || '')
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
@@ -1508,6 +1519,10 @@ function tagsToObject(tags) {
 }
 
 async function loadExercises({ reset = false } = {}) {
+  // Los eventos de scroll y búsqueda siguen activos mientras se muestra el
+  // acceso. No consultamos Firestore hasta disponer de una sesión docente;
+  // las reglas rechazan correctamente cualquier lectura anónima.
+  if (!currentTeacherId.value) return
   if (reset && isLoadingExercises.value) return
   if (!reset && (isLoadingMoreExercises.value || !hasMoreExercises.value)) return
   if (reset) {
@@ -1547,6 +1562,7 @@ async function loadExercises({ reset = false } = {}) {
 }
 
 function loadNextExerciseBatch() {
+  if (!currentTeacherId.value) return
   if (active.value !== 'Ejercicios' || exerciseView.value !== 'search') return
   void loadExercises()
 }
@@ -1555,6 +1571,7 @@ function handleExerciseScroll() {
   if (exerciseScrollFrame) return
   exerciseScrollFrame = window.requestAnimationFrame(() => {
     exerciseScrollFrame = 0
+    if (!currentTeacherId.value) return
     if (active.value !== 'Ejercicios' || exerciseView.value !== 'search') return
     const scrollingElement = document.scrollingElement || document.documentElement
     const distanceToBottom = scrollingElement.scrollHeight - scrollingElement.scrollTop - scrollingElement.clientHeight
@@ -2131,6 +2148,7 @@ function openNewExercise() {
   exerciseEditor.value = emptyExercise()
   exerciseEditorTab.value = 'code'
   exerciseContentTarget.value = null
+  exerciseCompetencyTarget.value = null
   sessionUploadedAttachmentPaths.clear()
   pendingDeletedAttachments.splice(0)
   selectedExerciseVersion.value = 0
@@ -2147,6 +2165,7 @@ function editExercise(exercise = selectedExercise.value) {
   exerciseEditor.value = normalizeExercise(exercise)
   exerciseEditorTab.value = 'code'
   exerciseContentTarget.value = null
+  exerciseCompetencyTarget.value = null
   sessionUploadedAttachmentPaths.clear()
   pendingDeletedAttachments.splice(0)
   selectedExerciseVersion.value = 0
@@ -2169,6 +2188,7 @@ async function cancelExerciseEdit() {
   exerciseView.value = 'search'
   exerciseEditor.value = emptyExercise()
   exerciseContentTarget.value = null
+  exerciseCompetencyTarget.value = null
   selectedExerciseVersion.value = 0
   exercisePreviewMode.value = 'segmented'
 }
@@ -2177,6 +2197,9 @@ function selectExerciseEditorTab(tab) {
   exerciseEditorTab.value = tab
   if (tab === 'contents' && exerciseContentTarget.value === null) {
     exerciseContentTarget.value = activeExerciseHasSections.value ? 0 : 'exercise'
+  }
+  if (tab === 'competencies' && exerciseCompetencyTarget.value === null) {
+    exerciseCompetencyTarget.value = activeExerciseHasSections.value ? 0 : 'exercise'
   }
   if (tab === 'code') nextTick(() => latexCodeEditor?.requestMeasure())
 }
@@ -2281,6 +2304,29 @@ function updateExerciseMetric(field, value, apartadoIndex = null) {
 function selectExercisePartContents(apartadoIndex) {
   exerciseContentTarget.value = apartadoIndex
   selectExerciseEditorTab('contents')
+}
+
+function selectExercisePartCompetencies(apartadoIndex = null) {
+  exerciseCompetencyTarget.value = typeof apartadoIndex === 'number'
+    ? apartadoIndex
+    : activeExerciseHasSections.value ? 0 : 'exercise'
+  selectExerciseEditorTab('competencies')
+}
+
+function updateExerciseCompetencies(structure) {
+  activeExerciseVersion.value.structure = aggregateExerciseStructure(structure)
+  const hasAchievements = [
+    ...(activeExerciseVersion.value.structure.achievements || []),
+    ...(activeExerciseVersion.value.structure.apartados || []).flatMap((part) => part.achievements || []),
+  ].length > 0
+  if (hasAchievements) exerciseEditor.value.curriculum.competencial = true
+}
+
+function selectedCompetencyTargetLabel() {
+  if (typeof exerciseCompetencyTarget.value === 'number') {
+    return `Competencias del apartado ${String.fromCharCode(97 + exerciseCompetencyTarget.value)}`
+  }
+  return 'Competencias del ejercicio'
 }
 
 function selectedContentTargetLabel() {
@@ -2519,6 +2565,8 @@ function clearExerciseCurriculumFilters() {
 function selectExerciseVersion(version) {
   if (version === null || version < 0 || version > exerciseEditor.value.variaciones.length) return
   selectedExerciseVersion.value = version
+  exerciseContentTarget.value = null
+  exerciseCompetencyTarget.value = null
   exerciseCompilationStatus.value = activeExerciseVersion.value.compilation?.status || exerciseEditor.value.compilation?.status || 'ready'
   isCompiling.value = ['queued', 'compiling'].includes(exerciseCompilationStatus.value)
   exercisePreviewTab.value = compiledSolutionPdfUrl.value && exercisePreviewTab.value === 'solution' ? 'solution' : 'statement'
@@ -3079,6 +3127,7 @@ async function saveExercise(options = {}) {
       clearExercisePreviews()
       exerciseEditor.value = emptyExercise()
       selectedExerciseVersion.value = 0
+      exerciseCompetencyTarget.value = null
       exerciseView.value = 'search'
     } else {
       const activeVersionIndex = selectedExerciseVersion.value
@@ -3150,6 +3199,7 @@ async function deleteExercise() {
     exercises.value = exercises.value.filter((exercise) => exercise.id !== exerciseId)
     selectedExerciseId.value = null
     selectedExerciseVersion.value = 0
+    exerciseCompetencyTarget.value = null
     exerciseEditor.value = emptyExercise()
     exercisePreviewTab.value = 'statement'
     exerciseView.value = 'search'
@@ -3540,6 +3590,7 @@ function currentTimePosition(date, module) {
 const navigation = computed(() => [
   { title: 'Matemáticas', icon: 'mdi-function-variant' },
   { title: 'Ejercicios', icon: 'mdi-pencil-ruler' },
+  { title: 'Rúbricas', icon: 'mdi-table-star' },
   { title: 'Documentos', icon: 'mdi-file-document-outline' },
   ...(isAdministrator.value ? [{ title: 'Invitaciones', icon: 'mdi-account-multiple-plus-outline' }] : []),
 ])
@@ -3629,6 +3680,31 @@ function addGradebookStudent() {
 
 function addGradebookColumn() {
   gradebookRef.value?.openItemDialog?.()
+}
+
+function applyDocumentAssessmentToLoadedGroups({ documentId, previousGroupId, groupId, item }) {
+  const linkedItemIds = (nodes = []) => nodes.flatMap((node) => {
+    if (node?.type === 'item' && node.documentAssessment?.documentId === documentId) return [node.id]
+    return node?.type === 'group' ? linkedItemIds(node.children || []) : []
+  })
+  const removeItem = (nodes = []) => nodes.flatMap((node) => {
+    if (node?.type === 'item' && node.documentAssessment?.documentId === documentId) return []
+    if (node?.type === 'group') return [{ ...node, children: removeItem(node.children || []) }]
+    return [node]
+  })
+  teacherGroups.value = teacherGroups.value.map((group) => {
+    if (![previousGroupId, groupId].filter(Boolean).includes(group.id)) return group
+    const previousStructure = group.evaluaciones?.estructura || []
+    const removedIds = linkedItemIds(previousStructure).filter((id) => !(group.id === groupId && item?.id === id))
+    const structure = removeItem(previousStructure)
+    if (group.id === groupId && item) structure.push(JSON.parse(JSON.stringify(item)))
+    const resultados = JSON.parse(JSON.stringify(group.evaluaciones?.resultados || {}))
+    if (removedIds.length) Object.values(resultados).forEach((studentResults) => removedIds.forEach((id) => delete studentResults[id]))
+    return {
+      ...group,
+      evaluaciones: { ...(group.evaluaciones || {}), estructura: structure, resultados },
+    }
+  })
 }
 
 function fitClassroom() {
@@ -3752,6 +3828,26 @@ function nextDocumentStep() {
 
 function saveActiveDocument() {
   documentCreatorRef.value?.save?.()
+}
+
+function newActiveRubric() {
+  rubricManagerRef.value?.newRubric?.()
+}
+
+function closeActiveRubric() {
+  rubricManagerRef.value?.closeEditor?.()
+}
+
+function saveActiveRubric() {
+  rubricManagerRef.value?.save?.()
+}
+
+function duplicateActiveRubric() {
+  rubricManagerRef.value?.duplicateActive?.()
+}
+
+function deleteActiveRubric() {
+  rubricManagerRef.value?.requestDeleteActive?.()
 }
 
 async function closeSession() {
@@ -4027,6 +4123,57 @@ onBeforeUnmount(() => {
           <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
         </v-tooltip>
       </template>
+      <template v-else-if="active === 'Rúbricas'">
+        <template v-if="rubricWorkflow.mode === 'library'">
+          <v-text-field
+            v-model="rubricSearchQuery"
+            aria-label="Buscar rúbricas por título"
+            placeholder="Buscar por título"
+            prepend-inner-icon="mdi-magnify"
+            variant="outlined"
+            density="compact"
+            rounded="pill"
+            clearable
+            hide-details
+            class="app-toolbar-search"
+          />
+          <v-select
+            v-model="rubricSubjectFilter"
+            :items="rubricSubjectOptions"
+            item-title="title"
+            item-value="value"
+            aria-label="Filtrar rúbricas por asignatura"
+            placeholder="Todas las asignaturas"
+            prepend-inner-icon="mdi-school-outline"
+            variant="outlined"
+            density="compact"
+            rounded="pill"
+            clearable
+            hide-details
+            class="rubric-toolbar-subject"
+          />
+          <v-spacer />
+          <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action mr-3" @click="newActiveRubric">Nueva rúbrica</v-btn>
+          <v-spacer />
+        </template>
+        <template v-else>
+          <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" :disabled="rubricWorkflow.isSaving" @click="closeActiveRubric">Rúbricas</v-btn>
+          <v-spacer />
+          <v-tooltip v-if="rubricWorkflow.persisted" text="Duplicar rúbrica" location="bottom">
+            <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-content-copy" rounded="circle" variant="text" aria-label="Duplicar rúbrica" @click="duplicateActiveRubric" /></template>
+          </v-tooltip>
+          <v-tooltip v-if="rubricWorkflow.persisted" text="Eliminar rúbrica" location="bottom">
+            <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-delete-outline" rounded="circle" variant="text" color="error" aria-label="Eliminar rúbrica" @click="deleteActiveRubric" /></template>
+          </v-tooltip>
+          <v-btn color="primary" variant="flat" prepend-icon="mdi-content-save-outline" class="app-toolbar-primary-action mr-3 ml-2" :disabled="!rubricWorkflow.canSave" :loading="rubricWorkflow.isSaving" @click="saveActiveRubric">Guardar</v-btn>
+        </template>
+        <v-tooltip text="Calendario" location="bottom">
+          <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
+        </v-tooltip>
+        <v-tooltip text="Chat" location="bottom">
+          <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
+        </v-tooltip>
+      </template>
       <template v-else-if="active === 'Documentos'">
         <v-btn-toggle :model-value="documentsTab" mandatory density="compact" class="calendar-toolbar-modes documents-toolbar-tabs" aria-label="Sección de documentos" @update:model-value="documentsTab = $event">
           <v-btn value="documents">Documentos</v-btn>
@@ -4058,11 +4205,14 @@ onBeforeUnmount(() => {
         <template v-else-if="documentsTab === 'documents'">
           <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" :disabled="isCompilingDocument" @click="closeActiveDocument">Documentos</v-btn>
           <v-spacer />
-          <span class="document-toolbar-step">Paso {{ documentWorkflow.step }} de 4</span>
+          <span class="document-toolbar-step">Paso {{ documentWorkflow.step }} de {{ documentWorkflow.totalSteps || 4 }}</span>
           <v-spacer />
           <v-btn v-if="documentWorkflow.step > 1" variant="text" prepend-icon="mdi-chevron-left" :disabled="isCompilingDocument" @click="previousDocumentStep">Anterior</v-btn>
+          <v-tooltip v-if="documentWorkflow.step === 4" text="Recompilar documento" location="bottom">
+            <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-refresh" variant="text" color="primary" aria-label="Recompilar documento" :loading="isCompilingDocument" @click="compileActiveDocument" /></template>
+          </v-tooltip>
           <v-btn
-            v-if="documentWorkflow.step < 4"
+            v-if="documentWorkflow.step < (documentWorkflow.totalSteps || 4)"
             color="primary"
             variant="flat"
             append-icon="mdi-chevron-right"
@@ -4071,9 +4221,6 @@ onBeforeUnmount(() => {
             @click="nextDocumentStep"
           >Siguiente</v-btn>
           <template v-else>
-            <v-tooltip text="Recompilar documento" location="bottom">
-              <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-refresh" variant="text" color="primary" aria-label="Recompilar documento" :loading="isCompilingDocument" @click="compileActiveDocument" /></template>
-            </v-tooltip>
             <v-btn
               color="primary"
               variant="flat"
@@ -4229,7 +4376,7 @@ onBeforeUnmount(() => {
     </v-app-bar>
 
     <v-main>
-      <div class="page-shell" :class="{ 'page-shell-mathematics': active === 'Matemáticas', 'page-shell-exercise-search': active === 'Ejercicios' && exerciseView === 'search', 'page-shell-exercise-edit': active === 'Ejercicios' && exerciseView === 'edit', 'page-shell-documents': active === 'Documentos', 'page-shell-documents-templates': active === 'Documentos' && documentsTab === 'templates', 'page-shell-gradebook': active === 'Grupo', 'page-shell-calendar': active === 'Calendario', 'page-shell-profile': active === 'Perfil' }">
+      <div class="page-shell" :class="{ 'page-shell-mathematics': active === 'Matemáticas', 'page-shell-rubrics': active === 'Rúbricas', 'page-shell-exercise-search': active === 'Ejercicios' && exerciseView === 'search', 'page-shell-exercise-edit': active === 'Ejercicios' && exerciseView === 'edit', 'page-shell-documents': active === 'Documentos', 'page-shell-documents-templates': active === 'Documentos' && documentsTab === 'templates', 'page-shell-gradebook': active === 'Grupo', 'page-shell-calendar': active === 'Calendario', 'page-shell-profile': active === 'Perfil' }">
         <section v-if="active === 'Matemáticas'" class="mathematics-page">
           <div v-if="isLoadingMathConcepts" class="math-concepts-loading"><v-progress-circular indeterminate color="primary" /><span>Cargando mapa de conceptos…</span></div>
           <MathConceptMap
@@ -4249,6 +4396,17 @@ onBeforeUnmount(() => {
             @group-nodes="groupMathConcepts"
             @select-subject="selectMathSubject"
             @update-subject-node-ids="updateMathSubjectNodeIds"
+          />
+        </section>
+        <section v-else-if="active === 'Rúbricas'" class="rubrics-page">
+          <RubricManager
+            ref="rubricManagerRef"
+            :teacher-id="currentTeacherId"
+            :subjects="mathSubjects"
+            :search-query="rubricSearchQuery"
+            :subject-filter="rubricSubjectFilter || ''"
+            :ai-model="selectedAiModel"
+            @state-change="rubricWorkflow = $event"
           />
         </section>
         <section v-else-if="active === 'Invitaciones'" class="invitations-page">
@@ -4390,10 +4548,12 @@ onBeforeUnmount(() => {
                   <v-tabs :model-value="exerciseEditorTab" density="compact" @update:model-value="selectExerciseEditorTab">
                     <v-tab value="code">Código</v-tab>
                     <v-tab value="contents">Contenidos</v-tab>
+                    <v-tab value="competencies">Competencias</v-tab>
                     <v-tab value="files">Archivos</v-tab>
                   </v-tabs>
                   <v-spacer />
                   <span v-if="exerciseEditorTab === 'contents'" class="exercise-content-toolbar-label">{{ selectedContentTargetLabel() }}</span>
+                  <span v-if="exerciseEditorTab === 'competencies'" class="exercise-content-toolbar-label">{{ selectedCompetencyTargetLabel() }}</span>
                   <v-tooltip v-if="exerciseEditorTab === 'code'" text="Formatear código LaTeX" location="bottom">
                     <template #activator="{ props }">
                       <v-btn
@@ -4417,6 +4577,19 @@ onBeforeUnmount(() => {
                     :nodes="mathConceptNodes"
                     :subject-selections="mathConceptSubjectSelections"
                     :exercise-counts="editorExerciseCountByConcept"
+                  />
+                </div>
+                <div v-show="exerciseEditorTab === 'competencies'" class="exercise-editor-competencies">
+                  <ExerciseCompetencyEditor
+                    :model-value="activeExerciseStructure"
+                    :target="exerciseCompetencyTarget"
+                    :curriculum="{ ...exerciseEditor.curriculum, ...(exerciseAiCurriculum() || {}) }"
+                    :subjects="mathSubjects"
+                    :ai-model="selectedAiModel"
+                    :latex="activeExerciseCode"
+                    @update:model-value="updateExerciseCompetencies"
+                    @update:target="exerciseCompetencyTarget = $event"
+                    @generated="exerciseEditor.curriculum.competencial = true"
                   />
                 </div>
                 <div v-show="exerciseEditorTab === 'files'" class="exercise-editor-files">
@@ -4459,6 +4632,9 @@ onBeforeUnmount(() => {
                         <div class="exercise-preview-variation-actions">
                         <v-tooltip :text="activeExerciseHasSections ? 'Seleccionar contenidos del ejercicio completo' : 'Seleccionar contenidos'" location="bottom">
                           <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-chart-donut-variant" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" :aria-label="activeExerciseHasSections ? 'Seleccionar contenidos del ejercicio completo' : 'Seleccionar contenidos'" @click="selectExercisePartContents(activeExerciseHasSections ? 'global' : 'exercise')" /></template>
+                        </v-tooltip>
+                        <v-tooltip :text="activeExerciseHasSections ? 'Desglosar competencias por apartados' : 'Desglosar competencias del ejercicio'" location="bottom">
+                          <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-shield-star-outline" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" :aria-label="activeExerciseHasSections ? 'Desglosar competencias por apartados' : 'Desglosar competencias del ejercicio'" @click="selectExercisePartCompetencies()" /></template>
                         </v-tooltip>
                         <v-tooltip v-if="selectedExerciseVersion === 0" text="Generar todas las soluciones" location="bottom">
                           <template #activator="{ props }">
@@ -4536,15 +4712,15 @@ onBeforeUnmount(() => {
                     </div>
                   </article>
 
-                  <article v-for="(apartado, apartadoIndex) in activeExerciseStructure.apartados" v-show="segmentedExercisePreview" :key="apartado.id || apartadoIndex" class="exercise-preview-block" :class="{ 'exercise-preview-block-content-active': exerciseContentTarget === apartadoIndex && exerciseEditorTab === 'contents' }">
+                  <article v-for="(apartado, apartadoIndex) in activeExerciseStructure.apartados" v-show="segmentedExercisePreview" :key="apartado.id || apartadoIndex" class="exercise-preview-block" :class="{ 'exercise-preview-block-content-active': (exerciseContentTarget === apartadoIndex && exerciseEditorTab === 'contents') || (exerciseCompetencyTarget === apartadoIndex && exerciseEditorTab === 'competencies') }">
                     <div class="exercise-part-toolbar exercise-segment-actions">
                       <strong class="exercise-part-label">{{ String.fromCharCode(97 + apartadoIndex) }}</strong>
                       <v-spacer />
                       <v-tooltip text="Seleccionar contenidos del apartado" location="bottom">
                         <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-chart-donut-variant" size="x-small" rounded="circle" class="exercise-segment-icon" :variant="exerciseContentTarget === apartadoIndex && exerciseEditorTab === 'contents' ? 'flat' : 'tonal'" color="primary" :aria-label="`Seleccionar contenidos del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="selectExercisePartContents(apartadoIndex)" /></template>
                       </v-tooltip>
-                      <v-tooltip text="Competencias (próximamente)" location="bottom">
-                        <template #activator="{ props }"><span v-bind="props"><v-btn icon="mdi-shield-star-outline" size="x-small" rounded="circle" class="exercise-segment-icon" variant="tonal" disabled aria-label="Seleccionar competencias" /></span></template>
+                      <v-tooltip text="Desglosar competencias del apartado" location="bottom">
+                        <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-shield-star-outline" size="x-small" rounded="circle" class="exercise-segment-icon" :variant="exerciseCompetencyTarget === apartadoIndex && exerciseEditorTab === 'competencies' ? 'flat' : 'tonal'" color="primary" :aria-label="`Desglosar competencias del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="selectExercisePartCompetencies(apartadoIndex)" /></template>
                       </v-tooltip>
                       <v-tooltip v-if="!apartado.solucion" text="Generar solución de este apartado" location="bottom">
                         <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-auto-fix" size="x-small" rounded="circle" class="exercise-segment-icon" variant="tonal" color="primary" :loading="isGeneratingPartSolution === apartadoIndex" :disabled="isGeneratingPartSolution !== null" :aria-label="`Generar solución del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="generateExercisePartSolution(apartadoIndex)" /></template>
@@ -4592,6 +4768,7 @@ onBeforeUnmount(() => {
             :library-query="documentSearchQuery"
             @busy-change="isCompilingDocument = $event"
             @state-change="documentWorkflow = $event"
+            @assessment-saved="applyDocumentAssessmentToLoadedGroups"
           />
         </section>
 
@@ -4641,6 +4818,7 @@ onBeforeUnmount(() => {
             :key="selectedCareerGroup.id"
             :group="selectedCareerGroup"
             :existing-student-ids="existingStudentIds"
+            :teacher-id="currentTeacherId || ''"
             :configuration-mode="gradebookConfigurationMode"
             @dirty-change="gradebookDirty = $event"
             @validity-change="gradebookValid = $event"
