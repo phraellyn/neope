@@ -38,6 +38,13 @@ function roundedPoints(value) {
   return Math.max(0, Math.round((Number(value) || 0) * 100) / 100)
 }
 
+function formatPoints(value) {
+  return roundedPoints(value).toLocaleString('es-ES', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
 const segments = computed(() => {
   const parts = Array.isArray(props.modelValue?.apartados) ? props.modelValue.apartados : []
   if (parts.length) {
@@ -291,7 +298,7 @@ watch(() => props.curriculum?.subjectId, () => {
         </button>
       </div>
       <div class="exercise-competency-score" :class="{ valid: pointsMatch, invalid: !pointsMatch }">
-        <span>{{ assignedPoints }} / {{ targetPoints }}</span>
+        <span>{{ formatPoints(assignedPoints) }} / {{ formatPoints(targetPoints) }}</span>
         <small>puntos</small>
       </div>
       <v-spacer />

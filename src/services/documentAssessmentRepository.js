@@ -52,7 +52,10 @@ async function updateGroupAssessment(groupId, documentId, item = null) {
     const removed = removeDocumentItem(evaluation.structure, documentId)
     removedIds = removed.removedIds
     const structure = removed.structure
-    if (item) {
+    // Los documentos programados no ocupan una columna hasta que se evalúa
+    // por primera vez a un alumno. Si la columna ya existe, una edición del
+    // documento sí debe mantenerla actualizada.
+    if (item && removedIds.length) {
       const previousId = removedIds[0]
       savedItem = { ...clone(item, {}), id: previousId || item.id }
       structure.push(savedItem)
@@ -67,7 +70,7 @@ async function updateGroupAssessment(groupId, documentId, item = null) {
   return { item: savedItem, removedIds }
 }
 
-/** Mantiene exactamente un ítem de cuaderno asociado a cada documento evaluable. */
+/** Actualiza el ítem si ya fue evaluado; los documentos pendientes no crean columnas. */
 export async function syncDocumentAssessment({ documentId, previousGroupId = null, groupId = null, item = null }) {
   if (previousGroupId && previousGroupId !== groupId) await updateGroupAssessment(previousGroupId, documentId, null)
   if (!groupId || !item) {

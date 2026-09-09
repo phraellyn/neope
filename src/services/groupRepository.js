@@ -39,6 +39,32 @@ function inferLevel(name = '') {
   return match?.[1] || normalized
 }
 
+function attendanceItems(nodes = []) {
+  return nodes.flatMap((node) => {
+    if (node?.type === 'group') return attendanceItems(node.children || [])
+    return node?.attendance?.date ? [node] : []
+  })
+}
+
+function stripAttendanceItems(nodes = []) {
+  return nodes.flatMap((node) => {
+    if (node?.attendance?.date) return []
+    if (node?.type !== 'group') return [node]
+    const children = stripAttendanceItems(node.children || [])
+    return children.length ? [{ ...node, children }] : []
+  })
+}
+
+function normalizeAttendance(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).map(([date, entry]) => {
+    const source = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : {}
+    const rawRecords = source.records && typeof source.records === 'object' ? source.records : source
+    const records = Object.fromEntries(Object.entries(rawRecords).filter(([, status]) => ['F', 'FJ', 'R', 'RJ'].includes(status)))
+    return [date, { records, ...(source.updatedAt ? { updatedAt: source.updatedAt } : {}) }]
+  }))
+}
+
 function normalizeEvaluation(group = {}) {
   const source = group.evaluation || group.evaluaciones || {}
   const legacyColumns = Array.isArray(source.columnas)
@@ -49,9 +75,13 @@ function normalizeEvaluation(group = {}) {
         nombreCorto: column.nombreCorto || column.title || column.nombre || 'Resultado',
       }))
     : []
+  const structure = clone(source.structure || source.estructura, legacyColumns) || []
+  const removedAttendanceIds = new Set(attendanceItems(structure).map((item) => item.id).filter(Boolean))
+  const weights = clone(source.weights || source.pesos, {}) || {}
+  removedAttendanceIds.forEach((itemId) => delete weights[itemId])
   return {
-    structure: clone(source.structure || source.estructura, legacyColumns) || [],
-    weights: clone(source.weights || source.pesos, {}) || {},
+    structure: stripAttendanceItems(structure),
+    weights,
   }
 }
 
@@ -99,11 +129,13 @@ function legacyGroupDocument(academicYear, group, teacherId) {
     color: group.color || '#DCEBFF',
     schedule: clone(group.schedule || group.horario, []) || [],
     evaluation,
+    attendance: normalizeAttendance(group.attendance || group.asistencia),
     classroomLayout: normalizeClassroomLayout(group),
     studentCount: studentIdsAndResults(group).length,
     tutor: Boolean(group.tutor),
+    tutorType: group.tutorType || null,
     legacyIds,
-    schemaVersion: 2,
+    schemaVersion: 3,
     updatedAt: new Date().toISOString(),
   }
 }
@@ -123,20 +155,37 @@ function groupDocumentFromView(group, teacherId = DEVELOPMENT_TEACHER_ID) {
     color: group.color || '#DCEBFF',
     schedule: clone(group.schedule || group.horario, []) || [],
     evaluation: normalizeEvaluation(group),
+    attendance: normalizeAttendance(group.attendance || group.asistencia),
     classroomLayout: normalizeClassroomLayout(group),
     studentCount: group.studentsLoaded && Array.isArray(group.alumnos)
       ? group.alumnos.length
       : Number(group.studentCount) || 0,
     tutor: Boolean(group.tutor),
+    tutorType: group.tutorType || null,
     legacyIds: [...new Set(Array.isArray(group.legacyIds) ? group.legacyIds.filter(Boolean) : [])],
-    schemaVersion: 2,
+    schemaVersion: 3,
     updatedAt: new Date().toISOString(),
   }
 }
 
 function groupView(id, data, students = null) {
   const loadedStudents = Array.isArray(students) ? students : []
-  const results = Object.fromEntries(loadedStudents.map((student) => [student.id, clone(student.results, {}) || {}]))
+  const rawStructure = clone(data.evaluation?.structure, []) || []
+  const legacyAttendanceItems = attendanceItems(rawStructure)
+  const legacyAttendanceIds = new Set(legacyAttendanceItems.map((item) => item.id).filter(Boolean))
+  const attendance = normalizeAttendance(data.attendance)
+  const results = Object.fromEntries(loadedStudents.map((student) => {
+    const studentResults = clone(student.results, {}) || {}
+    legacyAttendanceItems.forEach((item) => {
+      const status = studentResults[item.id]
+      if (['F', 'FJ', 'R', 'RJ'].includes(status)) {
+        attendance[item.attendance.date] ||= { records: {} }
+        attendance[item.attendance.date].records[student.id] = status
+      }
+      delete studentResults[item.id]
+    })
+    return [student.id, studentResults]
+  }))
   return {
     id,
     academicYear: data.academicYear,
@@ -149,14 +198,17 @@ function groupView(id, data, students = null) {
     color: data.color || '#DCEBFF',
     horario: clone(data.schedule, []) || [],
     evaluaciones: {
-      estructura: clone(data.evaluation?.structure, []) || [],
+      estructura: stripAttendanceItems(rawStructure),
       resultados: results,
-      pesos: clone(data.evaluation?.weights, {}) || {},
+      pesos: Object.fromEntries(Object.entries(clone(data.evaluation?.weights, {}) || {})
+        .filter(([itemId]) => !legacyAttendanceIds.has(itemId))),
     },
+    attendance,
     alumnos: loadedStudents.map((student) => ({ id: student.id })),
     disposicion: normalizeClassroomLayout({ classroomLayout: data.classroomLayout }),
     studentCount: Number(data.studentCount) || loadedStudents.length,
     tutor: Boolean(data.tutor),
+    tutorType: data.tutorType || null,
     legacyIds: Array.isArray(data.legacyIds) ? [...data.legacyIds] : [],
     studentsLoaded: Array.isArray(students),
   }
@@ -271,19 +323,35 @@ export async function loadNonTeachingSchedule(teacherId = DEVELOPMENT_TEACHER_ID
     : []
 }
 
+export async function loadScheduleTimePoints(teacherId = DEVELOPMENT_TEACHER_ID, academicYear = currentAcademicYear()) {
+  const snapshot = await getDoc(doc(db, 'teachers', teacherId, 'academicYears', academicYear))
+  return snapshot.exists() && Array.isArray(snapshot.data()?.scheduleTimePoints)
+    ? clone(snapshot.data().scheduleTimePoints, [])
+    : []
+}
+
 export async function loadStudentsForGroup(group) {
+  const groupReference = doc(db, 'grupos', group.id)
   const studentsCollection = collection(db, 'grupos', group.id, 'alumnos')
   let snapshot
+  let groupSnapshot
   try {
-    snapshot = await getDocsFromServer(studentsCollection)
+    ;[snapshot, groupSnapshot] = await Promise.all([
+      getDocsFromServer(studentsCollection),
+      getDoc(groupReference),
+    ])
   } catch {
-    snapshot = await getDocs(studentsCollection)
+    ;[snapshot, groupSnapshot] = await Promise.all([
+      getDocs(studentsCollection),
+      getDoc(groupReference),
+    ])
   }
   const students = snapshot.docs.map((studentSnapshot) => ({
     id: studentSnapshot.id,
     results: clone(studentSnapshot.data()?.results, {}) || {},
   }))
-  return groupView(group.id, groupDocumentFromView(group, group.teacherId), students)
+  const groupData = groupSnapshot?.exists() ? groupSnapshot.data() : groupDocumentFromView(group, group.teacherId)
+  return groupView(group.id, groupData, students)
 }
 
 export async function saveGroup(group, previousStudentIds = [], teacherId = DEVELOPMENT_TEACHER_ID) {
@@ -324,6 +392,15 @@ export async function saveNonTeachingSchedule(blocks, teacherId = DEVELOPMENT_TE
   await setDoc(doc(db, 'teachers', teacherId, 'academicYears', academicYear), {
     academicYear,
     nonTeachingSchedule: clone(blocks, []) || [],
+    schemaVersion: 2,
+    updatedAt: new Date().toISOString(),
+  }, { merge: true })
+}
+
+export async function saveScheduleTimePoints(timePoints, teacherId = DEVELOPMENT_TEACHER_ID, academicYear = currentAcademicYear()) {
+  await setDoc(doc(db, 'teachers', teacherId, 'academicYears', academicYear), {
+    academicYear,
+    scheduleTimePoints: clone(timePoints, []) || [],
     schemaVersion: 2,
     updatedAt: new Date().toISOString(),
   }, { merge: true })

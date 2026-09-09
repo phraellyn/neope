@@ -12,6 +12,7 @@ import { prettyPrintLatex } from '../utils/latexPrettyPrint'
 const props = defineProps({
   modelValue: { type: String, default: '' },
   compiling: { type: Boolean, default: false },
+  showHeader: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['update:modelValue', 'compile'])
@@ -71,6 +72,7 @@ onMounted(() => {
         basicSetup,
         editorTheme,
         editorHighlighting,
+        EditorView.lineWrapping,
         latex({ enableAutocomplete: false, autoCloseBrackets: true, autoCloseTags: true, enableTooltips: true }),
         keymap.of([
           indentWithTab,
@@ -89,11 +91,12 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => editor?.destroy())
+defineExpose({ compile, format, focus: () => editor?.focus() })
 </script>
 
 <template>
-  <section class="document-code-editor">
-    <header>
+  <section class="document-code-editor" :class="{ 'document-code-editor-headerless': !showHeader }">
+    <header v-if="showHeader">
       <span>Código LaTeX</span>
       <v-spacer />
       <v-tooltip text="Formatear código (Ctrl/Cmd + F)" location="top">
@@ -113,6 +116,7 @@ onBeforeUnmount(() => editor?.destroy())
 
 <style scoped>
 .document-code-editor { display: grid; min-width: 0; min-height: 0; grid-template-rows: 43px minmax(0, 1fr); overflow: hidden; background: #10213a; }
+.document-code-editor-headerless { grid-template-rows: minmax(0, 1fr); }
 .document-code-editor header { display: flex; min-width: 0; align-items: center; gap: 5px; padding: 5px 8px 5px 13px; border-bottom: 1px solid #d8e2ed; background: #f8fafd; color: #365a82; }
 .document-code-editor header > span { font-size: .72rem; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
 .document-code-editor-host { min-width: 0; min-height: 0; overflow: hidden; }

@@ -14,6 +14,7 @@ export function rubricSnapshot(rubric) {
     schemaVersion: Number(rubric.schemaVersion) || 1,
     id: rubric.id,
     title: String(rubric.title || 'Rúbrica'),
+    shortName: Array.from(String(rubric.shortName || rubric.title || 'R').trim()).slice(0, 2).join(''),
     course: String(rubric.course || ''),
     subjectId: String(rubric.subjectId || ''),
     subjectTitle: String(rubric.subjectTitle || ''),

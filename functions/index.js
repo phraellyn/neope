@@ -45,6 +45,35 @@ function requireTeacherAccess(request) {
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
 const compilerOrigin = 'http://51.170.57.25:5000'
 
+export const deleteTeacherGroup = onCall({
+  region: 'europe-west1',
+  timeoutSeconds: 60,
+  memory: '256MiB',
+  enforceAppCheck: true,
+}, async (request) => {
+  requireTeacherAccess(request)
+  const groupId = String(request.data?.groupId || '').trim()
+  if (!groupId) throw new HttpsError('invalid-argument', 'Falta el identificador del grupo.')
+
+  const groupReference = adminDb.doc(`grupos/${groupId}`)
+  const group = await groupReference.get()
+  if (!group.exists || group.data()?.teacherId !== request.auth.uid) {
+    throw new HttpsError('permission-denied', 'El grupo no pertenece al profesor.')
+  }
+
+  const [students, accessCodes] = await Promise.all([
+    groupReference.collection('alumnos').get(),
+    adminDb.collection('studentAccessCodes').where('groupId', '==', groupId).get(),
+  ])
+  if (!accessCodes.empty) {
+    const batch = adminDb.batch()
+    accessCodes.docs.forEach((entry) => batch.delete(entry.ref))
+    await batch.commit()
+  }
+  await adminDb.recursiveDelete(groupReference)
+  return { studentIds: students.docs.map((student) => student.id) }
+})
+
 const proxyResponseHeaders = Object.freeze([
   'accept-ranges',
   'cache-control',
@@ -555,9 +584,12 @@ const aiModels = Object.freeze({
   'openai/gpt-5-mini': { reasoningEffort: 'minimal', label: 'GPT-5 Mini' },
   'google/gemini-3-flash-preview': { reasoningEffort: 'minimal', label: 'Gemini 3 Flash' },
   'google/gemini-3.7-flash': { reasoningEffort: 'low', label: 'Gemini 3.7 Flash' },
+  'google/gemini-3.8-flash': { reasoningEffort: 'low', label: 'Gemini 3.8 Flash' },
   'openai/gpt-5.6-luna': { reasoningEffort: 'minimal', label: 'GPT-5.6 Luna' },
   'openai/gpt-5.6-terra': { reasoningEffort: 'minimal', label: 'GPT-5.6 Terra' },
   'openai/gpt-5.6-sol': { reasoningEffort: 'minimal', label: 'GPT-5.6 Sol' },
+  'openai/gpt-6-astra': { reasoningEffort: 'minimal', label: 'GPT-6 Astra' },
+  'anthropic/claude-fable-5.1': { reasoningEffort: 'minimal', label: 'Claude Fable 5.1' },
   'moonshotai/kimi-k3': { reasoningEffort: 'minimal', label: 'Kimi K3' },
 })
 

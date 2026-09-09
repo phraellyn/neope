@@ -1,18 +1,10 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { doc, getDoc } from 'firebase/firestore'
 import { deleteStudentIdentitiesForGroup, loadStudentIdentitiesForGroup, saveStudentIdentities } from '../services/localStudentIdentity'
 import { loadRubrics } from '../services/rubricRepository'
-import { db } from '../services/firebase'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
-import {
-  aggregateExerciseStructure,
-  exerciseStructureFromDocument,
-  mergeExerciseStructure,
-  parseExerciseLatex,
-} from '../utils/exerciseStructure'
-import { assessmentExerciseModel as createAssessmentExerciseModel } from '../utils/documentAssessmentMatrix'
+import { loadDocumentAssessmentExercises } from '../services/documentAssessmentLoader'
 import {
   createRubricAssessment,
   rubricAssessmentTotal,
@@ -39,7 +31,15 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+function attendanceItemIds(nodes = []) {
+  return nodes.flatMap((node) => {
+    if (node?.type === 'group') return attendanceItemIds(node.children || [])
+    return node?.attendance?.date && node.id ? [node.id] : []
+  })
+}
+
 function normalizeNode(node) {
+  if (node?.attendance?.date) return null
   if (node?.type === 'group') {
     return {
       type: 'group',
@@ -48,7 +48,7 @@ function normalizeNode(node) {
       nombre: node.nombre || 'Grupo',
       nombreCorto: node.nombreCorto || node.nombre || 'Grupo',
       colapsado: Boolean(node.colapsado),
-      children: (node.children || []).map(normalizeNode),
+      children: (node.children || []).map(normalizeNode).filter(Boolean),
     }
   }
   return {
@@ -58,6 +58,7 @@ function normalizeNode(node) {
     nombreCorto: node.nombreCorto || node.nombre || node.title || 'Resultado',
     rubric: node.rubric ? rubricSnapshot(node.rubric) : null,
     documentAssessment: node.documentAssessment ? clone(node.documentAssessment) : null,
+    programming: node.programming ? clone(node.programming) : null,
   }
 }
 
@@ -68,21 +69,31 @@ function normalizeGroup(group) {
     nombre: column.title || column.nombre || 'Resultado',
     nombreCorto: column.nombreCorto || column.title || column.nombre || 'Resultado',
   }))
+  const sourceStructure = group.evaluaciones?.estructura || legacyItems
+  const removedAttendanceIds = new Set(attendanceItemIds(sourceStructure))
+  const results = group.evaluaciones?.resultados ? clone(group.evaluaciones.resultados) : {}
+  Object.values(results).forEach((studentResults) => {
+    removedAttendanceIds.forEach((itemId) => delete studentResults[itemId])
+  })
+  const weights = group.evaluaciones?.pesos && typeof group.evaluaciones.pesos === 'object'
+    ? clone(group.evaluaciones.pesos)
+    : {}
+  removedAttendanceIds.forEach((itemId) => delete weights[itemId])
   return {
     ...clone(group),
     alumnos: Array.isArray(group.alumnos) ? clone(group.alumnos) : [],
     evaluaciones: {
-      estructura: (group.evaluaciones?.estructura || legacyItems).map(normalizeNode),
-      resultados: group.evaluaciones?.resultados ? clone(group.evaluaciones.resultados) : {},
-      pesos: group.evaluaciones?.pesos && typeof group.evaluaciones.pesos === 'object'
-        ? clone(group.evaluaciones.pesos)
-        : {},
+      estructura: sourceStructure.map(normalizeNode).filter(Boolean),
+      resultados: results,
+      pesos: weights,
     },
   }
 }
 
 const localGroup = ref(normalizeGroup(props.group))
 const dirty = ref(false)
+const bulkStudentDialog = ref(false)
+const bulkStudentText = ref('')
 const itemDialog = ref(false)
 const itemForm = ref({ nombre: '', nombreCorto: '', rubricId: null })
 const rubrics = ref([])
@@ -125,6 +136,25 @@ let revision = 0
 
 const structure = computed(() => localGroup.value.evaluaciones.estructura)
 const students = computed(() => localGroup.value.alumnos)
+function resultWasEntered(result) {
+  if (result && typeof result === 'object') {
+    return Boolean(result.evaluatedAt || (result.type === 'document' && result.updatedAt))
+  }
+  return String(result ?? '').trim() !== ''
+}
+
+function itemHasEnteredEvaluation(itemId) {
+  return Object.values(localGroup.value.evaluaciones.resultados || {})
+    .some((studentResults) => resultWasEntered(studentResults?.[itemId]))
+}
+
+// Compatibilidad con instrumentos creados antes de introducir la activación
+// diferida: si siguen en la raíz y nadie los ha evaluado, no ocupan columna.
+const visibleStructure = computed(() => structure.value.filter((node) => (
+  node?.type !== 'item'
+  || !node.programming?.date
+  || itemHasEnteredEvaluation(node.id)
+)))
 const eligibleRubrics = computed(() => {
   const course = normalizedCourse(localGroup.value.curso || localGroup.value.level || localGroup.value.nombre)
   const subjectId = String(localGroup.value.subjectId || '')
@@ -243,6 +273,36 @@ function addStudent() {
   markDirty()
 }
 
+function openBulkStudentDialog() {
+  if (props.disabled || !props.configurationMode || students.value.length >= MAX_STUDENTS) return
+  bulkStudentText.value = ''
+  bulkStudentDialog.value = true
+}
+
+function importBulkStudents() {
+  if (props.disabled || !props.configurationMode) return
+  const available = MAX_STUDENTS - students.value.length
+  const names = bulkStudentText.value
+    .split(/[\r\n\t]+/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, available)
+  if (!names.length) return
+  const rubricItems = descendantItems(structure.value).filter((item) => item.rubric)
+  names.forEach((nombre) => {
+    const student = { id: randomStudentId(), nombre }
+    students.value.push(student)
+    if (rubricItems.length) {
+      localGroup.value.evaluaciones.resultados[student.id] = Object.fromEntries(
+        rubricItems.map((item) => [item.id, createRubricAssessment(item.rubric)]),
+      )
+    }
+  })
+  sortStudentsByName()
+  bulkStudentDialog.value = false
+  markDirty()
+}
+
 function removeStudent(studentId) {
   if (props.disabled || !props.configurationMode) return
   removedStudentIds.add(studentId)
@@ -272,7 +332,7 @@ function chooseItemRubric(rubric) {
   itemForm.value.rubricId = rubric?.id || null
   if (!rubric) return
   if (!itemForm.value.nombre.trim()) itemForm.value.nombre = rubric.title
-  if (!itemForm.value.nombreCorto.trim()) itemForm.value.nombreCorto = rubric.title
+  if (!itemForm.value.nombreCorto.trim()) itemForm.value.nombreCorto = rubric.shortName || rubric.title
 }
 
 function addItem() {
@@ -392,6 +452,15 @@ function blankCell(key, colspan = 1) {
   return { key, kind: 'blank', colspan }
 }
 
+function itemHeaderTooltip(node) {
+  const title = node?.nombre || node?.nombreCorto || 'Ítem de evaluación'
+  const rawDate = String(node?.programming?.date || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) return title
+  const date = new Date(`${rawDate}T12:00:00`)
+  const label = new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }).format(date)
+  return `${title} · ${label}`
+}
+
 function groupCell(node, colspan, rowspan = 1, labelOverride = null) {
   return {
     key: `group-${node.id}`,
@@ -405,9 +474,10 @@ function groupCell(node, colspan, rowspan = 1, labelOverride = null) {
 }
 
 const headerLayout = computed(() => {
-  const depth = structure.value.some((node) => node.type === 'group' && node.nivel === 1)
+  const displayedStructure = visibleStructure.value
+  const depth = displayedStructure.some((node) => node.type === 'group' && node.nivel === 1)
     ? 3
-    : (structure.value.some((node) => node.type === 'group' && node.nivel === 2) ? 2 : 1)
+    : (displayedStructure.some((node) => node.type === 'group' && node.nivel === 2) ? 2 : 1)
   const rows = Array.from({ length: depth }, () => [])
   const firstLevel = 4 - depth
   const rowLevels = Array.from({ length: depth }, (_, index) => firstLevel + index)
@@ -419,7 +489,7 @@ const headerLayout = computed(() => {
   const levelTwoRow = depth - 2
   const resultColumns = []
 
-  structure.value.forEach((node) => {
+  displayedStructure.forEach((node) => {
     if (node.type === 'item') {
       // Los ítems que cuelgan directamente de la estructura no pertenecen a
       // ningún grupo intermedio: su encabezado debe ocupar todas las filas
@@ -572,6 +642,9 @@ function categoryScore(category) {
 function chooseCategoryScore(category, value) {
   if (!activeRubricResult.value) return
   setRubricCategoryScore(activeRubricResult.value, category, value)
+  const savedAt = new Date().toISOString()
+  activeRubricResult.value.evaluatedAt = savedAt
+  activeRubricResult.value.updatedAt = savedAt
   rubricAssessmentChanged.value = true
   markDirty()
 }
@@ -587,47 +660,6 @@ watch(rubricAssessmentDialog, (open, wasOpen) => {
   rubricAssessmentStudent.value = null
   rubricAssessmentItem.value = null
 })
-
-function exerciseSourceStructure(source = {}) {
-  if (Number(source.schemaVersion) >= 3 && source.statement) return aggregateExerciseStructure(exerciseStructureFromDocument(source))
-  return mergeExerciseStructure(parseExerciseLatex(source.codigo || source.latex || source.enunciado || ''), source.structure || source)
-}
-
-function assessmentExerciseModel(exerciseId, version, source, order) {
-  const structure = exerciseSourceStructure(source)
-  if (!structure.apartados?.length && !structure.achievements?.length) {
-    structure.achievements = clone(source.achievements || source.structure?.achievements || [])
-  }
-  return createAssessmentExerciseModel({
-    exerciseId,
-    version,
-    structure,
-    order,
-  })
-}
-
-async function loadDocumentAssessmentExercises(item) {
-  const documentId = item?.documentAssessment?.documentId
-  if (!documentId) throw new Error('Este ítem no conserva la referencia al documento evaluable.')
-  const documentSnapshot = await getDoc(doc(db, 'documentos', documentId))
-  if (!documentSnapshot.exists()) throw new Error('El documento evaluable ya no existe.')
-  const documentData = documentSnapshot.data() || {}
-  const references = Array.isArray(item.documentAssessment.exercises) && item.documentAssessment.exercises.length
-    ? item.documentAssessment.exercises
-    : (documentData.ejercicios || []).map((entry, order) => ({ ...entry, order }))
-  return Promise.all(references
-    .slice()
-    .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
-    .map(async (reference, order) => {
-      const snapshot = await getDoc(doc(db, 'ejercicios', reference.exerciseId))
-      if (!snapshot.exists()) return null
-      const exercise = snapshot.data() || {}
-      const version = Number(reference.version) || 0
-      const source = version === 0 ? exercise : exercise.variaciones?.[version - 1] || exercise
-      return assessmentExerciseModel(reference.exerciseId, version, source, order)
-    }))
-    .then((items) => items.filter(Boolean))
-}
 
 function ensureDocumentAssessment(studentId, item) {
   localGroup.value.evaluaciones.resultados[studentId] ||= {}
@@ -670,6 +702,7 @@ function chooseDocumentAchievement(achievement) {
     selected.has(candidate.key) ? total + (Number(candidate.points) || 0) : total
   ), 0)
   result.updatedAt = new Date().toISOString()
+  result.evaluatedAt = result.updatedAt
   documentAssessmentChanged.value = true
   markDirty()
 }
@@ -1009,6 +1042,7 @@ onMounted(async () => {
 
 defineExpose({
   addStudent,
+  openBulkStudentDialog,
   openItemDialog,
   getGroup,
   markSaved,
@@ -1047,13 +1081,13 @@ defineExpose({
               </div>
               <div class="gradebook-student-heading-count">Alumnos <small>{{ students.length }}</small></div>
             </th>
-            <template v-if="structure.length">
+            <template v-if="visibleStructure.length">
               <th
                 v-for="cell in row"
                 :key="cell.key"
                 :colspan="cell.colspan"
                 :rowspan="cell.rowspan || 1"
-                :title="cell.title"
+                :title="cell.kind === 'item' ? undefined : cell.title"
                 :data-gradebook-node-id="cell.node?.id"
                 :draggable="false"
                 class="gradebook-header-cell"
@@ -1062,6 +1096,7 @@ defineExpose({
                   { 'gradebook-drop-target': cell.node && dropTargetId === cell.node.id },
                 ]"
               >
+                <v-tooltip v-if="cell.kind === 'item'" activator="parent" :text="itemHeaderTooltip(cell.node)" location="top" />
                 <template v-if="cell.kind === 'group'">
                   <span
                     class="gradebook-header-label"
@@ -1201,7 +1236,7 @@ defineExpose({
                 :aria-pressed="itemForm.rubricId === rubric.id"
                 @click="chooseItemRubric(rubric)"
               >
-                <strong>{{ rubric.title }}</strong>
+                <strong>{{ rubric.shortName ? `${rubric.shortName} · ${rubric.title}` : rubric.title }}</strong>
                 <span>{{ rubric.subjectTitle }} · {{ rubric.categories.length }} categoría{{ rubric.categories.length === 1 ? '' : 's' }}</span>
               </button>
             </div>
@@ -1212,6 +1247,21 @@ defineExpose({
           <v-spacer />
           <v-btn variant="text" @click="itemDialog = false">Cancelar</v-btn>
           <v-btn color="primary" variant="flat" :disabled="!itemForm.nombre.trim() || !itemForm.nombreCorto.trim()" @click="addItem">Añadir</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="bulkStudentDialog" max-width="620">
+      <v-card>
+        <v-card-title class="px-6 pt-5">Añadir alumnos</v-card-title>
+        <v-card-text class="px-6 pb-2">
+          <p class="text-body-2 text-medium-emphasis mb-4">Pega una columna de nombres. Los nombres permanecerán únicamente en este dispositivo; al backend solo llegarán los códigos anónimos.</p>
+          <v-textarea v-model="bulkStudentText" label="Nombres" placeholder="APELLIDO 1 APELLIDO 2, Nombre" rows="10" auto-grow variant="outlined" autofocus hide-details />
+        </v-card-text>
+        <v-card-actions class="px-6 pb-5">
+          <v-spacer />
+          <v-btn variant="text" @click="bulkStudentDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" variant="flat" :disabled="!bulkStudentText.trim()" @click="importBulkStudents">Añadir alumnos</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

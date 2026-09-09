@@ -10,6 +10,7 @@ import {
 const rubric = rubricSnapshot({
   id: 'rubric-1',
   title: 'Resolución de problemas',
+  shortName: 'RP',
   course: '2ºBTO',
   subjectId: '2bto-matematicas-ii',
   subjectTitle: 'Matemáticas II',
@@ -34,6 +35,7 @@ const rubric = rubricSnapshot({
   ],
 })
 
+assert.equal(rubric.shortName, 'RP')
 assert.equal(rubric.categories[1].range.description, 'Exactitud de los cálculos')
 assert.deepEqual(rubricRangeValues(rubric.categories[1]), [0, 1, 2, 3])
 

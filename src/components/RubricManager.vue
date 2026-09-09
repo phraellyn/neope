@@ -62,13 +62,15 @@ const filteredRubrics = computed(() => {
   const search = props.searchQuery.trim().toLocaleLowerCase('es-ES')
   return rubrics.value.filter((rubric) => (
     (!props.subjectFilter || rubric.subjectId === props.subjectFilter)
-    && (!search || rubric.title.toLocaleLowerCase('es-ES').includes(search))
+    && (!search || `${rubric.title} ${rubric.shortName || ''}`.toLocaleLowerCase('es-ES').includes(search))
   ))
 })
 const isValid = computed(() => Boolean(
   editor.value.course
   && editor.value.subjectId
   && editor.value.title.trim()
+  && editor.value.shortName.trim()
+  && Array.from(editor.value.shortName.trim()).length <= 2
   && editor.value.categories.length
   && editor.value.categories.every((category) => {
     if (!category.title.trim()) return false
@@ -393,7 +395,7 @@ defineExpose({ newRubric, closeEditor, save, duplicateActive: () => duplicateRub
       <div v-else class="rubric-grid">
         <v-card v-for="rubric in filteredRubrics" :key="rubric.id" class="rubric-card" variant="outlined" @click="editRubric(rubric)">
           <v-card-item>
-            <template #prepend><v-avatar color="primary" variant="tonal"><v-icon icon="mdi-table-star" /></v-avatar></template>
+            <template #prepend><v-avatar color="primary" variant="tonal"><strong>{{ rubric.shortName || 'R' }}</strong></v-avatar></template>
             <v-card-title>{{ rubric.title }}</v-card-title>
             <v-card-subtitle>{{ rubric.course }} · {{ rubric.subjectTitle }}</v-card-subtitle>
           </v-card-item>
@@ -423,7 +425,10 @@ defineExpose({ newRubric, closeEditor, save, duplicateActive: () => duplicateRub
       <div class="rubric-definition">
         <v-select :model-value="editor.course" :items="courseOptions" label="Curso" variant="outlined" density="comfortable" hide-details @update:model-value="setCourse" />
         <v-select :model-value="editor.subjectId" :items="availableSubjects" item-title="title" item-value="id" label="Asignatura" variant="outlined" density="comfortable" hide-details :disabled="!editor.course" @update:model-value="setSubject" />
-        <v-text-field v-model="editor.title" label="Título" variant="outlined" density="comfortable" hide-details />
+        <div class="rubric-title-fields">
+          <v-text-field v-model="editor.title" label="Título" variant="outlined" density="comfortable" hide-details />
+          <v-text-field v-model="editor.shortName" label="Nombre corto" maxlength="2" variant="outlined" density="comfortable" hide-details />
+        </div>
       </div>
 
       <div class="rubric-categories">
@@ -550,6 +555,7 @@ defineExpose({ newRubric, closeEditor, save, duplicateActive: () => duplicateRub
 .rubric-card-open { padding-left: 4px; color: #4e729a; font-size: .75rem; font-weight: 750; }
 .rubric-editor { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 20px 0 72px; }
 .rubric-definition { display: grid; grid-template-columns: 170px minmax(220px, 1fr) minmax(300px, 2fr); gap: 12px; padding: 16px; border: 1px solid #d5e0ed; border-radius: 8px; background: #fff; }
+.rubric-title-fields { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 10px; }
 .rubric-categories { display: grid; gap: 14px; margin-top: 14px; }
 .rubric-category { overflow: hidden; border: 1px solid #cfddeb; border-radius: 8px; background: #fff; }
 .rubric-category > header { display: grid; grid-template-columns: auto minmax(220px, 1fr) minmax(210px, 260px) auto auto; align-items: center; gap: 9px; padding: 10px 12px; background: #eaf1f9; }

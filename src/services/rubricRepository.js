@@ -13,7 +13,11 @@ import {
 import { db } from './firebase'
 import lomloeMathLaw from '../data/lomloeMathLaw.json'
 
-export const rubricSchemaVersion = 2
+export const rubricSchemaVersion = 3
+
+function rubricShortName(value, title = '') {
+  return Array.from(String(value || title || '').trim()).slice(0, 2).join('')
+}
 
 function mergeAlignments(alignments = []) {
   const criterionIds = [...new Set(alignments.flatMap((alignment) => alignment?.criterionIds || []))]
@@ -86,6 +90,7 @@ export function emptyRubric(ownerId = '') {
     subjectId: '',
     subjectTitle: '',
     title: '',
+    shortName: '',
     categories: [],
     createdAt: null,
     updatedAt: null,
@@ -100,6 +105,7 @@ export function normalizeRubric(snapshotOrData, explicitId = null) {
     ...emptyRubric(data.ownerId || ''),
     ...data,
     id,
+    shortName: rubricShortName(data.shortName, data.title),
     categories: Array.isArray(data.categories) ? data.categories.map(normalizeCategory) : [],
     createdAt: plainTimestamp(data.createdAt),
     updatedAt: plainTimestamp(data.updatedAt),
@@ -128,6 +134,7 @@ function payloadForRubric(rubric, ownerId) {
     subjectId: String(rubric.subjectId || '').trim(),
     subjectTitle: String(rubric.subjectTitle || '').trim(),
     title: String(rubric.title || '').trim(),
+    shortName: rubricShortName(rubric.shortName),
     normalizedTitle: String(rubric.title || '').trim().toLocaleLowerCase('es-ES'),
     categories,
     sourceRubricId: rubric.sourceRubricId || null,

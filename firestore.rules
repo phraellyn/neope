@@ -52,6 +52,10 @@ service cloud.firestore {
         allow read, write: if ownsGroup(groupId);
         allow read: if isOwnStudentRecord(groupId, code);
       }
+
+      match /programmingDays/{date} {
+        allow read, write: if ownsGroup(groupId);
+      }
     }
 
     // El banco pedagógico es compartido entre profesores invitados. Los alumnos

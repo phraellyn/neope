@@ -1,10 +1,13 @@
 const modelLabels = Object.freeze({
   'google/gemini-3-flash-preview': 'Gemini 3 Flash',
   'google/gemini-3.7-flash': 'Gemini 3.7 Flash',
+  'google/gemini-3.8-flash': 'Gemini 3.8 Flash',
   'openai/gpt-5-mini': 'GPT-5 Mini',
   'openai/gpt-5.6-luna': 'GPT-5.6 Luna',
   'openai/gpt-5.6-terra': 'GPT-5.6 Terra',
   'openai/gpt-5.6-sol': 'GPT-5.6 Sol',
+  'openai/gpt-6-astra': 'GPT-6 Astra',
+  'anthropic/claude-fable-5.1': 'Claude Fable 5.1',
   'moonshotai/kimi-k3': 'Kimi K3',
 })
 

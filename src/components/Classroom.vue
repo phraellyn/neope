@@ -1,12 +1,16 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { loadStudentIdentitiesForGroup } from '../services/localStudentIdentity'
+import { loadProgrammingDay, loadProgrammingDocuments, programmingDocumentDate } from '../services/programmingRepository'
+import { showAppErrorToast } from '../composables/useAppErrorToast'
+import StudentAssessmentDialog from './StudentAssessmentDialog.vue'
 
 const props = defineProps({
   group: { type: Object, required: true },
+  date: { type: String, default: '' },
   configurationMode: { type: Boolean, default: false },
 })
-const emit = defineEmits(['dirty-change', 'validity-change', 'autosave-request'])
+const emit = defineEmits(['dirty-change', 'validity-change', 'autosave-request', 'student-selected'])
 
 const localGroup = ref(JSON.parse(JSON.stringify(props.group)))
 const localIdentities = ref(new Map())
@@ -15,8 +19,16 @@ const layoutDialog = ref(false)
 const layoutDraft = ref({ rows: 4, cols: 5, aisles: [] })
 const roomRef = ref(null)
 const seatSize = ref(96)
+const todayAssessments = ref([])
+const assessmentsLoading = ref(false)
+const selectedAssessmentId = ref(null)
+const assessmentDialog = ref(false)
+const assessmentStudent = ref(null)
 let roomObserver
+let assessmentLoadRequest = 0
 let revision = 0
+
+const ATTENDANCE_MODE_ID = '__attendance__'
 
 const students = computed(() => Array.isArray(localGroup.value.alumnos) ? localGroup.value.alumnos : [])
 const layout = computed(() => ({ rows: 4, cols: 5, aisles: [], ...(localGroup.value.disposicion || {}) }))
@@ -29,6 +41,227 @@ const gridColumnsStyle = computed(() => Array.from({ length: Math.max(1, Number(
   const extra = layout.value.aisles.includes(col) ? aisleWidth : 0
   return `${seatSize.value + extra}px`
 }).join(' '))
+const selectedAssessment = computed(() => todayAssessments.value.find((item) => item.id === selectedAssessmentId.value) || null)
+const attendanceMode = computed(() => selectedAssessmentId.value === ATTENDANCE_MODE_ID)
+const hasAttendanceForSelectedDate = computed(() => Boolean(attendanceRecordForDate()))
+const activeAssessmentResult = computed(() => {
+  const studentId = assessmentStudent.value?.id
+  const itemId = selectedAssessment.value?.id
+  return studentId && itemId ? localGroup.value.evaluaciones?.resultados?.[studentId]?.[itemId] || null : null
+})
+
+function todayIso() {
+  const date = new Date()
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function evaluationItems(nodes = []) {
+  return nodes.flatMap((node) => node?.type === 'group' ? evaluationItems(node.children || []) : (node?.type === 'item' ? [node] : []))
+}
+
+function documentTitle(documentData) {
+  return documentData.campos?.title
+    || documentData.campos?.titulo
+    || documentData.assessment?.shortName
+    || documentData.plantilla?.nombre
+    || 'Documento evaluable'
+}
+
+function pendingRubricItem(instrument, date) {
+  if (!instrument?.gradebookItemId || !instrument?.rubric) return null
+  return {
+    type: 'item',
+    id: instrument.gradebookItemId,
+    nombre: instrument.title || instrument.rubric.title || 'Rúbrica',
+    nombreCorto: instrument.shortName || instrument.rubric.shortName || instrument.title || 'Rúbrica',
+    rubric: instrument.rubric,
+    programming: { date, instrumentId: instrument.id },
+  }
+}
+
+function pendingDocumentItem(documentData, date) {
+  const assessment = documentData?.assessment || {}
+  if (!assessment.evaluable || !assessment.gradebookItemId) return null
+  return {
+    type: 'item',
+    id: assessment.gradebookItemId,
+    nombre: documentTitle(documentData),
+    nombreCorto: assessment.shortName || documentTitle(documentData),
+    programming: { groupId: props.group.id, date },
+    documentAssessment: {
+      documentId: documentData.id,
+      maxPoints: Number(assessment.maxPoints) || 0,
+      exercises: (documentData.ejercicios || [])
+        .filter((entry) => entry?.exerciseId)
+        .map((entry, order) => ({ exerciseId: entry.exerciseId, version: Number(entry.version) || 0, order })),
+    },
+  }
+}
+
+async function loadTodayAssessments() {
+  if (!localGroup.value.id) return
+  const request = ++assessmentLoadRequest
+  assessmentsLoading.value = true
+  try {
+    const date = props.date || todayIso()
+    if (!date) {
+      todayAssessments.value = []
+      selectedAssessmentId.value = null
+      return
+    }
+    const [day, groupDocuments] = await Promise.all([
+      loadProgrammingDay(localGroup.value.id, date),
+      loadProgrammingDocuments(localGroup.value.id),
+    ])
+    const items = evaluationItems(localGroup.value.evaluaciones?.estructura || [])
+    const itemsById = new Map(items.map((item) => [item.id, item]))
+    const candidates = []
+    ;(day?.rubricInstruments || []).forEach((instrument) => {
+      const item = itemsById.get(instrument.gradebookItemId) || pendingRubricItem(instrument, date)
+      if (item) candidates.push(item)
+    })
+    groupDocuments
+      .filter((documentData) => documentData.assessment?.evaluable && programmingDocumentDate(documentData) === date)
+      .forEach((documentData) => {
+        const item = itemsById.get(documentData.assessment?.gradebookItemId) || pendingDocumentItem(documentData, date)
+        if (item) candidates.push(item)
+      })
+    items.forEach((item) => {
+      if (item.programming?.date === date && !candidates.some((candidate) => candidate.id === item.id)) candidates.push(item)
+    })
+    if (request !== assessmentLoadRequest) return
+    todayAssessments.value = candidates.filter((item, index) => (
+      (item.rubric || item.documentAssessment)
+      && candidates.findIndex((candidate) => candidate.id === item.id) === index
+    ))
+    if (selectedAssessmentId.value !== ATTENDANCE_MODE_ID && !todayAssessments.value.some((item) => item.id === selectedAssessmentId.value)) selectedAssessmentId.value = null
+  } catch (error) {
+    if (request !== assessmentLoadRequest) return
+    console.error('No se han podido cargar las tareas del día:', error)
+    showAppErrorToast(error.message || 'No se han podido cargar las tareas evaluables de hoy.')
+  } finally {
+    if (request === assessmentLoadRequest) assessmentsLoading.value = false
+  }
+}
+
+function toggleAssessment(item) {
+  selectedAssessmentId.value = selectedAssessmentId.value === item.id ? null : item.id
+}
+
+function toggleAttendance() {
+  assessmentDialog.value = false
+  assessmentStudent.value = null
+  selectedAssessmentId.value = attendanceMode.value ? null : ATTENDANCE_MODE_ID
+}
+
+function attendanceDate() {
+  return props.date || todayIso()
+}
+
+function attendanceRecordForDate(date = attendanceDate()) {
+  return localGroup.value.attendance?.[date] || null
+}
+
+function ensureAttendanceRecord(date) {
+  localGroup.value.attendance ||= {}
+  localGroup.value.attendance[date] ||= { records: {} }
+  localGroup.value.attendance[date].records ||= {}
+  return localGroup.value.attendance[date]
+}
+
+function attendanceStatus(studentId) {
+  const result = attendanceRecordForDate()?.records?.[studentId] || ''
+  if (result === 'F') return 'absent'
+  if (result === 'FJ') return 'excused-absence'
+  if (result === 'R') return 'late'
+  if (result === 'RJ') return 'excused-late'
+  return 'normal'
+}
+
+function attendanceStyle(studentId) {
+  const colors = {
+    absent: '#d64545',
+    'excused-absence': '#36a66a',
+    late: '#e0b323',
+    'excused-late': '#e58a24',
+    normal: '#aeb7c2',
+  }
+  return { '--attendance-color': colors[attendanceStatus(studentId)] }
+}
+
+function studentCanBeAssessed(studentId) {
+  const status = attendanceStatus(studentId)
+  return Boolean(selectedAssessment.value) && status !== 'absent' && status !== 'excused-absence'
+}
+
+function studentIsInteractive(studentId) {
+  if (props.configurationMode) return false
+  if (attendanceMode.value) return true
+  if (selectedAssessment.value) return studentCanBeAssessed(studentId)
+  return true
+}
+
+function studentHasBeenAssessed(studentId) {
+  const itemId = selectedAssessment.value?.id
+  if (!studentId || !itemId) return false
+  const result = localGroup.value.evaluaciones?.resultados?.[studentId]?.[itemId]
+  return Boolean(result && typeof result === 'object' && result.evaluatedAt)
+}
+
+function cycleAttendance(studentId) {
+  const date = attendanceDate()
+  if (!date || !studentId) return
+  const attendance = ensureAttendanceRecord(date)
+  const current = attendance.records[studentId]
+  if (current === 'F') attendance.records[studentId] = 'FJ'
+  else if (current === 'FJ') attendance.records[studentId] = 'R'
+  else if (current === 'R') attendance.records[studentId] = 'RJ'
+  else if (current === 'RJ') delete attendance.records[studentId]
+  else attendance.records[studentId] = 'F'
+  attendance.updatedAt = new Date().toISOString()
+  markDirty()
+  emit('autosave-request', { includeIdentities: false })
+}
+
+function studentData(id) {
+  return { ...(students.value.find((student) => student.id === id) || { id }), ...(localIdentities.value.get(id) || {}) }
+}
+
+function openStudentAssessment(studentId) {
+  if (props.configurationMode || !studentId) return
+  if (attendanceMode.value) {
+    cycleAttendance(studentId)
+    return
+  }
+  if (!selectedAssessment.value) {
+    emit('student-selected', studentData(studentId))
+    return
+  }
+  if (!studentCanBeAssessed(studentId)) return
+  assessmentStudent.value = studentData(studentId)
+  assessmentDialog.value = true
+}
+
+function saveStudentAssessment(result) {
+  const studentId = assessmentStudent.value?.id
+  const itemId = selectedAssessment.value?.id
+  if (!studentId || !itemId) return
+  localGroup.value.evaluaciones ||= { estructura: [], resultados: {}, pesos: {} }
+  localGroup.value.evaluaciones.estructura ||= []
+  localGroup.value.evaluaciones.resultados ||= {}
+  localGroup.value.evaluaciones.resultados[studentId] ||= {}
+  if (!evaluationItems(localGroup.value.evaluaciones.estructura).some((item) => item.id === itemId)) {
+    localGroup.value.evaluaciones.estructura.push(JSON.parse(JSON.stringify(selectedAssessment.value)))
+  }
+  const savedAt = new Date().toISOString()
+  localGroup.value.evaluaciones.resultados[studentId][itemId] = {
+    ...result,
+    evaluatedAt: savedAt,
+    updatedAt: savedAt,
+  }
+  markDirty()
+  emit('autosave-request', { includeIdentities: false })
+}
 
 function fitRoom() {
   const room = roomRef.value
@@ -112,13 +345,16 @@ function markSaved(savedRevision = revision) { if (savedRevision === revision) e
 watch(() => props.group, async (value) => {
   localGroup.value = JSON.parse(JSON.stringify(value))
   await loadLocalIdentities()
+  await loadTodayAssessments()
 }, { deep: true })
+watch(() => props.date, () => { void loadTodayAssessments() })
 watch(layout, () => requestAnimationFrame(fitRoom), { deep: true })
 onMounted(() => {
   roomObserver = new ResizeObserver(fitRoom)
   if (roomRef.value) roomObserver.observe(roomRef.value)
   requestAnimationFrame(fitRoom)
   void loadLocalIdentities()
+  void loadTodayAssessments()
 })
 onBeforeUnmount(() => roomObserver?.disconnect())
 defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
@@ -126,6 +362,33 @@ defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
 
 <template>
   <div class="classroom-view" :class="{ 'configuration-mode': configurationMode }">
+    <div v-if="!configurationMode" class="classroom-assessment-tools" aria-label="Asistencia y tareas evaluables del día">
+      <v-tooltip text="Pasar lista" location="bottom">
+        <template #activator="{ props: tooltipProps }">
+          <button
+            v-bind="tooltipProps"
+            type="button"
+            class="classroom-assessment-button classroom-attendance-button"
+            :class="{ selected: attendanceMode }"
+            :aria-pressed="attendanceMode"
+            aria-label="Pasar lista"
+            @click="toggleAttendance"
+          ><v-icon icon="mdi-account-check-outline" size="21" /></button>
+        </template>
+      </v-tooltip>
+      <v-tooltip v-for="item in todayAssessments" :key="item.id" :text="item.nombre" location="bottom">
+        <template #activator="{ props: tooltipProps }">
+          <button
+            v-bind="tooltipProps"
+            type="button"
+            class="classroom-assessment-button"
+            :class="{ selected: selectedAssessmentId === item.id }"
+            :aria-pressed="selectedAssessmentId === item.id"
+            @click="toggleAssessment(item)"
+          >{{ item.nombreCorto || item.nombre }}</button>
+        </template>
+      </v-tooltip>
+    </div>
     <div class="classroom-workspace">
       <section ref="roomRef" class="classroom-room" aria-label="Disposición del aula">
         <div class="classroom-grid" :style="{ '--classroom-cols': layout.cols, '--classroom-rows': layout.rows, '--classroom-seat-size': `${seatSize}px`, gridTemplateColumns: gridColumnsStyle }">
@@ -137,9 +400,25 @@ defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
             @dragover.prevent
             @drop.prevent="onDrop(index)"
           >
-            <div v-if="studentId" class="classroom-student" :class="{ 'classroom-student-with-photo': studentPhoto(studentId) }" draggable="true" @dragstart="dragSource = studentId" @dragend="dragSource = null">
+            <div
+              v-if="studentId"
+              class="classroom-student"
+              :class="{
+                'classroom-student-with-photo': studentPhoto(studentId),
+                'classroom-student-assessable': studentIsInteractive(studentId),
+                'classroom-student-attendance': !configurationMode && hasAttendanceForSelectedDate,
+              }"
+              :style="!configurationMode && hasAttendanceForSelectedDate ? attendanceStyle(studentId) : undefined"
+              :draggable="configurationMode"
+              @dragstart="dragSource = studentId"
+              @dragend="dragSource = null"
+              @click="openStudentAssessment(studentId)"
+            >
               <img v-if="studentPhoto(studentId)" :src="studentPhoto(studentId)" :alt="studentLabel(studentId)">
-              <span :style="studentFlagStyle(studentId)">{{ studentLabel(studentId) }}</span>
+              <span :style="studentFlagStyle(studentId)">
+                <i v-if="!configurationMode && studentHasBeenAssessed(studentId)" class="classroom-assessment-complete" aria-label="Evaluado" />
+                {{ studentLabel(studentId) }}
+              </span>
             </div>
             <span v-else-if="configurationMode" class="classroom-seat-empty">Pupitre {{ index + 1 }}</span>
           </div>
@@ -148,9 +427,22 @@ defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
       <aside v-if="configurationMode || wellStudents.length" class="classroom-well" aria-label="Alumnos sin pupitre" @dragover.prevent @drop.prevent="onDropWell">
         <div class="classroom-well-title">Sin asignar <span>{{ wellStudents.length }}</span></div>
         <div class="classroom-well-stack">
-          <div v-for="student in wellStudents" :key="student.id" class="classroom-student classroom-student-well" draggable="true" @dragstart="dragSource = student.id" @dragend="dragSource = null">
+          <div
+            v-for="student in wellStudents"
+            :key="student.id"
+            class="classroom-student classroom-student-well"
+            :class="{ 'classroom-student-assessable': studentIsInteractive(student.id), 'classroom-student-attendance': !configurationMode && hasAttendanceForSelectedDate }"
+            :style="!configurationMode && hasAttendanceForSelectedDate ? attendanceStyle(student.id) : undefined"
+            :draggable="configurationMode"
+            @dragstart="dragSource = student.id"
+            @dragend="dragSource = null"
+            @click="openStudentAssessment(student.id)"
+          >
             <img v-if="studentPhoto(student.id)" :src="studentPhoto(student.id)" :alt="studentLabel(student.id)">
-            <span>{{ studentLabel(student.id) }}</span>
+            <span>
+              <i v-if="!configurationMode && studentHasBeenAssessed(student.id)" class="classroom-assessment-complete" aria-label="Evaluado" />
+              {{ studentLabel(student.id) }}
+            </span>
           </div>
           <div v-if="!wellStudents.length" class="classroom-well-empty">Todos tienen pupitre</div>
         </div>
@@ -171,5 +463,13 @@ defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
         <v-card-actions><v-spacer /><v-btn variant="text" @click="layoutDialog = false">Cancelar</v-btn><v-btn color="primary" variant="flat" @click="applyLayout">Aplicar</v-btn></v-card-actions>
       </v-card>
     </v-dialog>
+
+    <StudentAssessmentDialog
+      v-model="assessmentDialog"
+      :item="selectedAssessment"
+      :student="assessmentStudent"
+      :result="activeAssessmentResult"
+      @save="saveStudentAssessment"
+    />
   </div>
 </template>

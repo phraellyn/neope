@@ -68,6 +68,7 @@ const documentDeleteTarget = ref(null)
 const isDeletingDocument = ref(false)
 const selectedDocumentId = ref(null)
 const createdAt = ref(null)
+const creationContext = ref(null)
 const selectedTemplateKey = ref('')
 const selectedTemplateKeys = ref([])
 const selectedPreviewTemplateKey = ref('')
@@ -259,7 +260,8 @@ const selectedGroupOption = computed(() => {
   const groupField = unifiedFields.value.find((field) => field.type === 'group' || field.type === 'course' || field.key === 'course')
   return groupOptions.value.find((group) => group.value === fieldValues[groupField?.key]) || null
 })
-const assessmentGroupOption = computed(() => groupOptions.value.find((group) => group.id === documentAssessment.groupId) || null)
+const effectiveAssessmentGroupId = computed(() => selectedGroupOption.value?.id || documentAssessment.groupId || null)
+const assessmentGroupOption = computed(() => groupOptions.value.find((group) => group.id === effectiveAssessmentGroupId.value) || null)
 
 function summaryFieldValue(values, aliases) {
   const entries = Object.entries(values || {})
@@ -355,7 +357,7 @@ const documentTools = computed(() => {
     .sort((left, right) => ({ obligatorios: 0, optativos: 1, 'salto-pagina': 2 }[left.id] ?? 3) - ({ obligatorios: 0, optativos: 1, 'salto-pagina': 2 }[right.id] ?? 3))
 })
 const assessmentFieldsComplete = computed(() => !documentAssessment.evaluable
-  || Boolean(documentAssessment.groupId && documentAssessment.shortName.trim()))
+  || Boolean(effectiveAssessmentGroupId.value && documentAssessment.shortName.trim()))
 const requiredFieldsComplete = computed(() => Boolean(selectedTemplate.value)
   && selectedTemplates.value.length > 0
   && unifiedFields.value.every((field) => String(fieldValues[field.key] || '').trim())
@@ -1111,6 +1113,24 @@ function resetFields() {
   unifiedFields.value.forEach((field) => { fieldValues[field.key] = '' })
 }
 
+function applyCreationContext() {
+  const context = creationContext.value
+  if (!context) return
+  const group = groupOptions.value.find((option) => option.id === context.groupId)
+  if (!group) return
+  unifiedFields.value.forEach((field) => {
+    if (field.type === 'group' || field.type === 'course' || field.key === 'course') fieldValues[field.key] = group.value
+    if (field.type === 'subject' || field.key === 'subject') fieldValues[field.key] = group.subject
+    if ((field.type === 'date' || field.key === 'date') && context.date) fieldValues[field.key] = context.date
+  })
+  documentCurriculum.value = {
+    ...emptyCurriculum(),
+    course: group.course || null,
+    subjectId: group.subjectId || null,
+  }
+  documentAssessment.groupId = group.id
+}
+
 function ensureFields() {
   unifiedFields.value.forEach((field) => {
     if (fieldValues[field.key] === undefined) fieldValues[field.key] = ''
@@ -1130,6 +1150,7 @@ function selectTemplate(template) {
   if (hadTemplates) ensureFields()
   else resetFields()
   documentCurriculum.value = emptyCurriculum()
+  applyCreationContext()
   exerciseQueue.value = []
   optionalRequiredCount.value = 1
   Object.keys(selectedVersions).forEach((key) => delete selectedVersions[key])
@@ -1231,6 +1252,7 @@ function onFieldInput(field = null) {
   if (field && (field.type === 'group' || field.type === 'course' || field.key === 'course')) {
     const group = groupOptions.value.find((option) => option.value === fieldValues[field.key])
     if (group) {
+      if (documentAssessment.evaluable) documentAssessment.groupId = group.id
       unifiedFields.value
         .filter((candidate) => candidate.type === 'subject' || candidate.key === 'subject')
         .forEach((subjectField) => { fieldValues[subjectField.key] = group.subject })
@@ -1243,7 +1265,7 @@ function onFieldInput(field = null) {
 function toggleEvaluable() {
   documentAssessment.evaluable = !documentAssessment.evaluable
   if (documentAssessment.evaluable) {
-    documentAssessment.groupId ||= selectedGroupOption.value?.id || null
+    documentAssessment.groupId = selectedGroupOption.value?.id || documentAssessment.groupId || null
     documentAssessment.shortName ||= summaryFieldValue(fieldValues, ['title', 'titulo'])
   }
 }
@@ -1257,6 +1279,7 @@ function resetDocumentAssessment() {
 
 function resetWorkflow() {
   selectedDocumentId.value = null
+  creationContext.value = null
   createdAt.value = null
   selectedTemplateKey.value = ''
   selectedTemplateKeys.value = []
@@ -1284,6 +1307,12 @@ function resetWorkflow() {
 
 function newDocument() {
   resetWorkflow()
+  mode.value = 'editor'
+}
+
+function newDocumentWithContext(context) {
+  resetWorkflow()
+  creationContext.value = { ...context }
   mode.value = 'editor'
 }
 
@@ -1743,6 +1772,13 @@ function documentAssessmentPoints() {
     .reduce((total, item) => total + (Number(queueMetrics(item).puntuacion) || 0), 0)
 }
 
+function documentProgrammingContext() {
+  const dateField = unifiedFields.value.find((field) => field.type === 'date' || field.key === 'date')
+  const date = dateInputValue(fieldValues[dateField?.key] || creationContext.value?.date)
+  const groupId = selectedGroupOption.value?.id || creationContext.value?.groupId || null
+  return groupId && date ? { groupId, date } : null
+}
+
 function documentAssessmentItem(documentId) {
   if (!documentAssessment.evaluable) return null
   const shortName = documentAssessment.shortName.trim()
@@ -1754,6 +1790,7 @@ function documentAssessmentItem(documentId) {
       || `documento-${documentId}-${Date.now()}`,
     nombre: fullName,
     nombreCorto: shortName,
+    programming: documentProgrammingContext(),
     documentAssessment: {
       documentId,
       maxPoints: documentAssessmentPoints(),
@@ -1802,6 +1839,7 @@ async function saveDocument() {
         name: selectedGroupOption.value.title,
         studentCount: selectedGroupOption.value.studentCount,
       } : null,
+      programming: documentProgrammingContext(),
       curriculum: {
         course: documentCurriculum.value.course || null,
         subjectId: documentCurriculum.value.subjectId || null,
@@ -1810,7 +1848,7 @@ async function saveDocument() {
       },
       assessment: {
         evaluable: Boolean(documentAssessment.evaluable),
-        groupId: documentAssessment.evaluable ? documentAssessment.groupId : null,
+        groupId: documentAssessment.evaluable ? effectiveAssessmentGroupId.value : null,
         groupName: documentAssessment.evaluable ? assessmentGroupOption.value?.title || '' : '',
         shortName: documentAssessment.evaluable ? documentAssessment.shortName.trim() : '',
         gradebookItemId: assessmentItem?.id || null,
@@ -1866,6 +1904,7 @@ onBeforeUnmount(revokePreview)
 
 defineExpose({
   newDocument,
+  newDocumentWithContext,
   backToLibrary,
   previous: previousStep,
   next: nextStep,
@@ -2111,6 +2150,7 @@ defineExpose({
                 </button>
                 <template v-if="documentAssessment.evaluable">
                   <v-select
+                    v-if="!selectedGroupOption"
                     v-model="documentAssessment.groupId"
                     :items="groupOptions"
                     item-title="title"

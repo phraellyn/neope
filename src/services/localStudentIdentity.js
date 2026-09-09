@@ -334,6 +334,10 @@ async function deleteStudentIdentityRecordsEverywhere(studentIds) {
   }
 }
 
+export async function deleteStudentIdentitiesEverywhere(studentIds) {
+  await deleteStudentIdentityRecordsEverywhere(Array.isArray(studentIds) ? studentIds : [])
+}
+
 export async function loadStudentIdentitiesForGroup(group) {
   const groupIds = studentIdentityGroupIds(group)
   if (!groupIds.length) return new Map()

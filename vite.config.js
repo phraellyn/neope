@@ -6,7 +6,10 @@ export default defineConfig({
   server: {
     proxy: {
       '/compiler-api': {
-        target: 'http://51.170.57.25:5000',
+        // En redes institucionales se bloquean las conexiones HTTP directas
+        // a la IP del compilador. La Function HTTPS hace de proxy seguro.
+        target: process.env.VITE_COMPILER_PROXY_TARGET
+          || 'https://europe-west1-neope-9e229.cloudfunctions.net/compilerProxy',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/compiler-api/, ''),
       },

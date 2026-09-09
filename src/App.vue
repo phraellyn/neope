@@ -38,6 +38,7 @@ import MathConceptMap from './components/MathConceptMap.vue'
 import DocumentCreator from './components/DocumentCreator.vue'
 import Gradebook from './components/Gradebook.vue'
 import Classroom from './components/Classroom.vue'
+import GroupProgramming from './components/GroupProgramming.vue'
 import StudentDetail from './components/StudentDetail.vue'
 import AppErrorToast from './components/AppErrorToast.vue'
 import AuthGateway from './components/AuthGateway.vue'
@@ -45,19 +46,22 @@ import InvitationManager from './components/InvitationManager.vue'
 import LocalStudentDataTransfer from './components/LocalStudentDataTransfer.vue'
 import StudentPortal from './components/StudentPortal.vue'
 import RubricManager from './components/RubricManager.vue'
+import { programmingDatesForGroup } from './services/programmingRepository'
 import { mathSubjects, normalizeHierarchySelection } from './data/mathCurriculum'
-import { saveStudentIdentities } from './services/localStudentIdentity'
+import { deleteStudentIdentitiesEverywhere, saveStudentIdentities } from './services/localStudentIdentity'
 import { normalizeDisplayMathDelimiters } from './utils/latexNormalization'
 import { showAppErrorToast } from './composables/useAppErrorToast'
 import {
   currentAcademicYear,
   loadGroupsForTeacher,
   loadNonTeachingSchedule,
+  loadScheduleTimePoints,
   loadStudentsForGroup,
   migrateLegacyGroups,
   saveGroup,
   saveGroupMetadata,
   saveNonTeachingSchedule,
+  saveScheduleTimePoints,
 } from './services/groupRepository'
 import {
   aggregateExerciseStructure,
@@ -115,6 +119,8 @@ const courseCalendarDialog = ref(false)
 const selectedSlot = ref(null)
 const selectedCourseCalendarDate = ref('')
 const scheduleBlocks = ref([])
+const defaultScheduleTimePoints = Object.freeze(['08:15', '09:10', '10:05', '11:00', '11:20', '12:15', '13:10', '14:05', '15:00'])
+const scheduleTimePoints = ref([...defaultScheduleTimePoints])
 const schoolCalendar = ref({ types: [], days: {} })
 const teacherGroups = ref([])
 const selectedCareerGroupId = ref(null)
@@ -125,11 +131,11 @@ const gradebookValid = ref(true)
 const isSavingGradebook = ref(false)
 const gradebookConfigurationMode = ref(false)
 const groupView = ref('evaluation')
+const classroomDate = ref('')
 const selectedStudentDetail = ref(null)
 const studentDetailConfigurationMode = ref(false)
 const scheduleForm = ref(emptyScheduleForm())
 const scheduleClipboard = ref(null)
-const selectedCourseCalendarPreset = ref(null)
 const courseCalendarForm = ref(emptyCourseCalendarForm())
 const isSavingSchedule = ref(false)
 const firestoreError = ref('')
@@ -172,10 +178,13 @@ const pendingDeletedAttachments = []
 const aiModelOptions = Object.freeze([
   { title: 'Gemini 3 Flash', value: 'google/gemini-3-flash-preview', subtitle: 'Predeterminado · rápido y fiable' },
   { title: 'Gemini 3.7 Flash', value: 'google/gemini-3.7-flash', subtitle: 'Nueva generación · rápido y preciso' },
+  { title: 'Gemini 3.8 Flash', value: 'google/gemini-3.8-flash', subtitle: 'Nueva generación · rápido y preciso' },
   { title: 'GPT-5 Mini', value: 'openai/gpt-5-mini', subtitle: 'Equilibrio entre coste y calidad' },
   { title: 'GPT-5.6 Luna', value: 'openai/gpt-5.6-luna', subtitle: 'Premium · rápida y estructurada' },
   { title: 'GPT-5.6 Terra', value: 'openai/gpt-5.6-terra', subtitle: 'Premium · razonamiento equilibrado' },
   { title: 'GPT-5.6 Sol', value: 'openai/gpt-5.6-sol', subtitle: 'Premium · máxima capacidad' },
+  { title: 'GPT-6 Astra', value: 'openai/gpt-6-astra', subtitle: 'Premium · máxima capacidad' },
+  { title: 'Claude Fable 5.1', value: 'anthropic/claude-fable-5.1', subtitle: 'Premium · razonamiento y redacción' },
   { title: 'Kimi K3', value: 'moonshotai/kimi-k3', subtitle: 'Premium · razonamiento de contexto largo' },
 ])
 const selectedAiModel = ref('google/gemini-3-flash-preview')
@@ -219,6 +228,7 @@ const exerciseCompilationStatus = ref('ready')
 let stopExerciseCompilationWatch = null
 const exerciseCompilationListWatches = new Map()
 const documentCreatorRef = ref(null)
+const programmingRef = ref(null)
 const isCompilingDocument = ref(false)
 const documentSearchQuery = ref('')
 const documentsTab = ref('documents')
@@ -253,16 +263,11 @@ const calendarTitle = computed(() => {
   const months = [...new Set(weekDays.value.map((date) => new Intl.DateTimeFormat('es-ES', { month: 'long' }).format(date)))]
   return months.map((month) => month.charAt(0).toUpperCase() + month.slice(1)).join(' / ')
 })
-const scheduleModules = [
-  { start: '08:15', end: '09:10', minutes: 55 },
-  { start: '09:10', end: '10:05', minutes: 55 },
-  { start: '10:05', end: '11:00', minutes: 55 },
-  { start: '11:00', end: '11:20', minutes: 20, break: true },
-  { start: '11:20', end: '12:15', minutes: 55 },
-  { start: '12:15', end: '13:10', minutes: 55 },
-  { start: '13:10', end: '14:05', minutes: 55 },
-  { start: '14:05', end: '15:00', minutes: 55 },
-]
+const scheduleModules = computed(() => scheduleTimePoints.value.slice(0, -1).map((start, index) => {
+  const end = scheduleTimePoints.value[index + 1]
+  const minutes = timeToMinutes(end) - timeToMinutes(start)
+  return { start, end, minutes, break: minutes <= 25 }
+}))
 function getMonthDays(date) {
   const year = date.getFullYear()
   const month = date.getMonth()
@@ -353,12 +358,31 @@ const filteredScheduleSubjectOptions = computed(() => {
     .filter((option) => option.course === course)
     .map((option) => ({ ...option, title: option.subject }))
 })
+const scheduleAssignmentOptions = computed(() => scheduleForm.value.course.trim()
+  ? [
+      ...filteredScheduleSubjectOptions.value,
+      ...scheduleTutorOptions.map((option) => ({
+        ...option,
+        value: option.value,
+        subject: option.title,
+        isTutor: true,
+      })),
+    ]
+  : [])
+const scheduleAssignmentValue = computed({
+  get: () => scheduleForm.value.tutorType || scheduleForm.value.subjectId,
+  set: (value) => selectScheduleAssignment(value),
+})
 const scheduleSegmentTypeOptions = Object.freeze([
   { title: 'Actividad complementaria', value: 'actividad-complementaria', color: '#2F6F4E' },
   { title: 'Guardia', value: 'guardia', color: '#B85C1E' },
   { title: 'Apoyo a Guardia', value: 'apoyo-guardia', color: '#806A00' },
   { title: 'Reunión de Departamento', value: 'reunion-departamento', color: '#315F94' },
   { title: 'Reunión de Tutores', value: 'reunion-tutores', color: '#674C8F' },
+])
+const scheduleTutorOptions = Object.freeze([
+  { title: 'Tutoría Individual', value: 'tutoria-individual' },
+  { title: 'Tutoría con grupo', value: 'tutoria-grupo' },
 ])
 const canSaveScheduleBlock = computed(() => (
   scheduleForm.value.course.trim()
@@ -378,34 +402,55 @@ const scheduleSubjectColors = Object.freeze({
   '2bto-matematicas-ii': '#557FB4',
   '2bto-matematicas-ccss-ii': '#416C9F',
 })
-const schoolCalendarColorOptions = [
-  { title: 'Día libre', value: '#BFE88D' },
-  { title: 'Vacaciones', value: '#BFE88D' },
-  { title: 'No lectivo', value: '#F2A36F' },
-  { title: 'Evaluación', value: '#D7B4E3' },
-  { title: 'Festivo', value: '#FFF0A8' },
-]
+const courseCalendarEventOptions = Object.freeze([
+  { title: 'Inicio de curso', value: 'inicio-curso', color: '#D8E5F7', requiresCourses: true, lectivo: true },
+  { title: 'Fin de curso', value: 'fin-curso', color: '#315F94', requiresCourses: true, lectivo: true },
+  { title: 'Evaluación', value: 'evaluacion', color: '#4B74A8', requiresCourses: true, lectivo: true },
+  { title: 'Examen', value: 'examen', color: '#D8E5F7', requiresCourses: true, lectivo: true },
+  { title: 'Salida', value: 'salida', color: '#F2D56B', requiresCourses: true, lectivo: true },
+  { title: 'Claustro', value: 'claustro', color: '#956F55', requiresCourses: false, lectivo: true },
+  { title: 'Festivo', value: 'festivo', color: '#BFE88D', requiresCourses: false, lectivo: false },
+  { title: 'Libre disposición', value: 'libre-disposicion', color: '#F2A36F', requiresCourses: false, lectivo: false },
+  { title: 'Baja', value: 'baja', color: '#D96868', requiresCourses: false, lectivo: false },
+  { title: 'Servicio especial', value: 'servicio-especial', color: '#8065A8', requiresCourses: false, lectivo: true },
+])
 
 const academicCalendarYear = computed(() => {
   const first = academicMonths.value[0]
   return `${first.getFullYear()}-${first.getFullYear() + 1}`
 })
-const academicCalendarCourseOptions = computed(() => teacherGroups.value
-  .filter((group) => group.asignatura)
+const academicCalendarCourseOptions = computed(() => groups.value
   .map((group) => ({
-    title: [group.nombre, group.asignatura].filter(Boolean).join(' · '),
+    title: [group.title, group.subtitle].filter(Boolean).join(' · '),
+    groupName: group.title,
     value: group.id,
-  }))
-  .filter((item, index, items) => items.findIndex((candidate) => candidate.value === item.value) === index))
-const courseCalendarPresets = computed(() => schoolCalendar.value.types || [])
+  })))
+const selectedCourseCalendarEvent = computed(() => courseCalendarEventOptions.find((event) => event.value === courseCalendarForm.value.eventKey) || null)
+const canSaveCourseCalendarDay = computed(() => Boolean(
+  selectedCourseCalendarEvent.value
+  && (!selectedCourseCalendarEvent.value.requiresCourses || courseCalendarForm.value.cursos.length > 0),
+))
+const selectedCourseCalendarDateLabel = computed(() => {
+  const [year, month, day] = String(selectedCourseCalendarDate.value || '').split('-').map(Number)
+  if (!year || !month || !day) return 'Configurar día'
+  const label = new Intl.DateTimeFormat('es-ES', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date(year, month - 1, day))
+  return `Configurar ${label}`
+})
 
 function emptyCourseCalendarForm() {
-  return { typeId: null, color: '#E7F5C9', lectivo: true, mensaje: '', cursos: [] }
+  return { typeId: null, eventKey: null, color: '', lectivo: true, mensaje: '', cursos: [] }
 }
 
 function normalizeSchoolCalendar(value) {
   const types = Array.isArray(value?.types) ? value.types.map((type) => ({
     id: type.id || createGroupId(),
+    eventKey: String(type.eventKey || ''),
+    title: String(type.title || ''),
     color: type.color || '#E7F5C9',
     lectivo: type.lectivo !== false,
     mensaje: String(type.mensaje || ''),
@@ -436,7 +481,7 @@ function schoolCalendarEntryForDate(date) {
 
 function schoolCalendarWeekendEntry(date) {
   return date && (date.getDay() === 0 || date.getDay() === 6)
-    ? { color: '#BFE88D', lectivo: false, mensaje: '', cursos: [] }
+    ? { eventKey: 'festivo', title: 'Festivo', color: '#BFE88D', lectivo: false, mensaje: '', cursos: [] }
     : null
 }
 
@@ -449,10 +494,64 @@ function calendarTypeCourses(entry) {
   return entry.cursos.map((id) => academicCalendarCourseOptions.value.find((course) => course.value === id)?.title || id).join(', ')
 }
 
+function courseCalendarEvent(entry) {
+  return courseCalendarEventOptions.find((event) => event.value === entry?.eventKey) || null
+}
+
+function courseCalendarEntryTitle(entry) {
+  return courseCalendarEvent(entry)?.title || entry?.title || 'Evento'
+}
+
+function courseCalendarTooltipLines(entry) {
+  if (!entry) return []
+  const title = courseCalendarEntryTitle(entry)
+  const courseLines = (entry.cursos || []).map((id) => {
+    const course = academicCalendarCourseOptions.value.find((option) => option.value === id)
+    return `${title} ${course?.groupName || course?.title || id}`
+  })
+  return [
+    ...(courseLines.length ? courseLines : [title]),
+    ...(entry.mensaje ? [entry.mensaje] : []),
+  ]
+}
+
+function calendarEntryColor(entry) {
+  return courseCalendarEvent(entry)?.color || entry?.color || '#E7F5C9'
+}
+
+function readableTextColor(backgroundColor) {
+  const hex = String(backgroundColor || '').trim().replace('#', '')
+  const normalized = hex.length === 3 ? hex.split('').map((character) => character + character).join('') : hex
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return '#173452'
+  const channels = [0, 2, 4].map((offset) => {
+    const value = Number.parseInt(normalized.slice(offset, offset + 2), 16) / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  })
+  const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+  const darkForegroundLuminance = 0.00655
+  const contrastWithWhite = 1.05 / (luminance + 0.05)
+  const contrastWithDark = (luminance + 0.05) / (darkForegroundLuminance + 0.05)
+  return contrastWithWhite >= contrastWithDark ? '#FFFFFF' : '#071421'
+}
+
+function courseCalendarTooltipStyle(entry) {
+  const backgroundColor = calendarEntryColor(entry)
+  return {
+    '--school-calendar-tooltip-background': backgroundColor,
+    '--school-calendar-tooltip-foreground': readableTextColor(backgroundColor),
+  }
+}
+
 function academicCalendarDayStyle(month, day) {
   if (!day) return undefined
   const entry = displayedSchoolCalendarEntry(new Date(month.getFullYear(), month.getMonth(), day))
-  return entry ? { backgroundColor: entry.color, '--academic-day-color': entry.color } : undefined
+  if (!entry) return undefined
+  const backgroundColor = calendarEntryColor(entry)
+  return {
+    backgroundColor,
+    color: readableTextColor(backgroundColor),
+    '--academic-day-color': backgroundColor,
+  }
 }
 
 function openCourseCalendarDialog(month, day) {
@@ -462,37 +561,50 @@ function openCourseCalendarDialog(month, day) {
   const key = academicCalendarKey(month, day)
   const entry = academicCalendarEntry(month, day)
   selectedCourseCalendarDate.value = key
-  selectedCourseCalendarPreset.value = null
   courseCalendarForm.value = entry ? { ...entry, cursos: [...(entry.cursos || [])] } : emptyCourseCalendarForm()
   courseCalendarDialog.value = true
 }
 
-function applyCourseCalendarPreset(preset) {
-  if (!preset) return
+function selectCourseCalendarEvent(eventKey) {
+  const event = courseCalendarEventOptions.find((option) => option.value === eventKey)
+  if (!event) return
   courseCalendarForm.value = {
-    ...preset,
-    typeId: preset.id,
-    cursos: [...(preset.cursos || [])],
+    ...courseCalendarForm.value,
+    eventKey: event.value,
+    title: event.title,
+    color: event.color,
+    lectivo: event.lectivo,
+    cursos: event.requiresCourses ? courseCalendarForm.value.cursos : [],
   }
 }
 
 async function saveCourseCalendarDay() {
-  if (!selectedCourseCalendarDate.value || !courseCalendarForm.value.color) return
+  if (!selectedCourseCalendarDate.value || !canSaveCourseCalendarDay.value) return
   const form = courseCalendarForm.value
-  const typeId = form.typeId || createGroupId()
+  const event = selectedCourseCalendarEvent.value
+  const previousTypeId = schoolCalendar.value.days?.[selectedCourseCalendarDate.value]
+  const typeId = createGroupId()
   const type = {
     id: typeId,
-    color: form.color,
-    lectivo: form.lectivo !== false,
+    eventKey: event.value,
+    title: event.title,
+    color: event.color,
+    lectivo: event.lectivo,
     mensaje: String(form.mensaje || '').trim(),
-    cursos: [...new Set(form.cursos || [])],
+    cursos: event.requiresCourses ? [...new Set(form.cursos || [])] : [],
   }
   const previous = schoolCalendar.value
-  const types = [...(previous.types || []).filter((item) => item.id !== typeId), type]
   const days = { ...(previous.days || {}), [selectedCourseCalendarDate.value]: typeId }
+  const stillUsedTypeIds = new Set(Object.values(days))
+  const types = [
+    ...(previous.types || []).filter((item) => item.id !== previousTypeId || stillUsedTypeIds.has(item.id)),
+    type,
+  ]
   schoolCalendar.value = { types, days }
   try {
-    await setDoc(teacherDocument.value, { calendariosEscolares: { [academicCalendarYear.value]: schoolCalendar.value } }, { merge: true })
+    await updateDoc(teacherDocument.value, {
+      [`calendariosEscolares.${academicCalendarYear.value}`]: schoolCalendar.value,
+    })
     courseCalendarDialog.value = false
   } catch (error) {
     schoolCalendar.value = previous
@@ -505,10 +617,15 @@ async function clearCourseCalendarDay() {
   if (!selectedCourseCalendarDate.value) return
   const previous = schoolCalendar.value
   const days = { ...(previous.days || {}) }
+  const removedTypeId = days[selectedCourseCalendarDate.value]
   delete days[selectedCourseCalendarDate.value]
-  schoolCalendar.value = { ...previous, days }
+  const usedTypeIds = new Set(Object.values(days))
+  const types = (previous.types || []).filter((type) => type.id !== removedTypeId || usedTypeIds.has(type.id))
+  schoolCalendar.value = { types, days }
   try {
-    await setDoc(teacherDocument.value, { calendariosEscolares: { [academicCalendarYear.value]: schoolCalendar.value } }, { merge: true })
+    await updateDoc(teacherDocument.value, {
+      [`calendariosEscolares.${academicCalendarYear.value}`]: schoolCalendar.value,
+    })
     courseCalendarDialog.value = false
   } catch (error) {
     schoolCalendar.value = previous
@@ -518,7 +635,7 @@ async function clearCourseCalendarDay() {
 }
 
 function emptyScheduleForm() {
-  return { id: null, type: 'nonTeaching', nonTeachingKind: null, groupId: null, course: '', subjectId: null, subject: '', classroom: '', color: null }
+  return { id: null, type: 'nonTeaching', nonTeachingKind: null, tutorType: null, groupId: null, course: '', subjectId: null, subject: '', classroom: '', color: null }
 }
 
 function scheduleSubjectId(course, subject) {
@@ -554,8 +671,25 @@ function selectScheduleSubject(subjectId) {
   scheduleForm.value.subjectId = selectedSubject?.id || null
   scheduleForm.value.subject = selectedSubject?.title || ''
   scheduleForm.value.type = selectedSubject ? 'teaching' : 'nonTeaching'
+  if (!selectedSubject) scheduleForm.value.tutorType = null
   scheduleForm.value.nonTeachingKind = selectedSubject ? null : scheduleForm.value.nonTeachingKind
   scheduleForm.value.color = scheduleColorFor(scheduleForm.value)
+}
+
+function selectScheduleAssignment(value) {
+  const tutorOption = scheduleTutorOptions.find((option) => option.value === value)
+  if (tutorOption) {
+    const subjectId = scheduleForm.value.subjectId || filteredScheduleSubjectOptions.value[0]?.value || null
+    const subject = mathSubjectsById.get(subjectId)
+    scheduleForm.value.subjectId = subjectId
+    scheduleForm.value.subject = subject?.title || ''
+    scheduleForm.value.tutorType = tutorOption.value
+    scheduleForm.value.type = 'teaching'
+    scheduleForm.value.color = scheduleColorFor(scheduleForm.value)
+    return
+  }
+  scheduleForm.value.tutorType = null
+  selectScheduleSubject(value)
 }
 
 function scheduleSegmentType(valueOrTitle) {
@@ -573,7 +707,15 @@ function selectScheduleSegmentType(segmentType) {
 }
 
 function scheduleColorFor(block = {}) {
-  if (block.subjectId && scheduleSubjectColors[block.subjectId]) return scheduleSubjectColors[block.subjectId]
+  if (block.subjectId && scheduleSubjectColors[block.subjectId]) {
+    const base = scheduleSubjectColors[block.subjectId]
+    if (block.tutorType) {
+      const hex = base.replace('#', '')
+      const channels = [0, 2, 4].map((offset) => Math.round(Number.parseInt(hex.slice(offset, offset + 2), 16) * 0.48))
+      return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+    }
+    return base
+  }
   return scheduleSegmentType(block.nonTeachingKind)?.color
     || scheduleSegmentType(block.course)?.color
     || '#536273'
@@ -1181,7 +1323,36 @@ function preambleFileName(name) {
 }
 
 function templateCodeForCompiler(code = '') {
-  return code
+  return typeof code === 'string' ? code : String(code ?? '')
+}
+
+function templateCompilerFileName(template = {}) {
+  const explicit = String(template.archivo || '').trim()
+  const fallback = preambleFileName(template.nombre || 'plantilla')
+  const name = explicit || fallback
+  return /\.tex$/i.test(name) ? name : `${name}.tex`
+}
+
+async function syncTemplateWithCompiler(template, { retries = 1 } = {}) {
+  const name = templateCompilerFileName(template)
+  const content = templateCodeForCompiler(template.codigo)
+  if (!content.trim()) throw new Error(`La plantilla «${template.nombre || name}» no tiene código.`)
+
+  let lastError
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      await compilerRequest('/preambles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, content }),
+      })
+      return name
+    } catch (error) {
+      lastError = error
+      if (attempt < retries) await new Promise((resolve) => window.setTimeout(resolve, 350))
+    }
+  }
+  throw new Error(`${template.nombre || name}: ${lastError?.message || 'error desconocido'}`)
 }
 
 function validateDocumentToolCommands(code = '') {
@@ -1807,7 +1978,7 @@ async function loadTemplates() {
       const data = template.data()
       return {
         id: template.id,
-        archivo: data.archivo || preambleFileName(data.nombre || 'plantilla'),
+        archivo: templateCompilerFileName({ archivo: data.archivo, nombre: data.nombre }),
         nombre: data.nombre || 'Plantilla',
         descripcion: data.descripcion || '',
         codigo: data.codigo || '',
@@ -1816,15 +1987,21 @@ async function loadTemplates() {
     templates.value.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
     if (!selectedPreamble.value && templates.value.length) selectedPreamble.value = templates.value[0].archivo
 
-    try {
-      await Promise.all(templates.value.map((template) => compilerRequest('/preambles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: template.archivo, content: templateCodeForCompiler(template.codigo) }),
-      })))
-    } catch (error) {
-      templatesError.value = 'Las plantillas se han cargado desde Firestore, pero no se han podido sincronizar todas con el servidor LaTeX.'
-      console.error('Error al sincronizar plantillas con el compilador:', error)
+    // El servicio de compilación escribe cada preámbulo en disco. Las peticiones
+    // concurrentes podían perderse entre sí (y ocultaban qué plantilla fallaba),
+    // por lo que sincronizamos de forma ordenada y reintentamos errores transitorios.
+    const failures = []
+    for (const template of templates.value) {
+      try {
+        const archivo = await syncTemplateWithCompiler(template)
+        if (template.archivo !== archivo) template.archivo = archivo
+      } catch (error) {
+        failures.push(error.message)
+        console.error('Error al sincronizar plantilla con el compilador:', error)
+      }
+    }
+    if (failures.length) {
+      templatesError.value = `Las plantillas se han cargado desde Firestore, pero no se han podido sincronizar ${failures.length} con el servidor LaTeX: ${failures.join(' · ')}`
     }
   } catch (error) {
     templatesError.value = 'No se han podido cargar las plantillas de Firestore.'
@@ -2083,7 +2260,7 @@ async function saveTemplate() {
     const reference = templateEditor.value.id
       ? doc(db, 'plantillas', templateEditor.value.id)
       : doc(collection(db, 'plantillas'))
-    const archivo = templateEditor.value.archivo || preambleFileName(templateEditor.value.nombre)
+    const archivo = templateCompilerFileName(templateEditor.value)
     const data = {
       id: reference.id,
       archivo,
@@ -2099,11 +2276,7 @@ async function saveTemplate() {
     selectedTemplateId.value = reference.id
     templateEditor.value = { ...data }
     try {
-      await compilerRequest('/preambles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: archivo, content: templateCodeForCompiler(data.codigo) }),
-      })
+      await syncTemplateWithCompiler(data)
     } catch (error) {
       templatesError.value = 'La plantilla se ha guardado en Firestore, pero no se ha podido sincronizar con el servidor LaTeX. Se reintentará al volver a cargar la aplicación.'
       console.error('Error al sincronizar plantilla:', error)
@@ -3233,8 +3406,11 @@ function teachingScheduleBlocks(groups = teacherGroups.value) {
     type: 'teaching',
     groupId: group.id,
     course: group.nombre,
-    subjectId: group.subjectId || scheduleSubjectId(group.curso || group.nombre, group.asignatura),
-    subject: group.asignatura || '',
+    subjectId: segment.subjectId || group.subjectId || scheduleSubjectId(group.curso || group.nombre, group.asignatura),
+    subject: segment.subject || group.asignatura || '',
+    // Los horarios antiguos no guardaban el tipo por segmento. En ese caso se
+    // considera clase ordinaria para no ocultar por error días de programación.
+    tutorType: segment.tutorType || null,
     classroom: segment.aula ?? group.aula ?? '',
     color: scheduleColorFor({
       subjectId: group.subjectId || scheduleSubjectId(group.curso || group.nombre, group.asignatura),
@@ -3260,6 +3436,7 @@ function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
   }]))
   blocksByGroup.forEach((groupBlocks, groupId) => {
     const first = groupBlocks[0]
+    const subjectBlock = groupBlocks.find((block) => block.subjectId && !block.tutorType) || first
     const previous = groupsById.get(groupId)
     groupsById.set(groupId, {
       ...(previous || {
@@ -3273,15 +3450,20 @@ function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
         studentsLoaded: true,
       }),
       nombre: first.course,
-      curso: mathSubjectsById.get(first.subjectId)?.course || String(first.course || '').replace(/\s+[A-Z]$/u, ''),
-      subjectId: first.subjectId || null,
-      asignatura: first.subject || '',
+      curso: mathSubjectsById.get(subjectBlock.subjectId)?.course || String(first.course || '').replace(/\s+[A-Z]$/u, ''),
+      subjectId: subjectBlock.subjectId || null,
+      asignatura: subjectBlock.subject || '',
+      tutor: Boolean(groupBlocks.some((block) => block.tutorType)),
+      tutorType: groupBlocks.find((block) => block.tutorType)?.tutorType || null,
       aula: first.classroom || '',
       color: scheduleColorFor(first),
       horario: groupBlocks.map((block) => ({
         dia: block.dayIndex,
         tramo: block.moduleIndex,
         aula: block.classroom || '',
+        subjectId: block.subjectId || null,
+        subject: block.subject || '',
+        tutorType: block.tutorType || null,
       })),
     })
   })
@@ -3308,10 +3490,12 @@ async function loadTeacherSchedule() {
       schoolCalendar.value = normalizeSchoolCalendar()
       await setDoc(teacherDocument.value, { groupMigration: { schemaVersion: 2 } }, { merge: true })
     }
-    const [loadedGroups, nonTeachingSchedule] = await Promise.all([
+    const [loadedGroups, nonTeachingSchedule, storedScheduleTimePoints] = await Promise.all([
       loadGroupsForTeacher(currentTeacherId.value, currentAcademicYear()),
       loadNonTeachingSchedule(currentTeacherId.value, currentAcademicYear()),
+      loadScheduleTimePoints(currentTeacherId.value, currentAcademicYear()),
     ])
+    scheduleTimePoints.value = normalizeScheduleTimePoints(storedScheduleTimePoints)
     teacherGroups.value = loadedGroups
     scheduleBlocks.value = [
       ...teachingScheduleBlocks(loadedGroups),
@@ -3347,6 +3531,7 @@ function openScheduleDialog(dayIndex, moduleIndex) {
         course: isNonTeachingBlock ? '' : currentBlock.course,
         subjectId: isNonTeachingBlock ? null : (currentBlock.subjectId || scheduleSubjectId(currentBlock.course, currentBlock.subject)),
         subject: isNonTeachingBlock ? '' : currentBlock.subject,
+        tutorType: isNonTeachingBlock ? null : (currentBlock.tutorType || null),
         classroom: currentBlock.classroom,
         color: currentBlock.color,
       }
@@ -3366,6 +3551,7 @@ async function saveScheduleBlock() {
     course: isNonTeaching ? selectedSegmentType.title : scheduleForm.value.course.trim(),
     subjectId: isNonTeaching ? null : scheduleForm.value.subjectId,
     subject: isNonTeaching ? '' : scheduleForm.value.subject,
+    tutorType: isNonTeaching ? null : scheduleForm.value.tutorType,
     nonTeachingKind: isNonTeaching ? selectedSegmentType.value : null,
     color: scheduleColorFor(scheduleForm.value),
     id: isNonTeaching ? (currentBlock?.id || scheduleForm.value.id || createGroupId()) : null,
@@ -3388,6 +3574,7 @@ async function saveScheduleBlock() {
               course: block.course,
               subjectId: block.subjectId,
               subject: block.subject,
+              tutorType: block.tutorType,
               color: block.color,
             }
           : item
@@ -3493,32 +3680,54 @@ async function clearScheduleCell(dayIndex, moduleIndex) {
 async function clearScheduleBlock() {
   if (!selectedSlot.value || !hasSelectedScheduleBlock.value) return
   const currentBlock = scheduleBlock(selectedSlot.value.dayIndex, selectedSlot.value.moduleIndex)
-  const scheduledGroup = teacherGroups.value.find((group) => group.id === currentBlock?.groupId)
-  if (Number(scheduledGroup?.studentCount) > 0 || (scheduledGroup?.alumnos || []).length) {
+  const remainingGroupSegments = scheduleBlocks.value.filter((block) => (
+    block.type !== 'nonTeaching' && block.groupId === currentBlock?.groupId
+  )).length
+  if (currentBlock?.groupId && remainingGroupSegments <= 1) {
     scheduleDeleteDialog.value = true
     return
   }
   await performClearScheduleBlock()
 }
 
-async function performClearScheduleBlock() {
+async function performClearScheduleBlock({ deleteGroup = false } = {}) {
   if (!selectedSlot.value || !hasSelectedScheduleBlock.value) return
   const previousBlocks = [...scheduleBlocks.value]
   const { dayIndex, moduleIndex } = selectedSlot.value
+  const currentBlock = scheduleBlock(dayIndex, moduleIndex)
+  const groupId = deleteGroup ? currentBlock?.groupId : null
+  const scheduledGroup = groupId ? teacherGroups.value.find((group) => group.id === groupId) : null
   scheduleBlocks.value = scheduleBlocks.value.filter((block) => block.dayIndex !== dayIndex || block.moduleIndex !== moduleIndex)
   isSavingSchedule.value = true
   firestoreError.value = ''
   try {
-    const updatedGroups = groupsFromSchedule(scheduleBlocks.value)
+    const updatedGroups = groupsFromSchedule(scheduleBlocks.value).filter((group) => group.id !== groupId)
     await Promise.all([
-      saveGroupMetadata(updatedGroups, currentTeacherId.value),
       saveNonTeachingSchedule(
         scheduleBlocks.value.filter((item) => item.type === 'nonTeaching'),
         currentTeacherId.value,
         currentAcademicYear(),
       ),
+      groupId ? Promise.resolve() : saveGroupMetadata(updatedGroups, currentTeacherId.value),
     ])
+    const deletion = groupId
+      ? await httpsCallable(functions, 'deleteTeacherGroup')({ groupId })
+      : null
+    const deletedStudentIds = deletion?.data?.studentIds || []
     teacherGroups.value = updatedGroups
+    if (groupId) {
+      const localIds = [...new Set([
+        ...deletedStudentIds,
+        ...((scheduledGroup?.alumnos || []).map((student) => student.id).filter(Boolean)),
+      ])]
+      try {
+        await deleteStudentIdentitiesEverywhere(localIds)
+      } catch (error) {
+        console.error('No se han podido borrar todas las identidades locales del grupo:', error)
+        showAppErrorToast('El grupo se ha eliminado de Firestore, pero no se han podido borrar todos sus datos locales de este dispositivo.')
+      }
+      if (selectedCareerGroupId.value === groupId) selectedCareerGroupId.value = null
+    }
     scheduleDialog.value = false
   } catch (error) {
     scheduleBlocks.value = previousBlocks
@@ -3577,6 +3786,119 @@ function timeToMinutes(time) {
   return hours * 60 + minutes
 }
 
+function minutesToTime(value) {
+  const minutes = Math.max(0, Math.min(23 * 60 + 55, Math.round(Number(value) / 5) * 5))
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+}
+
+function normalizeScheduleTimePoints(value) {
+  if (!Array.isArray(value) || value.length < 2) return [...defaultScheduleTimePoints]
+  const normalized = value.map((time) => String(time || '').trim())
+  const valid = normalized.every((time, index) => (
+    /^([01]\d|2[0-3]):[0-5]\d$/u.test(time)
+    && timeToMinutes(time) % 5 === 0
+    && (index === 0 || timeToMinutes(time) > timeToMinutes(normalized[index - 1]))
+  ))
+  return valid ? normalized : [...defaultScheduleTimePoints]
+}
+
+async function persistScheduleTimePoints(previousTimePoints) {
+  isSavingSchedule.value = true
+  try {
+    await saveScheduleTimePoints(scheduleTimePoints.value, currentTeacherId.value, currentAcademicYear())
+  } catch (error) {
+    scheduleTimePoints.value = previousTimePoints
+    showAppErrorToast('No se han podido guardar las horas del horario.')
+    console.error('Error al guardar las horas del horario:', error)
+  } finally {
+    isSavingSchedule.value = false
+  }
+}
+
+async function updateScheduleTimePoint(index, rawValue, input) {
+  const previousTimePoints = [...scheduleTimePoints.value]
+  const snappedTime = minutesToTime(timeToMinutes(rawValue))
+  const minutes = timeToMinutes(snappedTime)
+  const previousMinutes = index > 0 ? timeToMinutes(scheduleTimePoints.value[index - 1]) : -1
+  const nextMinutes = index < scheduleTimePoints.value.length - 1
+    ? timeToMinutes(scheduleTimePoints.value[index + 1])
+    : 24 * 60
+  if (!rawValue || minutes <= previousMinutes || minutes >= nextMinutes) {
+    if (input) input.value = scheduleTimePoints.value[index]
+    showAppErrorToast('Cada hora debe estar separada de las contiguas por al menos cinco minutos.')
+    return
+  }
+  scheduleTimePoints.value = scheduleTimePoints.value.map((time, pointIndex) => (
+    pointIndex === index ? snappedTime : time
+  ))
+  if (input) input.value = snappedTime
+  await persistScheduleTimePoints(previousTimePoints)
+}
+
+async function saveScheduleStructure(previousTimePoints, previousBlocks, failureMessage) {
+  isSavingSchedule.value = true
+  try {
+    const updatedGroups = groupsFromSchedule(scheduleBlocks.value)
+    await Promise.all([
+      saveScheduleTimePoints(scheduleTimePoints.value, currentTeacherId.value, currentAcademicYear()),
+      saveGroupMetadata(updatedGroups, currentTeacherId.value),
+      saveNonTeachingSchedule(
+        scheduleBlocks.value.filter((item) => item.type === 'nonTeaching'),
+        currentTeacherId.value,
+        currentAcademicYear(),
+      ),
+    ])
+    teacherGroups.value = updatedGroups
+  } catch (error) {
+    scheduleTimePoints.value = previousTimePoints
+    scheduleBlocks.value = previousBlocks
+    showAppErrorToast(failureMessage)
+    console.error(failureMessage, error)
+  } finally {
+    isSavingSchedule.value = false
+  }
+}
+
+async function insertScheduleTimePoint(moduleIndex) {
+  const previousTimePoints = [...scheduleTimePoints.value]
+  const previousBlocks = [...scheduleBlocks.value]
+  const start = timeToMinutes(scheduleTimePoints.value[moduleIndex])
+  const end = timeToMinutes(scheduleTimePoints.value[moduleIndex + 1])
+  if (end - start < 10) {
+    showAppErrorToast('Este tramo no se puede dividir en intervalos de cinco minutos.')
+    return
+  }
+  let midpoint = Math.round(((start + end) / 2) / 5) * 5
+  if (midpoint <= start) midpoint = start + 5
+  if (midpoint >= end) midpoint = end - 5
+  scheduleTimePoints.value = [
+    ...scheduleTimePoints.value.slice(0, moduleIndex + 1),
+    minutesToTime(midpoint),
+    ...scheduleTimePoints.value.slice(moduleIndex + 1),
+  ]
+  scheduleBlocks.value = scheduleBlocks.value.map((block) => ({
+    ...block,
+    moduleIndex: block.moduleIndex > moduleIndex ? block.moduleIndex + 1 : block.moduleIndex,
+  }))
+  await saveScheduleStructure(previousTimePoints, previousBlocks, 'No se ha podido dividir el tramo horario.')
+}
+
+async function removeScheduleTimePoint(pointIndex) {
+  if (pointIndex <= 0 || pointIndex >= scheduleTimePoints.value.length - 1) return
+  if (scheduleBlocks.value.some((block) => block.moduleIndex === pointIndex)) {
+    showAppErrorToast('Limpia primero el tramo situado debajo de esta hora para poder unir ambos intervalos.')
+    return
+  }
+  const previousTimePoints = [...scheduleTimePoints.value]
+  const previousBlocks = [...scheduleBlocks.value]
+  scheduleTimePoints.value = scheduleTimePoints.value.filter((_, index) => index !== pointIndex)
+  scheduleBlocks.value = scheduleBlocks.value.map((block) => ({
+    ...block,
+    moduleIndex: block.moduleIndex > pointIndex ? block.moduleIndex - 1 : block.moduleIndex,
+  }))
+  await saveScheduleStructure(previousTimePoints, previousBlocks, 'No se han podido unir los tramos horarios.')
+}
+
 function currentTimePosition(date, module) {
   const now = currentTime.value
   if (date.getDate() !== now.getDate() || date.getMonth() !== now.getMonth() || date.getFullYear() !== now.getFullYear()) return null
@@ -3596,20 +3918,63 @@ const navigation = computed(() => [
 ])
 
 const groups = computed(() => {
-  return teacherGroups.value
+  const uniqueGroups = new Map()
+  teacherGroups.value
     .filter((group) => Boolean(group.asignatura?.trim()) && Array.isArray(group.horario) && group.horario.length > 0)
-    .map((group) => ({
-      ...group,
-      title: group.nombre,
-      subtitle: group.asignatura,
-      icon: 'mdi-function-variant',
-    }))
+    .forEach((group) => {
+      const key = String(group.nombre || '').trim().toLocaleUpperCase('es-ES')
+      const existing = uniqueGroups.get(key)
+      if (!existing) {
+        uniqueGroups.set(key, {
+          ...group,
+          title: group.nombre,
+          subtitle: group.asignatura,
+          icon: 'mdi-function-variant',
+        })
+      } else {
+        existing.tutor = Boolean(existing.tutor || group.tutor)
+        const subjects = [...new Set([existing.subtitle, group.asignatura].filter(Boolean))]
+        existing.subtitle = subjects.join(' · ')
+      }
+    })
+  return [...uniqueGroups.values()]
 })
 
 const selectedCareerGroup = computed(() => groups.value.find((group) => group.id === selectedCareerGroupId.value) || null)
+const classroomTeachingDates = computed(() => selectedCareerGroup.value
+  ? programmingDatesForGroup(schoolCalendar.value, selectedCareerGroup.value)
+  : [])
+const classroomDateIndex = computed(() => classroomTeachingDates.value.indexOf(classroomDate.value))
+const classroomDateLabel = computed(() => {
+  const match = classroomDate.value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return 'Sin días lectivos'
+  return new Intl.DateTimeFormat('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })
+    .format(new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12))
+    .replace('.', '')
+})
 const existingStudentIds = computed(() => teacherGroups.value.flatMap((group) => (
   (group.alumnos || []).map((student) => student.id).filter(Boolean)
 )))
+
+function synchronizeClassroomDate() {
+  const dates = classroomTeachingDates.value
+  if (!dates.length) {
+    classroomDate.value = ''
+    return
+  }
+  if (dates.includes(classroomDate.value)) return
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  classroomDate.value = dates.find((date) => date >= today) || dates.at(-1)
+}
+
+function moveClassroomDate(offset) {
+  const nextIndex = classroomDateIndex.value + offset
+  if (nextIndex < 0 || nextIndex >= classroomTeachingDates.value.length) return
+  classroomDate.value = classroomTeachingDates.value[nextIndex]
+}
+
+watch(classroomTeachingDates, synchronizeClassroomDate, { immediate: true })
 
 let gradebookSavePromise = null
 let groupOpenRequest = 0
@@ -3617,6 +3982,9 @@ let groupOpenRequest = 0
 async function openCareerGroup(group) {
   const request = ++groupOpenRequest
   isLoadingSelectedGroup.value = false
+  if (active.value === 'Grupo' && groupView.value === 'programming' && selectedCareerGroupId.value !== group.id) {
+    await programmingRef.value?.flush?.()
+  }
   if (active.value === 'Grupo' && selectedCareerGroupId.value !== group.id && gradebookDirty.value) {
     const saved = await saveGradebook({ includeIdentities: gradebookConfigurationMode.value })
     if (!saved || request !== groupOpenRequest) return
@@ -3651,10 +4019,12 @@ async function openCareerGroup(group) {
 
 async function setGroupView(view) {
   if (groupView.value === view) return
+  if (groupView.value === 'programming') await programmingRef.value?.flush?.()
   if (gradebookDirty.value) {
     const saved = await saveGradebook({ includeIdentities: gradebookConfigurationMode.value })
     if (!saved) return
   }
+  if (view === 'programming') gradebookConfigurationMode.value = false
   groupView.value = view
   gradebookDirty.value = false
 }
@@ -3676,6 +4046,10 @@ function toggleStudentDetailConfiguration() {
 
 function addGradebookStudent() {
   gradebookRef.value?.addStudent?.()
+}
+
+function addGradebookStudents() {
+  gradebookRef.value?.openBulkStudentDialog?.()
 }
 
 function addGradebookColumn() {
@@ -3704,6 +4078,42 @@ function applyDocumentAssessmentToLoadedGroups({ documentId, previousGroupId, gr
       ...group,
       evaluaciones: { ...(group.evaluaciones || {}), estructura: structure, resultados },
     }
+  })
+}
+
+function removeProgrammingAssessmentFromLoadedGroup({ groupId, itemIds = [] }) {
+  const removedIds = new Set(itemIds.filter(Boolean))
+  if (!groupId || !removedIds.size) return
+  const removeItems = (nodes = []) => nodes.flatMap((node) => {
+    if (node?.type === 'item' && removedIds.has(node.id)) return []
+    if (node?.type === 'group') return [{ ...node, children: removeItems(node.children || []) }]
+    return [node]
+  })
+  teacherGroups.value = teacherGroups.value.map((group) => {
+    if (group.id !== groupId) return group
+    const resultados = JSON.parse(JSON.stringify(group.evaluaciones?.resultados || {}))
+    Object.values(resultados).forEach((studentResults) => {
+      removedIds.forEach((itemId) => delete studentResults[itemId])
+    })
+    return {
+      ...group,
+      evaluaciones: {
+        ...(group.evaluaciones || {}),
+        estructura: removeItems(group.evaluaciones?.estructura || []),
+        resultados,
+      },
+    }
+  })
+}
+
+async function createProgrammingDocument({ date }) {
+  const group = selectedCareerGroup.value
+  if (!group) return
+  await setActiveView('Documentos')
+  await nextTick()
+  documentCreatorRef.value?.newDocumentWithContext?.({
+    groupId: group.id,
+    date,
   })
 }
 
@@ -3774,6 +4184,9 @@ async function toggleGradebookConfiguration() {
 }
 
 async function setActiveView(view) {
+  if (active.value === 'Grupo' && groupView.value === 'programming' && view !== 'Grupo') {
+    await programmingRef.value?.flush?.()
+  }
   if (active.value === 'Grupo' && view !== 'Grupo' && gradebookDirty.value) {
     const saved = await saveGradebook({ includeIdentities: gradebookConfigurationMode.value })
     if (!saved) return
@@ -3994,8 +4407,6 @@ onBeforeUnmount(() => {
 
       <template #append>
         <div class="drawer-footer">
-          <v-btn variant="text" prepend-icon="mdi-logout" block justify="start" @click="closeSession">Cerrar sesión</v-btn>
-          <v-divider class="my-3" />
           <v-list-item :title="currentUserName" subtitle="Profesor" @click="setActiveView('Perfil')">
             <template #prepend><v-avatar color="primary" size="36"><img v-if="isAdministrator" src="/brand/carlos-sanchez-catala.png" alt=""><span v-else>{{ currentUserInitials }}</span></v-avatar></template>
           </v-list-item>
@@ -4257,7 +4668,7 @@ onBeforeUnmount(() => {
           </v-tooltip>
         </template>
         <template v-else>
-        <v-tooltip :text="gradebookConfigurationMode ? 'Finalizar y guardar configuración' : 'Configurar cuaderno'" location="bottom">
+        <v-tooltip v-if="groupView !== 'programming'" :text="gradebookConfigurationMode ? 'Finalizar y guardar configuración' : 'Configurar cuaderno'" location="bottom">
           <template #activator="{ props }">
             <v-btn
               v-bind="props"
@@ -4266,7 +4677,6 @@ onBeforeUnmount(() => {
               :color="gradebookConfigurationMode ? 'primary' : undefined"
               :variant="gradebookConfigurationMode ? 'tonal' : 'text'"
               class="ml-2"
-              :loading="isSavingGradebook"
               aria-label="Configurar cuaderno"
               @click="toggleGradebookConfiguration"
             />
@@ -4282,10 +4692,32 @@ onBeforeUnmount(() => {
             <v-btn v-bind="props" icon="mdi-fit-to-screen-outline" rounded="circle" variant="text" class="ml-1" aria-label="Encajar aula" @click="fitClassroom" />
           </template>
         </v-tooltip>
+        <div v-if="groupView === 'classroom'" class="classroom-date-navigator" aria-label="Fecha lectiva mostrada en el aula">
+          <v-btn
+            icon="mdi-chevron-left"
+            rounded="circle"
+            variant="text"
+            size="small"
+            :disabled="classroomDateIndex <= 0"
+            aria-label="Día lectivo anterior"
+            @click="moveClassroomDate(-1)"
+          />
+          <span>{{ classroomDateLabel }}</span>
+          <v-btn
+            icon="mdi-chevron-right"
+            rounded="circle"
+            variant="text"
+            size="small"
+            :disabled="classroomDateIndex < 0 || classroomDateIndex >= classroomTeachingDates.length - 1"
+            aria-label="Día lectivo siguiente"
+            @click="moveClassroomDate(1)"
+          />
+        </div>
         <v-spacer />
         <v-btn-toggle :model-value="groupView" mandatory density="compact" class="calendar-toolbar-modes" aria-label="Vista del grupo" @update:model-value="setGroupView">
           <v-btn value="evaluation">Evaluación</v-btn>
           <v-btn value="classroom">Aula</v-btn>
+          <v-btn value="programming">Programación</v-btn>
         </v-btn-toggle>
         <v-spacer />
         <v-tooltip v-if="gradebookConfigurationMode && groupView === 'evaluation'" text="Añadir alumno" location="bottom">
@@ -4293,12 +4725,16 @@ onBeforeUnmount(() => {
             <v-btn v-bind="props" variant="text" prepend-icon="mdi-account-plus-outline" :disabled="!selectedCareerGroup" @click="addGradebookStudent">Alumno</v-btn>
           </template>
         </v-tooltip>
+        <v-tooltip v-if="gradebookConfigurationMode && groupView === 'evaluation'" text="Pegar varios alumnos desde una columna" location="bottom">
+          <template #activator="{ props }">
+            <v-btn v-bind="props" variant="text" prepend-icon="mdi-account-multiple-plus-outline" :disabled="!selectedCareerGroup" @click="addGradebookStudents">Alumnos</v-btn>
+          </template>
+        </v-tooltip>
         <v-tooltip v-if="gradebookConfigurationMode && groupView === 'evaluation'" text="Añadir un ítem de evaluación" location="bottom">
           <template #activator="{ props }">
             <v-btn v-bind="props" variant="text" prepend-icon="mdi-table-column-plus-after" @click="addGradebookColumn">Ítem</v-btn>
           </template>
         </v-tooltip>
-        <div v-if="isSavingGradebook && !gradebookConfigurationMode" class="gradebook-autosave-status">Guardando…</div>
         <v-tooltip text="Calendario" location="bottom">
           <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
         </v-tooltip>
@@ -4373,6 +4809,18 @@ onBeforeUnmount(() => {
           <template #activator="{ props }"><v-badge :content="chatNotifications" :model-value="chatNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-message-text-outline" variant="text" aria-label="Chat" /></v-badge></template>
         </v-tooltip>
       </template>
+      <v-tooltip text="Cerrar sesión" location="bottom">
+        <template #activator="{ props }">
+          <v-btn
+            v-bind="props"
+            icon="mdi-logout"
+            variant="text"
+            class="mr-2"
+            aria-label="Cerrar sesión"
+            @click="closeSession"
+          />
+        </template>
+      </v-tooltip>
     </v-app-bar>
 
     <v-main>
@@ -4811,12 +5259,37 @@ onBeforeUnmount(() => {
             :group="selectedCareerGroup"
             :configuration-mode="studentDetailConfigurationMode"
           />
-          <component
-            v-else-if="selectedCareerGroup"
-            ref="gradebookRef"
-            :is="groupView === 'evaluation' ? Gradebook : Classroom"
+          <GroupProgramming
+            v-else-if="selectedCareerGroup && groupView === 'programming'"
+            ref="programmingRef"
             :key="selectedCareerGroup.id"
             :group="selectedCareerGroup"
+            :calendar="schoolCalendar"
+            :teacher-id="currentTeacherId || ''"
+            :templates="preambleOptions"
+            :compiler-base-url="compilerBaseUrl"
+            @new-document="createProgrammingDocument"
+            @assessment-removed="removeProgrammingAssessmentFromLoadedGroup"
+          />
+          <Gradebook
+            v-else-if="selectedCareerGroup && groupView === 'evaluation'"
+            ref="gradebookRef"
+            :key="selectedCareerGroup.id"
+            :group="selectedCareerGroup"
+            :existing-student-ids="existingStudentIds"
+            :teacher-id="currentTeacherId || ''"
+            :configuration-mode="gradebookConfigurationMode"
+            @dirty-change="gradebookDirty = $event"
+            @validity-change="gradebookValid = $event"
+            @autosave-request="autosaveGradebook"
+            @student-selected="openStudentDetail"
+          />
+          <Classroom
+            v-else-if="selectedCareerGroup"
+            ref="gradebookRef"
+            :key="selectedCareerGroup.id"
+            :group="selectedCareerGroup"
+            :date="classroomDate"
             :existing-student-ids="existingStudentIds"
             :teacher-id="currentTeacherId || ''"
             :configuration-mode="gradebookConfigurationMode"
@@ -4833,26 +5306,74 @@ onBeforeUnmount(() => {
             <div v-for="day in ['L', 'M', 'X', 'J', 'V', 'S', 'D']" :key="day" class="calendar-weekday">{{ day }}</div>
             <div v-for="(day, index) in calendarDays" :key="index" class="calendar-day" :class="{ 'calendar-day-empty': !day, 'calendar-day-today': isToday(day), 'calendar-weekend': index % 7 >= 5 }" :style="day ? { backgroundColor: displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))?.color } : undefined">
               <span class="calendar-day-number">{{ day }}</span>
+              <span v-if="day && schoolCalendarEntryForDate(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))" class="calendar-day-event">{{ courseCalendarEntryTitle(schoolCalendarEntryForDate(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))) }}</span>
               <span v-if="day && displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))?.mensaje" class="calendar-day-message">{{ displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day)).mensaje }}</span>
               <span v-if="day && displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))?.lectivo === false" class="calendar-day-status">No lectivo</span>
               <span v-if="day && displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))?.cursos?.length" class="calendar-day-courses">{{ calendarTypeCourses(displayedSchoolCalendarEntry(new Date(shownMonth.getFullYear(), shownMonth.getMonth(), day))) }}</span>
             </div>
           </div>
-          <div v-else-if="calendarMode === 'week'" class="week-calendar">
+          <div v-else-if="calendarMode === 'week'" class="week-calendar" :class="{ 'schedule-configuring': scheduleConfigMode }">
             <div class="week-header">
               <div />
               <div v-for="date in weekDays" :key="date.toISOString()" class="week-day" :class="{ 'week-day-today': isTodayDate(date) }">
                 <span>{{ new Intl.DateTimeFormat('es-ES', { weekday: 'short' }).format(date) }}</span>
                 <strong v-if="!scheduleConfigMode" class="week-day-number">{{ date.getDate() }}</strong>
                 <span v-if="displayedSchoolCalendarEntry(date)" class="week-day-calendar-note">
+                  <small v-if="schoolCalendarEntryForDate(date)">{{ courseCalendarEntryTitle(schoolCalendarEntryForDate(date)) }}</small>
                   <small v-if="displayedSchoolCalendarEntry(date).mensaje">{{ displayedSchoolCalendarEntry(date).mensaje }}</small>
                   <small>{{ displayedSchoolCalendarEntry(date).lectivo === false ? 'No lectivo' : 'Lectivo' }}</small>
                   <small v-if="displayedSchoolCalendarEntry(date).cursos?.length">{{ calendarTypeCourses(displayedSchoolCalendarEntry(date)) }}</small>
                 </span>
               </div>
             </div>
-            <div v-for="(module, moduleIndex) in scheduleModules" :key="module.start" class="schedule-row" :class="{ 'schedule-break': module.break }" :style="{ '--duration': module.minutes }">
-              <div class="schedule-time"><span class="schedule-start">{{ module.start }}</span><span v-if="moduleIndex === scheduleModules.length - 1" class="schedule-end">{{ module.end }}</span></div>
+            <div v-for="(module, moduleIndex) in scheduleModules" :key="`${moduleIndex}-${module.start}-${module.end}`" class="schedule-row" :class="{ 'schedule-break': module.break }" :style="{ '--duration': module.minutes }">
+              <div class="schedule-time">
+                <template v-if="scheduleConfigMode">
+                  <span class="schedule-time-editor schedule-start">
+                    <button
+                      v-if="moduleIndex > 0"
+                      type="button"
+                      class="schedule-time-remove"
+                      title="Unir los tramos contiguos"
+                      aria-label="Eliminar esta división horaria"
+                      :disabled="isSavingSchedule"
+                      @click.stop="removeScheduleTimePoint(moduleIndex)"
+                    ><v-icon icon="mdi-minus" size="11" /></button>
+                    <button
+                      type="button"
+                      class="schedule-time-insert"
+                      title="Dividir este tramo"
+                      aria-label="Añadir una división dentro de este tramo"
+                      :disabled="isSavingSchedule"
+                      @click.stop="insertScheduleTimePoint(moduleIndex)"
+                    ><v-icon icon="mdi-plus" size="11" /></button>
+                    <input
+                      type="time"
+                      step="300"
+                      :value="module.start"
+                      :disabled="isSavingSchedule"
+                      :aria-label="`Hora ${moduleIndex + 1}: ${module.start}`"
+                      @click.stop
+                      @change="updateScheduleTimePoint(moduleIndex, $event.target.value, $event.target)"
+                    >
+                  </span>
+                  <span v-if="moduleIndex === scheduleModules.length - 1" class="schedule-time-editor schedule-end">
+                    <input
+                      type="time"
+                      step="300"
+                      :value="module.end"
+                      :disabled="isSavingSchedule"
+                      :aria-label="`Hora final: ${module.end}`"
+                      @click.stop
+                      @change="updateScheduleTimePoint(moduleIndex + 1, $event.target.value, $event.target)"
+                    >
+                  </span>
+                </template>
+                <template v-else>
+                  <span class="schedule-start">{{ module.start }}</span>
+                  <span v-if="moduleIndex === scheduleModules.length - 1" class="schedule-end">{{ module.end }}</span>
+                </template>
+              </div>
               <div
                 v-for="(date, dayIndex) in weekDays"
                 :key="`${module.start}-${date.toISOString()}`"
@@ -4874,9 +5395,9 @@ onBeforeUnmount(() => {
                 <span v-if="scheduleBlock(dayIndex, moduleIndex)" class="schedule-block">
                   <span class="schedule-block-top"><strong>{{ scheduleBlock(dayIndex, moduleIndex).course }}</strong><small>{{ scheduleBlock(dayIndex, moduleIndex).classroom }}</small></span>
                   <span
-                    v-if="scheduleBlock(dayIndex, moduleIndex).type !== 'nonTeaching' && scheduleBlock(dayIndex, moduleIndex).subject && scheduleBlock(dayIndex, moduleIndex).subject !== scheduleBlock(dayIndex, moduleIndex).course"
+                    v-if="scheduleBlock(dayIndex, moduleIndex).type !== 'nonTeaching' && (scheduleBlock(dayIndex, moduleIndex).tutorType || (scheduleBlock(dayIndex, moduleIndex).subject && scheduleBlock(dayIndex, moduleIndex).subject !== scheduleBlock(dayIndex, moduleIndex).course))"
                     class="schedule-block-subject"
-                  >{{ scheduleBlock(dayIndex, moduleIndex).subject }}</span>
+                  >{{ scheduleBlock(dayIndex, moduleIndex).tutorType ? scheduleTutorOptions.find((option) => option.value === scheduleBlock(dayIndex, moduleIndex).tutorType)?.title : scheduleBlock(dayIndex, moduleIndex).subject }}</span>
                 </span>
                 <span v-if="scheduleConfigMode" class="schedule-cell-actions">
                   <button
@@ -4907,9 +5428,23 @@ onBeforeUnmount(() => {
               <h2>{{ new Intl.DateTimeFormat('es-ES', { month: 'long' }).format(month) }}</h2>
               <div class="academic-weekdays"><span v-for="day in ['L', 'M', 'X', 'J', 'V', 'S', 'D']" :key="day">{{ day }}</span></div>
               <div class="academic-days">
-                <button v-for="(day, index) in getMonthDays(month)" :key="index" type="button" class="academic-day" :class="{ 'academic-empty': !day, 'academic-weekend': index % 7 >= 5, 'academic-today': day && month.getMonth() === new Date().getMonth() && month.getFullYear() === new Date().getFullYear() && day === new Date().getDate(), 'academic-day-configurable': courseCalendarConfigMode }" :style="academicCalendarDayStyle(month, day)" :disabled="!day || !courseCalendarConfigMode || new Date(month.getFullYear(), month.getMonth(), day).getDay() === 0 || new Date(month.getFullYear(), month.getMonth(), day).getDay() === 6" :title="academicCalendarEntry(month, day)?.mensaje || undefined" @click="openCourseCalendarDialog(month, day)">
-                  <span>{{ day }}</span>
-                </button>
+                <v-tooltip
+                  v-for="(day, index) in getMonthDays(month)"
+                  :key="index"
+                  location="top"
+                  :disabled="!academicCalendarEntry(month, day)"
+                  content-class="school-calendar-tooltip"
+                  :content-props="{ style: courseCalendarTooltipStyle(academicCalendarEntry(month, day)) }"
+                >
+                  <template #activator="{ props }">
+                    <button v-bind="props" type="button" class="academic-day" :class="{ 'academic-empty': !day, 'academic-weekend': index % 7 >= 5, 'academic-today': day && month.getMonth() === new Date().getMonth() && month.getFullYear() === new Date().getFullYear() && day === new Date().getDate(), 'academic-day-configurable': courseCalendarConfigMode }" :style="academicCalendarDayStyle(month, day)" :disabled="!day || new Date(month.getFullYear(), month.getMonth(), day).getDay() === 0 || new Date(month.getFullYear(), month.getMonth(), day).getDay() === 6" @click="openCourseCalendarDialog(month, day)">
+                      <span>{{ day }}</span>
+                    </button>
+                  </template>
+                  <div class="school-calendar-tooltip-content">
+                    <span v-for="(line, lineIndex) in courseCalendarTooltipLines(academicCalendarEntry(month, day))" :key="lineIndex" class="school-calendar-tooltip-line">{{ line }}</span>
+                  </div>
+                </v-tooltip>
               </div>
             </section>
           </div>
@@ -4979,13 +5514,12 @@ onBeforeUnmount(() => {
           <v-text-field v-model="scheduleForm.course" label="Grupo" @update:model-value="updateScheduleCourse" />
           <v-select
             v-if="scheduleForm.course.trim()"
-            v-model="scheduleForm.subjectId"
-            :items="filteredScheduleSubjectOptions"
+            v-model="scheduleAssignmentValue"
+            :items="scheduleAssignmentOptions"
             item-title="title"
             item-value="value"
-            label="Asignatura"
+            label="Asignatura o tutoría"
             clearable
-            @update:model-value="selectScheduleSubject"
           />
           <v-select
             v-else
@@ -5011,40 +5545,37 @@ onBeforeUnmount(() => {
       </v-card>
     </v-dialog>
 
-    <v-dialog v-model="scheduleDeleteDialog" max-width="500">
+    <v-dialog v-model="scheduleDeleteDialog" max-width="680">
       <v-card>
-        <v-card-title class="pt-5 px-6">Eliminar segmento horario</v-card-title>
+        <v-card-title class="pt-5 px-6">Último segmento del grupo</v-card-title>
         <v-card-text class="px-6 pb-2">
-          Este grupo ya tiene alumnos asignados. ¿Quieres eliminar este segmento del horario?
+          Al eliminar este segmento, el grupo se quedará sin horario. Puedes conservar sus alumnos y calificaciones o eliminar completamente el grupo y todos sus datos.
         </v-card-text>
-        <v-card-actions class="px-6 pb-5">
+        <v-card-actions class="schedule-delete-actions px-6 pb-5">
+          <v-btn size="small" variant="text" @click="scheduleDeleteDialog = false">Cancelar</v-btn>
           <v-spacer />
-          <v-btn variant="text" @click="scheduleDeleteDialog = false">Cancelar</v-btn>
-          <v-btn color="error" variant="flat" :loading="isSavingSchedule" @click="scheduleDeleteDialog = false; performClearScheduleBlock()">Eliminar segmento</v-btn>
+          <v-btn size="small" color="primary" variant="text" :loading="isSavingSchedule" @click="scheduleDeleteDialog = false; performClearScheduleBlock()">Conservar grupo</v-btn>
+          <v-btn size="small" color="error" variant="flat" :loading="isSavingSchedule" @click="scheduleDeleteDialog = false; performClearScheduleBlock({ deleteGroup: true })">Eliminar grupo y datos</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
 
     <v-dialog v-model="courseCalendarDialog" max-width="520">
       <v-card>
-        <v-card-title class="pt-5 px-6">Configurar día lectivo</v-card-title>
+        <v-card-title class="pt-5 px-6 course-calendar-dialog-title">{{ selectedCourseCalendarDateLabel }}</v-card-title>
         <v-card-text class="px-6 pb-2">
-          <v-select v-if="courseCalendarPresets.length" v-model="selectedCourseCalendarPreset" :items="courseCalendarPresets" item-title="mensaje" return-object clearable label="Repetir configuración anterior" @update:model-value="applyCourseCalendarPreset">
+          <v-select v-model="courseCalendarForm.eventKey" :items="courseCalendarEventOptions" item-title="title" item-value="value" label="Tipo de evento" @update:model-value="selectCourseCalendarEvent">
+            <template #selection="{ item }"><span class="color-dot mr-3" :style="{ background: item.raw.color }" />{{ item.title }}</template>
             <template #item="{ props, item }"><v-list-item v-bind="props"><template #prepend><span class="color-dot mr-3" :style="{ background: item.raw.color }" /></template></v-list-item></template>
           </v-select>
-          <v-select v-model="courseCalendarForm.color" :items="schoolCalendarColorOptions" item-title="title" item-value="value" label="Color">
-            <template #selection="{ item }"><span class="color-dot mr-3" :style="{ background: item.raw.value }" />{{ item.title }}</template>
-            <template #item="{ props, item }"><v-list-item v-bind="props"><template #prepend><span class="color-dot mr-3" :style="{ background: item.raw.value }" /></template></v-list-item></template>
-          </v-select>
-          <v-switch v-model="courseCalendarForm.lectivo" color="primary" label="Día lectivo" hide-details class="mb-2" />
-          <v-text-field v-model="courseCalendarForm.mensaje" label="Mensaje corto" placeholder="Inicio de curso" clearable />
-          <v-select v-model="courseCalendarForm.cursos" :items="academicCalendarCourseOptions" item-title="title" item-value="value" label="Cursos" multiple chips closable-chips hint="Selecciona uno o varios cursos" persistent-hint />
+          <v-select v-if="selectedCourseCalendarEvent?.requiresCourses" v-model="courseCalendarForm.cursos" :items="academicCalendarCourseOptions" item-title="title" item-value="value" label="Cursos afectados" multiple chips closable-chips hint="Selecciona uno o varios cursos" persistent-hint />
+          <v-textarea v-model="courseCalendarForm.mensaje" label="Comentario" rows="2" auto-grow clearable />
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
           <v-btn color="error" variant="text" :disabled="!schoolCalendar.days?.[selectedCourseCalendarDate]" @click="clearCourseCalendarDay">Limpiar día</v-btn>
           <v-spacer />
           <v-btn variant="text" @click="courseCalendarDialog = false">Cancelar</v-btn>
-          <v-btn color="primary" variant="flat" :disabled="!courseCalendarForm.color" @click="saveCourseCalendarDay">Guardar</v-btn>
+          <v-btn color="primary" variant="flat" :disabled="!canSaveCourseCalendarDay" @click="saveCourseCalendarDay">Guardar</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
