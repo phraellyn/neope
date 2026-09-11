@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../services/firebase'
 import { loadStudentIdentitiesForGroup, saveStudentIdentities } from '../services/localStudentIdentity'
@@ -14,7 +14,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['saved', 'error'])
-const identity = ref({ id: '', nombre: '', nombreCorto: '', foto: '', repetidor: false, pendiente: false, nuevo: false })
+const identity = ref(emptyIdentity())
 const isLoading = ref(true)
 const isSaving = ref(false)
 const competencyLoading = ref(false)
@@ -30,16 +30,101 @@ let ready = false
 let saveSequence = 0
 let competencyLoadSequence = 0
 
+function emptyGuardian() {
+  return {
+    id: globalThis.crypto?.randomUUID?.() || `tutor-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    nombre: '',
+    correo: '',
+    telefono: '',
+    trabajo: '',
+    parentesco: '',
+  }
+}
+
+function normalizedGuardians(value) {
+  const guardians = Array.isArray(value)
+    ? value.map((guardian) => ({ ...emptyGuardian(), ...(guardian || {}) }))
+    : []
+  while (guardians.length < 2) guardians.push(emptyGuardian())
+  return guardians
+}
+
+function emptyIdentity() {
+  return {
+    id: '',
+    nombre: '',
+    nombreCorto: '',
+    foto: '',
+    fechaNacimiento: '',
+    lugarNacimiento: '',
+    domicilio: '',
+    correo: '',
+    telefono: '',
+    asignaturasPendientes: [],
+    tutores: normalizedGuardians([]),
+    repetidor: false,
+    pendiente: false,
+    nuevo: false,
+  }
+}
+
+const age = computed(() => {
+  const match = String(identity.value.fechaNacimiento || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return null
+  const birthDate = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  if (Number.isNaN(birthDate.getTime()) || birthDate > new Date()) return null
+  const today = new Date()
+  let years = today.getFullYear() - birthDate.getFullYear()
+  const birthdayPending = today.getMonth() < birthDate.getMonth()
+    || (today.getMonth() === birthDate.getMonth() && today.getDate() < birthDate.getDate())
+  if (birthdayPending) years -= 1
+  return years >= 0 ? years : null
+})
+
 function applyStudent(value) {
+  const pendingSubjects = Array.isArray(value?.asignaturasPendientes)
+    ? value.asignaturasPendientes.filter((subject) => String(subject || '').trim())
+    : []
   identity.value = {
     id: value?.id || '',
     nombre: value?.nombre || '',
     nombreCorto: value?.nombreCorto || '',
     foto: value?.foto || '',
+    fechaNacimiento: value?.fechaNacimiento || '',
+    lugarNacimiento: value?.lugarNacimiento || '',
+    domicilio: value?.domicilio || '',
+    correo: value?.correo || '',
+    telefono: value?.telefono || '',
+    asignaturasPendientes: pendingSubjects,
+    tutores: normalizedGuardians(value?.tutores),
     repetidor: Boolean(value?.repetidor),
-    pendiente: Boolean(value?.pendiente),
+    pendiente: Boolean(value?.pendiente || pendingSubjects.length),
     nuevo: Boolean(value?.nuevo),
   }
+}
+
+function updatePendingSubjects(value) {
+  identity.value.asignaturasPendientes = Array.isArray(value)
+    ? value.map((subject) => String(subject || '').trim()).filter(Boolean)
+    : []
+  identity.value.pendiente = identity.value.asignaturasPendientes.length > 0
+}
+
+function addGuardian() {
+  identity.value.tutores.push(emptyGuardian())
+}
+
+function removeGuardian(index) {
+  if (identity.value.tutores.length <= 2) {
+    identity.value.tutores[index] = emptyGuardian()
+    return
+  }
+  identity.value.tutores.splice(index, 1)
+}
+
+function toggleFlag(field) {
+  if (!props.configurationMode) return
+  identity.value[field] = !identity.value[field]
 }
 
 async function persist() {
@@ -137,21 +222,63 @@ defineExpose({ persist })
 <template>
   <div class="student-detail-view">
     <div class="student-detail-grid">
-      <v-card class="student-detail-card" variant="flat">
+      <v-card class="student-detail-card student-detail-data-card" variant="flat">
         <v-card-item>
           <v-card-title>Datos del alumno</v-card-title>
           <v-card-subtitle>La información se guarda únicamente en este dispositivo.</v-card-subtitle>
         </v-card-item>
         <v-card-text class="student-detail-form">
-          <v-text-field v-model="identity.nombre" label="Nombre completo" placeholder="APELLIDO 1 APELLIDO 2, Nombre" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="comfortable" hide-details="auto" />
-          <v-text-field v-model="identity.nombreCorto" label="Nombre corto" placeholder="Nombre para el aula" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="comfortable" hide-details="auto" />
-          <div class="student-detail-code"><span>Código pseudónimo</span><code>{{ identity.id }}</code></div>
-          <v-btn v-if="configurationMode" variant="tonal" color="primary" prepend-icon="mdi-lock-reset" @click="resetAccessDialog = true">Restablecer contraseña de acceso</v-btn>
+          <v-text-field v-model="identity.nombre" class="student-field-name" label="Nombre completo" placeholder="APELLIDO 1 APELLIDO 2, Nombre" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="compact" hide-details />
+          <v-text-field v-model="identity.nombreCorto" class="student-field-short-name" label="Nombre corto" placeholder="Nombre para el aula" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="compact" hide-details />
+          <div class="student-detail-code student-field-code"><span>Código pseudónimo</span><code>{{ identity.id }}</code></div>
+
+          <v-text-field v-model="identity.fechaNacimiento" class="student-field-birth-date" label="Fecha de nacimiento" type="date" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+          <div class="student-detail-age"><span>Edad</span><strong>{{ age === null ? '—' : `${age} años` }}</strong></div>
+          <v-text-field v-model="identity.lugarNacimiento" class="student-field-birth-place" label="Lugar de nacimiento" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+
+          <v-text-field v-model="identity.domicilio" class="student-field-address" label="Domicilio" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+          <v-text-field v-model="identity.correo" class="student-field-email" label="Correo electrónico" type="email" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+          <v-text-field v-model="identity.telefono" class="student-field-phone" label="Teléfono" type="tel" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+
           <div class="student-detail-flags">
-            <div class="student-detail-flags-title">Indicadores</div>
-            <v-switch v-model="identity.repetidor" label="Repetidor" color="primary" :disabled="!configurationMode" hide-details density="compact" />
-            <v-switch v-model="identity.pendiente" label="Pendiente" color="primary" :disabled="!configurationMode" hide-details density="compact" />
-            <v-switch v-model="identity.nuevo" label="Nuevo" color="primary" :disabled="!configurationMode" hide-details density="compact" />
+            <button type="button" :class="{ active: identity.nuevo }" :aria-pressed="identity.nuevo" :disabled="!configurationMode" @click="toggleFlag('nuevo')"><v-icon icon="mdi-account-star-outline" size="17" />Nuevo</button>
+            <button type="button" :class="{ active: identity.repetidor }" :aria-pressed="identity.repetidor" :disabled="!configurationMode" @click="toggleFlag('repetidor')"><v-icon icon="mdi-backup-restore" size="17" />Repite curso</button>
+          </div>
+          <v-combobox
+            :model-value="identity.asignaturasPendientes"
+            class="student-field-pending"
+            label="Asignaturas pendientes de cursos anteriores"
+            multiple
+            chips
+            closable-chips
+            :readonly="!configurationMode"
+            variant="outlined"
+            density="compact"
+            hide-details
+            @update:model-value="updatePendingSubjects"
+          />
+          <v-btn v-if="configurationMode" class="student-reset-access" size="small" variant="text" color="primary" prepend-icon="mdi-lock-reset" @click="resetAccessDialog = true">Restablecer contraseña</v-btn>
+        </v-card-text>
+      </v-card>
+
+      <v-card class="student-detail-card student-detail-guardians-card" variant="flat">
+        <v-card-item class="student-guardians-heading">
+          <v-card-title>Tutores legales</v-card-title>
+          <template #append>
+            <v-btn v-if="configurationMode" size="small" variant="text" prepend-icon="mdi-plus" @click="addGuardian">Añadir tutor</v-btn>
+          </template>
+        </v-card-item>
+        <v-card-text class="student-guardians-table">
+          <div class="student-guardian-labels" aria-hidden="true">
+            <span>Nombre</span><span>Correo</span><span>Teléfono</span><span>Trabajo</span><span>Parentesco</span><span />
+          </div>
+          <div v-for="(guardian, index) in identity.tutores" :key="guardian.id" class="student-guardian-row">
+            <v-text-field v-model="guardian.nombre" :label="`Tutor ${index + 1} · Nombre`" :aria-label="`Nombre del tutor ${index + 1}`" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+            <v-text-field v-model="guardian.correo" :label="`Tutor ${index + 1} · Correo`" :aria-label="`Correo del tutor ${index + 1}`" type="email" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+            <v-text-field v-model="guardian.telefono" :label="`Tutor ${index + 1} · Teléfono`" :aria-label="`Teléfono del tutor ${index + 1}`" type="tel" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+            <v-text-field v-model="guardian.trabajo" :label="`Tutor ${index + 1} · Trabajo`" :aria-label="`Trabajo del tutor ${index + 1}`" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+            <v-text-field v-model="guardian.parentesco" :label="`Tutor ${index + 1} · Parentesco`" :aria-label="`Parentesco del tutor ${index + 1}`" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+            <v-btn v-if="configurationMode" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" :aria-label="`Eliminar tutor ${index + 1}`" @click="removeGuardian(index)" />
           </div>
         </v-card-text>
       </v-card>
@@ -162,11 +289,11 @@ defineExpose({ persist })
           <v-icon v-else icon="mdi-account-school-outline" size="72" />
         </div>
         <v-card-actions class="student-detail-photo-actions">
-          <v-btn variant="tonal" color="primary" prepend-icon="mdi-camera-outline" :disabled="!configurationMode" @click="$refs.photoInput?.click()">Cambiar fotografía</v-btn>
-          <v-btn v-if="identity.foto" icon="mdi-delete-outline" variant="text" aria-label="Eliminar fotografía" :disabled="!configurationMode" @click="clearPhoto" />
+          <v-btn v-if="configurationMode" size="small" variant="tonal" color="primary" prepend-icon="mdi-camera-outline" @click="$refs.photoInput?.click()">Cambiar fotografía</v-btn>
+          <v-btn v-if="configurationMode && identity.foto" icon="mdi-delete-outline" size="small" variant="text" aria-label="Eliminar fotografía" @click="clearPhoto" />
           <input ref="photoInput" type="file" accept="image/*" hidden @change="selectPhoto">
         </v-card-actions>
-        <div class="student-detail-local-note"><v-icon icon="mdi-lock-outline" size="15" /> Fotografía local y cifrada</div>
+        <div class="student-detail-local-note"><v-icon icon="mdi-lock-outline" size="15" /> Datos personales locales y cifrados</div>
         <StudentCompetencyRadar :values="competencyValues" :loading="competencyLoading" />
       </v-card>
     </div>

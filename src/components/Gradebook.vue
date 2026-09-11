@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { deleteStudentIdentitiesForGroup, loadStudentIdentitiesForGroup, saveStudentIdentities } from '../services/localStudentIdentity'
 import { loadRubrics } from '../services/rubricRepository'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
@@ -133,6 +133,7 @@ const weightDialogNodes = ref([])
 const weightDialogWeights = ref({})
 const suppressTitleClick = ref(false)
 let revision = 0
+let localIdentitySaveTimer = null
 
 const structure = computed(() => localGroup.value.evaluaciones.estructura)
 const students = computed(() => localGroup.value.alumnos)
@@ -1003,6 +1004,15 @@ async function persistLocalIdentities() {
   }
 }
 
+function scheduleLocalIdentitySave() {
+  if (identityLoading.value) return
+  clearTimeout(localIdentitySaveTimer)
+  localIdentitySaveTimer = setTimeout(() => {
+    localIdentitySaveTimer = null
+    persistLocalIdentities().catch((error) => console.error('Error al autoguardar identidades locales:', error))
+  }, 350)
+}
+
 async function finalizeIdentityDeletions() {
   const ids = [...removedStudentIds]
   await deleteStudentIdentitiesForGroup(localGroup.value, ids)
@@ -1037,6 +1047,15 @@ onMounted(async () => {
   } finally {
     identityLoading.value = false
     emitValidity()
+  }
+})
+
+watch(students, scheduleLocalIdentitySave, { deep: true })
+
+onBeforeUnmount(() => {
+  clearTimeout(localIdentitySaveTimer)
+  if (!identityLoading.value) {
+    void persistLocalIdentities().catch((error) => console.error('Error al guardar identidades locales al cerrar el grupo:', error))
   }
 })
 

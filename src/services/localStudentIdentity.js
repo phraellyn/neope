@@ -1,51 +1,14 @@
 const DATABASE_NAME = 'neope-private-data'
-const DATABASE_VERSION = 2
+const DATABASE_VERSION = 3
 const IDENTITY_STORE = 'student-identities'
 const KEY_STORE = 'crypto-keys'
+const SETTINGS_STORE = 'settings'
 const IDENTITY_KEY_ID = 'student-identities-v1'
 const GLOBAL_IDENTITY_SCOPE = '__teacher-students__'
+const LINKED_FILE_SETTING_ID = 'student-identities-linked-file-v1'
 const TRANSFER_FORMAT = 'neope-private-students'
 const TRANSFER_VERSION = 1
 const TRANSFER_KDF_ITERATIONS = 310_000
-const DEVELOPMENT_PORTRAIT_SHEET = '/dev-fixtures/student-portraits.png'
-const DEVELOPMENT_IDENTITIES = Object.freeze([
-  ['ALONSO MARTÍN, Lucía', 'Lucía'],
-  ['ÁLVAREZ ROMERO, Daniel', 'Daniel'],
-  ['BENÍTEZ SERRANO, Claudia', 'Claudia'],
-  ['BLANCO REY, Hugo', 'Hugo'],
-  ['CASTRO MOLINA, Irene', 'Irene'],
-  ['DELGADO SÁEZ, Marcos', 'Marcos'],
-  ['DÍAZ NAVARRO, Alba', 'Alba'],
-  ['FERNÁNDEZ PRIETO, Mateo', 'Mateo'],
-  ['GARCÍA VEGA, Sara', 'Sara'],
-  ['GIL PASCUAL, Pablo', 'Pablo'],
-  ['HERRERA CAMPOS, Noa', 'Noa'],
-  ['JIMÉNEZ VIDAL, Leo', 'Leo'],
-  ['LÓPEZ CRESPO, Elena', 'Elena'],
-  ['MARTÍNEZ SOLER, Adrián', 'Adrián'],
-  ['MORENO RUIZ, Carla', 'Carla'],
-  ['MUÑOZ CABRERA, Álex', 'Álex'],
-  ['ORTEGA LEÓN, Marina', 'Marina'],
-  ['RAMÍREZ PEÑA, Diego', 'Diego'],
-  ['SÁNCHEZ MORA, Aitana', 'Aitana'],
-  ['TORRES FUENTES, Nicolás', 'Nicolás'],
-])
-const DEVELOPMENT_IDENTITIES_4ESO_A = Object.freeze([
-  ['AGUILAR NIETO, Valeria', 'Valeria'],
-  ['CALVO HERRANZ, Samuel', 'Samuel'],
-  ['CANO BLÁZQUEZ, Martina', 'Martina'],
-  ['DOMÍNGUEZ LARA, Bruno', 'Bruno'],
-  ['ESTEBAN ROLDÁN, Inés', 'Inés'],
-  ['FUENTES MATEOS, Mario', 'Mario'],
-  ['GARRIDO SANZ, Olivia', 'Olivia'],
-  ['IGLESIAS CUÉLLAR, Álvaro', 'Álvaro'],
-  ['MÉNDEZ GALÁN, Emma', 'Emma'],
-  ['MOLINA CASAS, Lucas', 'Lucas'],
-  ['PARRA ROBLES, Jimena', 'Jimena'],
-  ['RUBIO PONS, Gael', 'Gael'],
-  ['SANTOS VERA, Vega', 'Vega'],
-  ['VÁZQUEZ LORENZO, Eric', 'Eric'],
-])
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -101,8 +64,9 @@ function transactionDone(transaction) {
 function openDatabase() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION)
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const database = request.result
+      const previousVersion = event.oldVersion
       let identities
       if (!database.objectStoreNames.contains(IDENTITY_STORE)) {
         identities = database.createObjectStore(IDENTITY_STORE, { keyPath: 'key' })
@@ -113,8 +77,20 @@ function openDatabase() {
       if (!identities.indexNames.contains('studentId')) {
         identities.createIndex('studentId', 'studentId', { unique: false })
       }
+      if (previousVersion < 3) {
+        const cursorRequest = identities.openCursor()
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result
+          if (!cursor) return
+          if (cursor.value?.groupId === GLOBAL_IDENTITY_SCOPE) cursor.delete()
+          cursor.continue()
+        }
+      }
       if (!database.objectStoreNames.contains(KEY_STORE)) {
         database.createObjectStore(KEY_STORE, { keyPath: 'id' })
+      }
+      if (!database.objectStoreNames.contains(SETTINGS_STORE)) {
+        database.createObjectStore(SETTINGS_STORE, { keyPath: 'id' })
       }
     }
     request.onsuccess = () => resolve(request.result)
@@ -146,7 +122,6 @@ export function studentIdentityGroupIds(group) {
   const legacyObjectClassroomId = [group.nombre, group.asignatura, group.aula, group.color].join('|')
   const legacyIds = Array.isArray(group.legacyIds) ? group.legacyIds : []
   return [...new Set([
-    GLOBAL_IDENTITY_SCOPE,
     group.id,
     ...legacyIds,
     legacyCompositeId,
@@ -170,6 +145,10 @@ async function decryptIdentity(key, record) {
 
 function identityHasValue(value) {
   if (typeof value === 'string') return Boolean(value.trim())
+  if (Array.isArray(value)) return value.some((entry) => identityHasValue(entry))
+  if (value && typeof value === 'object') {
+    return Object.entries(value).some(([field, entry]) => field !== 'id' && identityHasValue(entry))
+  }
   return value !== undefined && value !== null && value !== false
 }
 
@@ -190,77 +169,6 @@ function identityMapFromList(identities) {
   }, new Map())
 }
 
-function identityHasPersonalData(identity) {
-  return ['nombre', 'nombreCorto', 'foto', 'repetidor', 'pendiente', 'nuevo']
-    .some((field) => identityHasValue(identity?.[field]))
-}
-
-function shuffled(values) {
-  const result = [...values]
-  for (let index = result.length - 1; index > 0; index -= 1) {
-    const random = crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000
-    const target = Math.floor(random * (index + 1))
-    ;[result[index], result[target]] = [result[target], result[index]]
-  }
-  return result
-}
-
-let developmentPortraitSheetPromise
-
-function developmentPortraitSheet() {
-  if (!developmentPortraitSheetPromise) {
-    developmentPortraitSheetPromise = new Promise((resolve, reject) => {
-      const image = new Image()
-      image.onload = () => resolve(image)
-      image.onerror = () => reject(new Error('No se ha podido cargar la lámina de retratos ficticios.'))
-      image.src = DEVELOPMENT_PORTRAIT_SHEET
-    })
-  }
-  return developmentPortraitSheetPromise
-}
-
-async function developmentPortrait(index) {
-  const image = await developmentPortraitSheet()
-  const columns = 5
-  const rows = 4
-  const sourceWidth = image.naturalWidth / columns
-  const sourceHeight = image.naturalHeight / rows
-  const canvas = document.createElement('canvas')
-  canvas.width = 240
-  canvas.height = 300
-  const context = canvas.getContext('2d')
-  context.drawImage(
-    image,
-    (index % columns) * sourceWidth,
-    Math.floor(index / columns) * sourceHeight,
-    sourceWidth,
-    sourceHeight,
-    0,
-    0,
-    canvas.width,
-    canvas.height,
-  )
-  return canvas.toDataURL('image/jpeg', 0.82)
-}
-
-async function developmentFakeIdentities(studentIds, groupName = '') {
-  const source = groupName === '4ºESO A' ? DEVELOPMENT_IDENTITIES_4ESO_A : DEVELOPMENT_IDENTITIES
-  const profiles = shuffled(source.map(([nombre, nombreCorto], index) => ({ nombre, nombreCorto, index })))
-  const targets = shuffled(studentIds)
-  return Promise.all(targets.slice(0, profiles.length).map(async (id, index) => {
-    const profile = profiles[index]
-    return {
-      id,
-      nombre: profile.nombre,
-      nombreCorto: profile.nombreCorto,
-      foto: await developmentPortrait(profile.index),
-      repetidor: index === 4 || index === 15,
-      pendiente: index === 8,
-      nuevo: index === 12 || index === 18,
-    }
-  }))
-}
-
 export async function loadStudentIdentities(groupId) {
   const groupIds = [...new Set((Array.isArray(groupId) ? groupId : [groupId]).filter((value) => value !== undefined && value !== null && value !== ''))]
   const database = await openDatabase()
@@ -277,40 +185,6 @@ export async function loadStudentIdentities(groupId) {
     // El ID actual va primero, pero una copia vacía creada durante la migración
     // no debe ocultar los campos personales conservados bajo un alias anterior.
     return identityMapFromList(identities)
-  } finally {
-    database.close()
-  }
-}
-
-async function loadStudentIdentitiesByStudentIds(studentIds) {
-  const ids = [...new Set(studentIds.filter(Boolean))]
-  if (!ids.length) return new Map()
-  const idSet = new Set(ids)
-  const database = await openDatabase()
-  try {
-    const key = await getEncryptionKey(database)
-    const transaction = database.transaction(IDENTITY_STORE, 'readonly')
-    const records = (await requestResult(transaction.objectStore(IDENTITY_STORE).getAll()))
-      .map((record) => {
-        if (record.studentId) return record
-        const studentId = ids.find((id) => String(record.key || '').endsWith(`:${id}`))
-        return studentId ? { ...record, studentId } : record
-      })
-      .filter((record) => idSet.has(record.studentId))
-    await transactionDone(transaction)
-
-    // Una identidad puede existir bajo varios IDs históricos de grupo. La
-    // copia más reciente es la mejor candidata cuando no conocemos ese alias.
-    records.sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
-    const identities = new Map()
-    for (const record of records) {
-      const identity = {
-        id: record.studentId,
-        ...(await decryptIdentity(key, record)),
-      }
-      identities.set(record.studentId, mergeIdentity(identities.get(record.studentId), identity))
-    }
-    return identities
   } finally {
     database.close()
   }
@@ -339,46 +213,17 @@ export async function deleteStudentIdentitiesEverywhere(studentIds) {
 }
 
 export async function loadStudentIdentitiesForGroup(group) {
+  await syncStudentIdentitiesFromLinkedFile().catch(() => false)
   const groupIds = studentIdentityGroupIds(group)
   if (!groupIds.length) return new Map()
-  const knownIdentities = await loadStudentIdentities(groupIds)
   const studentIds = Array.isArray(group?.alumnos) ? group.alumnos.map((student) => student.id) : []
-  const currentStudentIds = new Set(studentIds)
-  const recoveredIdentities = await loadStudentIdentitiesByStudentIds(studentIds)
-  const identities = new Map(recoveredIdentities)
-  // Los datos encontrados mediante el ID actual o un alias explícito tienen
-  // prioridad sobre la recuperación por código pseudónimo.
-  knownIdentities.forEach((identity, id) => identities.set(id, mergeIdentity(identity, identities.get(id))))
-
-  const unassignedStudentIds = studentIds.filter((id) => !identityHasPersonalData(identities.get(id)))
-  if (unassignedStudentIds.length) {
-    const historicalScopes = groupIds.filter((id) => id !== GLOBAL_IDENTITY_SCOPE && id !== group.id)
-    const historicalIdentities = historicalScopes.length ? await loadStudentIdentities(historicalScopes) : new Map()
-    const candidates = [...historicalIdentities.values()]
-      .reduce((result, identity) => {
-        if (!currentStudentIds.has(identity.id) && identityHasPersonalData(identity) && !result.has(identity.id)) {
-          result.set(identity.id, identity)
-        }
-        return result
-      }, new Map())
-    const available = shuffled([...candidates.values()])
-    const targets = shuffled(unassignedStudentIds).slice(0, available.length)
-    const remapped = targets.map((studentId, index) => ({ ...available[index], id: studentId }))
-    if (remapped.length) {
-      await saveStudentIdentities(group.id, remapped)
-      await deleteStudentIdentityRecordsEverywhere(available.slice(0, remapped.length).map((identity) => identity.id))
-      remapped.forEach((identity) => identities.set(identity.id, identity))
-    }
-  }
-
-  const stillUnassigned = studentIds.filter((id) => !identityHasPersonalData(identities.get(id)))
-  if (import.meta.env.DEV && stillUnassigned.length) {
-    const fakeIdentities = await developmentFakeIdentities(stillUnassigned, group?.nombre)
-    if (fakeIdentities.length) {
-      await saveStudentIdentities(group.id, fakeIdentities)
-      fakeIdentities.forEach((identity) => identities.set(identity.id, identity))
-    }
-  }
+  const studentIdSet = new Set(studentIds)
+  const identities = await loadStudentIdentities(groupIds)
+  // Nunca se reasigna una ficha a otro código: solo se aceptan coincidencias
+  // exactas de grupo (o alias explícito) y código pseudónimo.
+  identities.forEach((_identity, id) => {
+    if (!studentIdSet.has(id)) identities.delete(id)
+  })
 
   if (group?.id && identities.size) {
     const canonical = await loadStudentIdentities(group.id)
@@ -393,21 +238,20 @@ export async function loadStudentIdentitiesForGroup(group) {
 
 export async function saveStudentIdentities(groupId, identities, { preserveEmpty = true } = {}) {
   if (!identities.length) return
-  const recovered = await loadStudentIdentitiesByStudentIds(identities.map((identity) => identity.id))
+  const recovered = await loadStudentIdentities(groupId)
   const safeIdentities = identities.map((identity) => (
     preserveEmpty ? mergeIdentity(identity, recovered.get(identity.id)) : { ...identity }
   ))
   const database = await openDatabase()
   try {
     const key = await getEncryptionKey(database)
-    const scopes = [...new Set([GLOBAL_IDENTITY_SCOPE, groupId].filter(Boolean))]
-    const encrypted = await Promise.all(scopes.flatMap((scope) => safeIdentities.map(async (identity) => ({
-        key: recordKey(scope, identity.id),
-        groupId: scope,
+    const encrypted = await Promise.all(safeIdentities.map(async (identity) => ({
+        key: recordKey(groupId, identity.id),
+        groupId,
         studentId: identity.id,
         ...(await encryptIdentity(key, identity)),
         updatedAt: new Date().toISOString(),
-      }))))
+      })))
     const transaction = database.transaction(IDENTITY_STORE, 'readwrite')
     const store = transaction.objectStore(IDENTITY_STORE)
     encrypted.forEach((record) => store.put(record))
@@ -415,6 +259,7 @@ export async function saveStudentIdentities(groupId, identities, { preserveEmpty
   } finally {
     database.close()
   }
+  scheduleLinkedIdentityFileWrite()
 }
 
 export async function deleteStudentIdentities(groupId, studentIds) {
@@ -435,54 +280,15 @@ export async function deleteStudentIdentitiesForGroup(group, studentIds) {
   await Promise.all(groupIds.map((groupId) => deleteStudentIdentities(groupId, studentIds)))
 }
 
-/**
- * Crea un archivo portable cifrado con una contraseña de transferencia.
- * El contenido se descifra únicamente en este dispositivo y vuelve a cifrarse
- * antes de salir del navegador; nunca se envía a Firebase.
- */
-export async function exportStudentIdentityBundle(passphrase) {
-  if (typeof passphrase !== 'string' || passphrase.length < 8) {
-    throw new Error('La contraseña de transferencia debe tener al menos 8 caracteres.')
-  }
-  const database = await openDatabase()
-  try {
-    const localKey = await getEncryptionKey(database)
-    const transaction = database.transaction(IDENTITY_STORE, 'readonly')
-    const records = await requestResult(transaction.objectStore(IDENTITY_STORE).getAll())
-    await transactionDone(transaction)
-    const identities = await Promise.all(records.map(async (record) => ({
-      key: record.key,
-      groupId: record.groupId,
-      studentId: record.studentId,
-      updatedAt: record.updatedAt || null,
-      privateData: await decryptIdentity(localKey, record),
-    })))
-    const payload = encoder.encode(JSON.stringify({ exportedAt: new Date().toISOString(), identities }))
-    const salt = crypto.getRandomValues(new Uint8Array(16))
-    const iv = crypto.getRandomValues(new Uint8Array(12))
-    const key = await transferKey(passphrase, salt, ['encrypt'])
-    const ciphertext = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: encoder.encode(`${TRANSFER_FORMAT}:${TRANSFER_VERSION}`) },
-      key,
-      payload,
-    )
-    return JSON.stringify({
-      format: TRANSFER_FORMAT,
-      version: TRANSFER_VERSION,
-      kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: TRANSFER_KDF_ITERATIONS, salt: bytesToBase64(salt) },
-      cipher: { name: 'AES-GCM', iv: bytesToBase64(iv) },
-      data: bytesToBase64(ciphertext),
-    }, null, 2)
-  } finally {
-    database.close()
-  }
+function validTransferRecord(record) {
+  return record?.groupId
+    && record.groupId !== GLOBAL_IDENTITY_SCOPE
+    && record?.studentId
+    && record?.privateData
+    && typeof record.privateData === 'object'
 }
 
-/** Importa un archivo portable y lo cifra de nuevo con la clave local no exportable. */
-export async function importStudentIdentityBundle(serialized, passphrase) {
-  if (typeof passphrase !== 'string' || passphrase.length < 8) {
-    throw new Error('Introduce la contraseña de transferencia.')
-  }
+function parseTransferBundle(serialized) {
   let bundle
   try {
     bundle = JSON.parse(String(serialized || ''))
@@ -492,39 +298,296 @@ export async function importStudentIdentityBundle(serialized, passphrase) {
   if (bundle?.format !== TRANSFER_FORMAT || bundle?.version !== TRANSFER_VERSION) {
     throw new Error('El archivo no pertenece a una versión compatible de Neope.')
   }
-  let payload
+  return bundle
+}
+
+async function decryptTransferBundle(bundle, key) {
   try {
-    const salt = base64ToBytes(bundle.kdf?.salt)
-    const iv = base64ToBytes(bundle.cipher?.iv)
-    const key = await transferKey(passphrase, salt, ['decrypt'])
     const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv, additionalData: encoder.encode(`${TRANSFER_FORMAT}:${TRANSFER_VERSION}`) },
+      {
+        name: 'AES-GCM',
+        iv: base64ToBytes(bundle.cipher?.iv),
+        additionalData: encoder.encode(`${TRANSFER_FORMAT}:${TRANSFER_VERSION}`),
+      },
       key,
       base64ToBytes(bundle.data),
     )
-    payload = JSON.parse(decoder.decode(plaintext))
+    return JSON.parse(decoder.decode(plaintext))
   } catch {
     throw new Error('No se ha podido descifrar el archivo. Comprueba la contraseña.')
   }
-  const identities = Array.isArray(payload?.identities) ? payload.identities : []
+}
+
+async function localTransferRecords() {
   const database = await openDatabase()
   try {
     const localKey = await getEncryptionKey(database)
-    const encrypted = await Promise.all(identities
-      .filter((record) => record?.groupId && record?.studentId && record?.privateData && typeof record.privateData === 'object')
-      .map(async (record) => ({
-        key: recordKey(record.groupId, record.studentId),
-        groupId: record.groupId,
-        studentId: record.studentId,
-        ...(await encryptIdentity(localKey, { id: record.studentId, ...record.privateData })),
-        updatedAt: record.updatedAt || new Date().toISOString(),
-      })))
-    const transaction = database.transaction(IDENTITY_STORE, 'readwrite')
-    const store = transaction.objectStore(IDENTITY_STORE)
-    encrypted.forEach((record) => store.put(record))
+    const transaction = database.transaction(IDENTITY_STORE, 'readonly')
+    const records = (await requestResult(transaction.objectStore(IDENTITY_STORE).getAll()))
+      .filter((record) => record.groupId !== GLOBAL_IDENTITY_SCOPE)
     await transactionDone(transaction)
-    return { records: encrypted.length, students: new Set(encrypted.map((record) => record.studentId)).size }
+    return Promise.all(records.map(async (record) => ({
+      key: recordKey(record.groupId, record.studentId),
+      groupId: record.groupId,
+      studentId: record.studentId,
+      updatedAt: record.updatedAt || null,
+      privateData: await decryptIdentity(localKey, record),
+    })))
   } finally {
     database.close()
   }
+}
+
+async function serializeTransferBundle(key, salt) {
+  const identities = await localTransferRecords()
+  const payload = encoder.encode(JSON.stringify({ exportedAt: new Date().toISOString(), identities }))
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: encoder.encode(`${TRANSFER_FORMAT}:${TRANSFER_VERSION}`) },
+    key,
+    payload,
+  )
+  return JSON.stringify({
+    format: TRANSFER_FORMAT,
+    version: TRANSFER_VERSION,
+    kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: TRANSFER_KDF_ITERATIONS, salt: bytesToBase64(salt) },
+    cipher: { name: 'AES-GCM', iv: bytesToBase64(iv) },
+    data: bytesToBase64(ciphertext),
+  }, null, 2)
+}
+
+async function importTransferPayload(payload) {
+  const identities = Array.isArray(payload?.identities) ? payload.identities.filter(validTransferRecord) : []
+  const database = await openDatabase()
+  try {
+    const localKey = await getEncryptionKey(database)
+    const readTransaction = database.transaction(IDENTITY_STORE, 'readonly')
+    const store = readTransaction.objectStore(IDENTITY_STORE)
+    const currentRecords = await requestResult(store.getAll())
+    await transactionDone(readTransaction)
+    const currentByKey = new Map(currentRecords.map((record) => [record.key, record]))
+    const imported = identities.filter((record) => {
+      const current = currentByKey.get(recordKey(record.groupId, record.studentId))
+      return !current || String(record.updatedAt || '').localeCompare(String(current.updatedAt || '')) >= 0
+    })
+    const encrypted = await Promise.all(imported.map(async (record) => ({
+      key: recordKey(record.groupId, record.studentId),
+      groupId: record.groupId,
+      studentId: record.studentId,
+      ...(await encryptIdentity(localKey, { id: record.studentId, ...record.privateData })),
+      updatedAt: record.updatedAt || new Date().toISOString(),
+    })))
+    if (encrypted.length) {
+      const writeTransaction = database.transaction(IDENTITY_STORE, 'readwrite')
+      const writeStore = writeTransaction.objectStore(IDENTITY_STORE)
+      encrypted.forEach((record) => writeStore.put(record))
+      await transactionDone(writeTransaction)
+    }
+    return { records: encrypted.length, students: new Set(identities.map((record) => record.studentId)).size }
+  } finally {
+    database.close()
+  }
+}
+
+async function linkedFileSetting() {
+  const database = await openDatabase()
+  try {
+    const transaction = database.transaction(SETTINGS_STORE, 'readonly')
+    const setting = await requestResult(transaction.objectStore(SETTINGS_STORE).get(LINKED_FILE_SETTING_ID))
+    await transactionDone(transaction)
+    return setting || null
+  } finally {
+    database.close()
+  }
+}
+
+async function saveLinkedFileSetting(setting) {
+  const database = await openDatabase()
+  try {
+    const transaction = database.transaction(SETTINGS_STORE, 'readwrite')
+    transaction.objectStore(SETTINGS_STORE).put({ id: LINKED_FILE_SETTING_ID, ...setting })
+    await transactionDone(transaction)
+  } finally {
+    database.close()
+  }
+}
+
+async function linkedFilePermission(handle, request = false) {
+  if (!handle?.queryPermission) return false
+  const options = { mode: 'readwrite' }
+  if (await handle.queryPermission(options) === 'granted') return true
+  return request && await handle.requestPermission(options) === 'granted'
+}
+
+let linkedFileWriteTimer = null
+let linkedFileOperation = Promise.resolve()
+
+function runLinkedFileOperation(operation) {
+  const next = linkedFileOperation.then(operation, operation)
+  linkedFileOperation = next.catch(() => {})
+  return next
+}
+
+async function writeLinkedIdentityFile() {
+  return runLinkedFileOperation(async () => {
+    const setting = await linkedFileSetting()
+    if (!setting?.handle || !setting?.key || !setting?.salt) return false
+    if (!await linkedFilePermission(setting.handle)) return false
+    const currentContents = await (await setting.handle.getFile()).text()
+    if (currentContents.trim()) {
+      const currentBundle = parseTransferBundle(currentContents)
+      await importTransferPayload(await decryptTransferBundle(currentBundle, setting.key))
+    }
+    const serialized = await serializeTransferBundle(setting.key, base64ToBytes(setting.salt))
+    const writable = await setting.handle.createWritable()
+    await writable.write(serialized)
+    await writable.close()
+    return true
+  })
+}
+
+function scheduleLinkedIdentityFileWrite() {
+  clearTimeout(linkedFileWriteTimer)
+  linkedFileWriteTimer = setTimeout(() => {
+    linkedFileWriteTimer = null
+    writeLinkedIdentityFile().catch(() => {})
+  }, 500)
+}
+
+/**
+ * Crea un archivo portable cifrado con una contraseña de transferencia.
+ * El contenido se descifra únicamente en este dispositivo y vuelve a cifrarse
+ * antes de salir del navegador; nunca se envía a Firebase.
+ */
+export async function exportStudentIdentityBundle(passphrase) {
+  if (typeof passphrase !== 'string' || passphrase.length < 8) {
+    throw new Error('La contraseña de transferencia debe tener al menos 8 caracteres.')
+  }
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const key = await transferKey(passphrase, salt, ['encrypt'])
+  return serializeTransferBundle(key, salt)
+}
+
+/** Importa un archivo portable y lo cifra de nuevo con la clave local no exportable. */
+export async function importStudentIdentityBundle(serialized, passphrase) {
+  if (typeof passphrase !== 'string' || passphrase.length < 8) {
+    throw new Error('Introduce la contraseña de transferencia.')
+  }
+  const bundle = parseTransferBundle(serialized)
+  const key = await transferKey(passphrase, base64ToBytes(bundle.kdf?.salt), ['decrypt'])
+  const result = await importTransferPayload(await decryptTransferBundle(bundle, key))
+  scheduleLinkedIdentityFileWrite()
+  return result
+}
+
+export function supportsLinkedStudentIdentityFile() {
+  return typeof globalThis.showSaveFilePicker === 'function'
+}
+
+export async function linkedStudentIdentityFileStatus() {
+  const setting = await linkedFileSetting()
+  if (!setting?.handle) return { supported: supportsLinkedStudentIdentityFile(), linked: false, permission: 'none', name: '' }
+  const permission = setting.handle.queryPermission
+    ? await setting.handle.queryPermission({ mode: 'readwrite' })
+    : 'denied'
+  return {
+    supported: supportsLinkedStudentIdentityFile(),
+    linked: true,
+    permission,
+    name: setting.name || setting.handle.name || 'datos-alumnos.neope',
+  }
+}
+
+/**
+ * Vincula este origen a un archivo cifrado compartido. Desarrollo y producción
+ * pueden elegir el mismo archivo sin compartir IndexedDB ni usar el backend.
+ */
+export async function linkStudentIdentityFile(handle, passphrase) {
+  if (!handle || !await linkedFilePermission(handle, true)) {
+    throw new Error('No se ha concedido permiso para utilizar el archivo local.')
+  }
+  if (typeof passphrase !== 'string' || passphrase.length < 8) {
+    throw new Error('La contraseña del archivo debe tener al menos 8 caracteres.')
+  }
+  const file = await handle.getFile()
+  const serialized = await file.text()
+  let salt
+  let key
+  if (serialized.trim()) {
+    const bundle = parseTransferBundle(serialized)
+    salt = base64ToBytes(bundle.kdf?.salt)
+    key = await transferKey(passphrase, salt, ['encrypt', 'decrypt'])
+    await importTransferPayload(await decryptTransferBundle(bundle, key))
+  } else {
+    salt = crypto.getRandomValues(new Uint8Array(16))
+    key = await transferKey(passphrase, salt, ['encrypt', 'decrypt'])
+  }
+  await saveLinkedFileSetting({
+    handle,
+    key,
+    salt: bytesToBase64(salt),
+    name: handle.name || 'datos-alumnos.neope',
+    linkedAt: new Date().toISOString(),
+  })
+  await writeLinkedIdentityFile()
+  return linkedStudentIdentityFileStatus()
+}
+
+export async function syncStudentIdentitiesFromLinkedFile({ requestPermission = false } = {}) {
+  return runLinkedFileOperation(async () => {
+    const setting = await linkedFileSetting()
+    if (!setting?.handle || !setting?.key) return false
+    if (!await linkedFilePermission(setting.handle, requestPermission)) return false
+    const serialized = await (await setting.handle.getFile()).text()
+    if (!serialized.trim()) return false
+    const bundle = parseTransferBundle(serialized)
+    const result = await importTransferPayload(await decryptTransferBundle(bundle, setting.key))
+    return result
+  })
+}
+
+export async function unlinkStudentIdentityFile() {
+  const database = await openDatabase()
+  try {
+    const transaction = database.transaction(SETTINGS_STORE, 'readwrite')
+    transaction.objectStore(SETTINGS_STORE).delete(LINKED_FILE_SETTING_ID)
+    await transactionDone(transaction)
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Elimina todos los datos personales guardados por este origen. Si hay un
+ * archivo compartido vinculado también se vacía, evitando que una recarga los
+ * importe de nuevo. No modifica códigos, calificaciones ni ningún dato remoto.
+ */
+export async function clearAllLocalStudentIdentities() {
+  clearTimeout(linkedFileWriteTimer)
+  linkedFileWriteTimer = null
+  return runLinkedFileOperation(async () => {
+    const setting = await linkedFileSetting()
+    const database = await openDatabase()
+    try {
+      const transaction = database.transaction(IDENTITY_STORE, 'readwrite')
+      transaction.objectStore(IDENTITY_STORE).clear()
+      await transactionDone(transaction)
+    } finally {
+      database.close()
+    }
+
+    let linkedFileCleared = true
+    if (setting?.handle && setting?.key && setting?.salt) {
+      linkedFileCleared = await linkedFilePermission(setting.handle)
+      if (linkedFileCleared) {
+        const serialized = await serializeTransferBundle(setting.key, base64ToBytes(setting.salt))
+        const writable = await setting.handle.createWritable()
+        await writable.write(serialized)
+        await writable.close()
+      } else {
+        await unlinkStudentIdentityFile()
+      }
+    }
+    return { linkedFileCleared }
+  })
 }

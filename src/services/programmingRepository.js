@@ -13,6 +13,9 @@ import {
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { db, storage } from './firebase'
 import { rubricSnapshot } from '../utils/rubricAssessment'
+import { programmingSessionsForGroup } from '../utils/programmingSchedule'
+
+export { programmingDatesForGroup, programmingSessionsForGroup } from '../utils/programmingSchedule'
 
 const clone = (value, fallback = null) => {
   if (value === undefined || value === null) return fallback
@@ -32,65 +35,6 @@ function removeEvaluationItems(nodes = [], predicate) {
   return { structure: visit(nodes), removedIds }
 }
 
-function dateFromIso(value) {
-  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!match) return null
-  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12)
-}
-
-function isoDate(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function appliesToGroup(type, group) {
-  const courses = Array.isArray(type?.cursos) ? type.cursos.filter(Boolean) : []
-  if (!courses.length) return true
-  const identities = new Set([
-    group?.id,
-    group?.nombre,
-    group?.name,
-    ...(Array.isArray(group?.legacyIds) ? group.legacyIds : []),
-  ].filter(Boolean))
-  return courses.some((course) => identities.has(course))
-}
-
-export function programmingDatesForGroup(calendar = {}, group = {}) {
-  const types = new Map((calendar.types || []).map((type) => [type.id, type]))
-  const assignments = Object.entries(calendar.days || {})
-    .map(([date, typeId]) => ({ date, type: types.get(typeId) }))
-    .filter((entry) => entry.type && appliesToGroup(entry.type, group))
-  const starts = assignments.filter((entry) => entry.type.eventKey === 'inicio-curso').map((entry) => entry.date).sort()
-  const ends = assignments.filter((entry) => entry.type.eventKey === 'fin-curso').map((entry) => entry.date).sort()
-  if (!starts.length || !ends.length) return []
-  const start = dateFromIso(starts[0])
-  const end = dateFromIso(ends.at(-1))
-  if (!start || !end || start > end) return []
-
-  const teachingWeekdays = new Set((Array.isArray(group.horario) ? group.horario : [])
-    .filter((segment) => {
-      if (segment?.tutorType) return false
-      if (segment?.subjectId && group.subjectId && segment.subjectId !== group.subjectId) return false
-      return Number.isInteger(Number(segment?.dia)) && Number(segment.dia) >= 0 && Number(segment.dia) <= 4
-    })
-    .map((segment) => Number(segment.dia)))
-  if (!teachingWeekdays.size) return []
-
-  const result = []
-  for (const current = new Date(start); current <= end; current.setDate(current.getDate() + 1)) {
-    const weekday = current.getDay()
-    if (weekday === 0 || weekday === 6) continue
-    if (!teachingWeekdays.has(weekday - 1)) continue
-    const date = isoDate(current)
-    const assignedType = types.get(calendar.days?.[date])
-    if (assignedType && appliesToGroup(assignedType, group) && assignedType.lectivo === false) continue
-    result.push(date)
-  }
-  return result
-}
-
 function normalizeDay(snapshot, groupId) {
   const data = snapshot.data() || {}
   return {
@@ -101,22 +45,48 @@ function normalizeDay(snapshot, groupId) {
     rubricInstruments: Array.isArray(data.rubricInstruments) ? clone(data.rubricInstruments, []) : [],
     resources: Array.isArray(data.resources) ? clone(data.resources, []) : [],
     contents: Array.isArray(data.contents) ? clone(data.contents, []) : [],
+    sessionKey: data.sessionKey || null,
+    sessionType: data.sessionType || null,
+    title: String(data.title || ''),
+    color: data.color || null,
+    tutorType: data.tutorType || null,
+    subjectId: data.subjectId || null,
+    subject: String(data.subject || ''),
+    dayIndex: Number.isInteger(Number(data.dayIndex)) ? Number(data.dayIndex) : null,
+    moduleIndex: Number.isInteger(Number(data.moduleIndex)) ? Number(data.moduleIndex) : null,
+    primaryForDate: Boolean(data.primaryForDate),
     schemaVersion: Number(data.schemaVersion) || 2,
   }
 }
 
 export async function loadAndSynchronizeProgrammingDays({ group, calendar, teacherId }) {
-  const dates = programmingDatesForGroup(calendar, group)
-  if (!dates.length) return []
+  const sessions = programmingSessionsForGroup(calendar, group)
+  if (!sessions.length) return []
   const daysCollection = collection(db, 'grupos', group.id, 'programmingDays')
   const snapshot = await getDocs(daysCollection)
   const existing = new Map(snapshot.docs.map((item) => [item.id, normalizeDay(item, group.id)]))
-  const missing = dates.filter((date) => !existing.has(date))
+  const resolved = new Map()
+  const claimedLegacyDates = new Set()
+  sessions.forEach((session) => {
+    const exact = existing.get(session.id)
+    if (exact) {
+      resolved.set(session.id, { ...exact, ...session, id: exact.id })
+      return
+    }
+    const legacy = session.primaryForDate && !claimedLegacyDates.has(session.date)
+      ? existing.get(session.date)
+      : null
+    if (legacy) {
+      claimedLegacyDates.add(session.date)
+      resolved.set(session.id, { ...legacy, ...session, id: legacy.id })
+    }
+  })
+  const missing = sessions.filter((session) => !resolved.has(session.id))
   for (let offset = 0; offset < missing.length; offset += 450) {
     const batch = writeBatch(db)
-    missing.slice(offset, offset + 450).forEach((date) => {
-      batch.set(doc(daysCollection, date), {
-        date,
+    missing.slice(offset, offset + 450).forEach((session) => {
+      batch.set(doc(daysCollection, session.id), {
+        ...session,
         groupId: group.id,
         teacherId,
         academicYear: group.academicYear || '',
@@ -124,28 +94,42 @@ export async function loadAndSynchronizeProgrammingDays({ group, calendar, teach
         rubricInstruments: [],
         resources: [],
         contents: [],
-        schemaVersion: 2,
+        schemaVersion: 3,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       })
     })
     await batch.commit()
   }
-  return dates.map((date) => existing.get(date) || {
-    id: date,
-    date,
+  return sessions.map((session) => resolved.get(session.id) || {
+    ...session,
     groupId: group.id,
     notes: '',
     rubricInstruments: [],
     resources: [],
     contents: [],
-    schemaVersion: 2,
+    schemaVersion: 3,
   })
 }
 
 export async function loadProgrammingDay(groupId, date) {
-  const snapshot = await getDoc(doc(db, 'grupos', groupId, 'programmingDays', date))
-  return snapshot.exists() ? normalizeDay(snapshot, groupId) : null
+  const daysCollection = collection(db, 'grupos', groupId, 'programmingDays')
+  const snapshot = await getDocs(query(daysCollection, where('date', '==', date)))
+  const matching = snapshot.docs.map((item) => normalizeDay(item, groupId))
+  if (!matching.length) {
+    const legacy = await getDoc(doc(daysCollection, date))
+    return legacy.exists() ? normalizeDay(legacy, groupId) : null
+  }
+  const primary = matching.find((day) => day.primaryForDate)
+    || matching.find((day) => day.sessionType === 'teaching')
+    || matching[0]
+  const uniqueById = (items) => [...new Map(items.filter(Boolean).map((item) => [item.id, item])).values()]
+  return {
+    ...primary,
+    rubricInstruments: uniqueById(matching.flatMap((day) => day.rubricInstruments || [])),
+    resources: uniqueById(matching.flatMap((day) => day.resources || [])),
+    contents: uniqueById(matching.flatMap((day) => day.contents || [])),
+  }
 }
 
 export async function saveProgrammingDay(groupId, day, teacherId) {
@@ -157,14 +141,24 @@ export async function saveProgrammingDay(groupId, day, teacherId) {
     rubricInstruments: clone(day.rubricInstruments, []) || [],
     resources: clone(day.resources, []) || [],
     contents: clone(day.contents, []) || [],
-    schemaVersion: 2,
+    sessionKey: day.sessionKey || null,
+    sessionType: day.sessionType || null,
+    title: String(day.title || ''),
+    color: day.color || null,
+    tutorType: day.tutorType || null,
+    subjectId: day.subjectId || null,
+    subject: String(day.subject || ''),
+    dayIndex: Number.isInteger(Number(day.dayIndex)) ? Number(day.dayIndex) : null,
+    moduleIndex: Number.isInteger(Number(day.moduleIndex)) ? Number(day.moduleIndex) : null,
+    primaryForDate: Boolean(day.primaryForDate),
+    schemaVersion: 3,
     updatedAt: new Date().toISOString(),
   }
-  await setDoc(doc(db, 'grupos', groupId, 'programmingDays', day.date), payload, { merge: true })
+  await setDoc(doc(db, 'grupos', groupId, 'programmingDays', day.id || day.date), payload, { merge: true })
   return payload
 }
 
-export async function addRubricToProgrammingDay({ groupId, date, rubric, teacherId }) {
+export async function addRubricToProgrammingDay({ groupId, date, programmingDayId = date, session = {}, rubric, teacherId }) {
   const snapshot = rubricSnapshot(rubric)
   if (!snapshot) throw new Error('La rúbrica seleccionada no es válida.')
   const instrumentId = globalThis.crypto?.randomUUID?.() || `rubrica-${Date.now()}`
@@ -177,6 +171,7 @@ export async function addRubricToProgrammingDay({ groupId, date, rubric, teacher
     title: rubric.title,
     shortName: rubric.shortName || rubric.title,
     date,
+    sessionKey: session.sessionKey || null,
     rubric: snapshot,
     createdAt: new Date().toISOString(),
   }
@@ -186,12 +181,12 @@ export async function addRubricToProgrammingDay({ groupId, date, rubric, teacher
     nombre: rubric.title,
     nombreCorto: rubric.shortName || rubric.title,
     rubric: snapshot,
-    programming: { date, instrumentId },
+    programming: { date, programmingDayId, sessionKey: session.sessionKey || null, instrumentId },
   }
 
   await runTransaction(db, async (transaction) => {
     const groupReference = doc(db, 'grupos', groupId)
-    const dayReference = doc(db, 'grupos', groupId, 'programmingDays', date)
+    const dayReference = doc(db, 'grupos', groupId, 'programmingDays', programmingDayId)
     const [groupDocument, dayDocument] = await Promise.all([
       transaction.get(groupReference),
       transaction.get(dayReference),
@@ -202,10 +197,20 @@ export async function addRubricToProgrammingDay({ groupId, date, rubric, teacher
       date,
       groupId,
       teacherId,
+      sessionKey: session.sessionKey || null,
+      sessionType: session.sessionType || null,
+      title: String(session.title || ''),
+      color: session.color || null,
+      tutorType: session.tutorType || null,
+      subjectId: session.subjectId || null,
+      subject: String(session.subject || ''),
+      dayIndex: Number.isInteger(Number(session.dayIndex)) ? Number(session.dayIndex) : null,
+      moduleIndex: Number.isInteger(Number(session.moduleIndex)) ? Number(session.moduleIndex) : null,
+      primaryForDate: Boolean(session.primaryForDate),
       rubricInstruments: [...(dayData.rubricInstruments || []), instrument],
       resources: dayData.resources || [],
       notes: dayData.notes || '',
-      schemaVersion: 1,
+      schemaVersion: 3,
       updatedAt: new Date().toISOString(),
     }, { merge: true })
   })
@@ -215,6 +220,7 @@ export async function addRubricToProgrammingDay({ groupId, date, rubric, teacher
 export async function removeRubricFromProgrammingDay({
   groupId,
   date,
+  programmingDayId = date,
   instrument,
   evaluationStructure = [],
   dayRubricInstruments = [],
@@ -222,7 +228,7 @@ export async function removeRubricFromProgrammingDay({
 }) {
   if (!groupId || !date || !instrument?.id) return { removedIds: [] }
   const groupReference = doc(db, 'grupos', groupId)
-  const dayReference = doc(db, 'grupos', groupId, 'programmingDays', date)
+  const dayReference = doc(db, 'grupos', groupId, 'programmingDays', programmingDayId)
   const removed = removeEvaluationItems(evaluationStructure, (item) => item.id === instrument.gradebookItemId)
   const removedIds = removed.removedIds
   const batch = writeBatch(db)

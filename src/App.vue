@@ -3402,23 +3402,24 @@ async function migrateLegacyStudentIdentities(courses = []) {
 }
 
 function teachingScheduleBlocks(groups = teacherGroups.value) {
-  return groups.flatMap((group) => (group.horario || []).map((segment) => ({
-    type: 'teaching',
-    groupId: group.id,
-    course: group.nombre,
-    subjectId: segment.subjectId || group.subjectId || scheduleSubjectId(group.curso || group.nombre, group.asignatura),
-    subject: segment.subject || group.asignatura || '',
-    // Los horarios antiguos no guardaban el tipo por segmento. En ese caso se
-    // considera clase ordinaria para no ocultar por error días de programación.
-    tutorType: segment.tutorType || null,
-    classroom: segment.aula ?? group.aula ?? '',
-    color: scheduleColorFor({
-      subjectId: group.subjectId || scheduleSubjectId(group.curso || group.nombre, group.asignatura),
+  return groups.flatMap((group) => (group.horario || []).map((segment) => {
+    const subjectId = segment.subjectId || group.subjectId || scheduleSubjectId(group.curso || group.nombre, group.asignatura)
+    const tutorType = segment.tutorType || null
+    return {
+      type: 'teaching',
+      groupId: group.id,
       course: group.nombre,
-    }),
-    dayIndex: segment.dia,
-    moduleIndex: segment.tramo,
-  })))
+      subjectId,
+      subject: segment.subject || group.asignatura || '',
+      // Los horarios antiguos no guardaban el tipo por segmento. En ese caso se
+      // considera clase ordinaria para no ocultar por error días de programación.
+      tutorType,
+      classroom: segment.aula ?? group.aula ?? '',
+      color: segment.color || scheduleColorFor({ subjectId, tutorType, course: group.nombre }),
+      dayIndex: segment.dia,
+      moduleIndex: segment.tramo,
+    }
+  }))
 }
 
 function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
@@ -3438,6 +3439,9 @@ function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
     const first = groupBlocks[0]
     const subjectBlock = groupBlocks.find((block) => block.subjectId && !block.tutorType) || first
     const previous = groupsById.get(groupId)
+    const relatedAliases = existingGroups
+      .filter((group) => String(group.nombre || '').trim().toLocaleUpperCase('es-ES') === String(first.course || '').trim().toLocaleUpperCase('es-ES'))
+      .flatMap((group) => [group.id, ...(group.legacyIds || [])])
     groupsById.set(groupId, {
       ...(previous || {
         id: groupId,
@@ -3457,6 +3461,7 @@ function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
       tutorType: groupBlocks.find((block) => block.tutorType)?.tutorType || null,
       aula: first.classroom || '',
       color: scheduleColorFor(first),
+      legacyIds: [...new Set([...(previous?.legacyIds || []), ...relatedAliases].filter(Boolean))],
       horario: groupBlocks.map((block) => ({
         dia: block.dayIndex,
         tramo: block.moduleIndex,
@@ -3464,6 +3469,7 @@ function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
         subjectId: block.subjectId || null,
         subject: block.subject || '',
         tutorType: block.tutorType || null,
+        color: block.color || null,
       })),
     })
   })
@@ -3545,7 +3551,14 @@ async function saveScheduleBlock() {
   const currentBlock = scheduleBlock(slot.dayIndex, slot.moduleIndex)
   const isNonTeaching = !scheduleForm.value.course.trim()
   const selectedSegmentType = scheduleSegmentType(scheduleForm.value.nonTeachingKind)
-  const groupId = isNonTeaching ? null : (currentBlock?.groupId || scheduleForm.value.groupId || createGroupId())
+  const matchingGroupId = scheduleBlocks.value.find((item) => (
+    item.type !== 'nonTeaching'
+    && item.groupId
+    && String(item.course || '').trim().toLocaleUpperCase('es-ES') === scheduleForm.value.course.trim().toLocaleUpperCase('es-ES')
+  ))?.groupId || teacherGroups.value.find((group) => (
+    String(group.nombre || '').trim().toLocaleUpperCase('es-ES') === scheduleForm.value.course.trim().toLocaleUpperCase('es-ES')
+  ))?.id
+  const groupId = isNonTeaching ? null : (currentBlock?.groupId || scheduleForm.value.groupId || matchingGroupId || createGroupId())
   const block = {
     ...scheduleForm.value,
     course: isNonTeaching ? selectedSegmentType.title : scheduleForm.value.course.trim(),
@@ -3565,21 +3578,6 @@ async function saveScheduleBlock() {
     scheduleBlocks.value.push(block)
   } else {
     scheduleBlocks.value.splice(existingIndex, 1, block)
-    if (!isNonTeaching) {
-      scheduleBlocks.value = scheduleBlocks.value.map((item, index) => (
-        index !== existingIndex && item.groupId === groupId
-          ? {
-              ...item,
-              type: 'teaching',
-              course: block.course,
-              subjectId: block.subjectId,
-              subject: block.subject,
-              tutorType: block.tutorType,
-              color: block.color,
-            }
-          : item
-      ))
-    }
   }
   isSavingSchedule.value = true
   firestoreError.value = ''
@@ -3918,26 +3916,48 @@ const navigation = computed(() => [
 ])
 
 const groups = computed(() => {
-  const uniqueGroups = new Map()
+  const buckets = new Map()
   teacherGroups.value
     .filter((group) => Boolean(group.asignatura?.trim()) && Array.isArray(group.horario) && group.horario.length > 0)
     .forEach((group) => {
       const key = String(group.nombre || '').trim().toLocaleUpperCase('es-ES')
-      const existing = uniqueGroups.get(key)
-      if (!existing) {
-        uniqueGroups.set(key, {
-          ...group,
-          title: group.nombre,
-          subtitle: group.asignatura,
-          icon: 'mdi-function-variant',
-        })
-      } else {
-        existing.tutor = Boolean(existing.tutor || group.tutor)
-        const subjects = [...new Set([existing.subtitle, group.asignatura].filter(Boolean))]
-        existing.subtitle = subjects.join(' · ')
-      }
+      const entries = buckets.get(key) || []
+      entries.push(group)
+      buckets.set(key, entries)
     })
-  return [...uniqueGroups.values()]
+
+  return [...buckets.values()].map((entries) => {
+    const score = (group) => {
+      const students = group.studentsLoaded ? (group.alumnos?.length || 0) : (Number(group.studentCount) || 0)
+      const ordinarySessions = (group.horario || []).filter((segment) => !segment?.tutorType).length
+      return (students * 1000) + (ordinarySessions * 10) + (group.studentsLoaded ? 1 : 0)
+    }
+    const primary = [...entries].sort((left, right) => score(right) - score(left))[0]
+    const relatedGroupIds = [...new Set(entries.map((group) => group.id).filter(Boolean))]
+    const scheduleBySlot = new Map()
+    ;[primary, ...entries.filter((group) => group.id !== primary.id)].forEach((group) => {
+      ;(group.horario || []).forEach((segment) => {
+        const key = `${segment.dia}:${segment.tramo}`
+        if (!scheduleBySlot.has(key)) scheduleBySlot.set(key, { ...segment })
+      })
+    })
+    const subjects = [...new Set(entries.map((group) => group.asignatura).filter(Boolean))]
+    const ordinaryGroup = entries.find((group) => (group.horario || []).some((segment) => !segment?.tutorType)) || primary
+    return {
+      ...primary,
+      subjectId: ordinaryGroup.subjectId || primary.subjectId,
+      asignatura: ordinaryGroup.asignatura || primary.asignatura,
+      color: ordinaryGroup.color || primary.color,
+      horario: [...scheduleBySlot.values()],
+      tutor: entries.some((group) => group.tutor || (group.horario || []).some((segment) => segment?.tutorType)),
+      tutorType: entries.find((group) => group.tutorType)?.tutorType || null,
+      relatedGroupIds,
+      legacyIds: [...new Set(entries.flatMap((group) => [group.id, ...(group.legacyIds || [])]).filter(Boolean))],
+      title: primary.nombre,
+      subtitle: subjects.join(' · '),
+      icon: 'mdi-function-variant',
+    }
+  })
 })
 
 const selectedCareerGroup = computed(() => groups.value.find((group) => group.id === selectedCareerGroupId.value) || null)
@@ -4106,7 +4126,7 @@ function removeProgrammingAssessmentFromLoadedGroup({ groupId, itemIds = [] }) {
   })
 }
 
-async function createProgrammingDocument({ date }) {
+async function createProgrammingDocument({ date, ...session }) {
   const group = selectedCareerGroup.value
   if (!group) return
   await setActiveView('Documentos')
@@ -4114,6 +4134,7 @@ async function createProgrammingDocument({ date }) {
   documentCreatorRef.value?.newDocumentWithContext?.({
     groupId: group.id,
     date,
+    ...session,
   })
 }
 

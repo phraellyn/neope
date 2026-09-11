@@ -1688,6 +1688,9 @@ function editDocument(documentData) {
     return
   }
   selectedDocumentId.value = documentData.id
+  creationContext.value = documentData.programming && !documentData.programming.hidden
+    ? { ...documentData.programming }
+    : null
   createdAt.value = documentData.createdAt || null
   selectedTemplateKeys.value = templates.map((item) => item.key)
   selectedTemplateKey.value = template.key
@@ -1776,7 +1779,17 @@ function documentProgrammingContext() {
   const dateField = unifiedFields.value.find((field) => field.type === 'date' || field.key === 'date')
   const date = dateInputValue(fieldValues[dateField?.key] || creationContext.value?.date)
   const groupId = selectedGroupOption.value?.id || creationContext.value?.groupId || null
-  return groupId && date ? { groupId, date } : null
+  if (!groupId || !date) return null
+  const context = creationContext.value || {}
+  return {
+    groupId,
+    date,
+    ...(context.programmingDayId ? { programmingDayId: context.programmingDayId } : {}),
+    ...(context.sessionKey ? { sessionKey: context.sessionKey } : {}),
+    ...(context.sessionType ? { sessionType: context.sessionType } : {}),
+    ...(context.sessionTitle ? { sessionTitle: context.sessionTitle } : {}),
+    ...(context.sessionColor ? { sessionColor: context.sessionColor } : {}),
+  }
 }
 
 function documentAssessmentItem(documentId) {

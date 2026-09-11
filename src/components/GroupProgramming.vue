@@ -57,16 +57,23 @@ const eligibleRubrics = computed(() => rubrics.value.filter((rubric) => {
     : !rubric.subjectTitle || normalized(rubric.subjectTitle) === normalized(props.group.asignatura)
   return courseMatches && subjectMatches
 }))
-const hasTeachingSchedule = computed(() => (props.group.horario || []).some((segment) => !segment?.tutorType))
+const hasProgrammingSchedule = computed(() => (props.group.horario || []).some((segment) => (
+  Number.isInteger(Number(segment?.dia)) && Number(segment.dia) >= 0 && Number(segment.dia) <= 4
+)))
 
-const documentsByDate = computed(() => {
+function documentBelongsToDay(documentData, day) {
+  if (programmingDocumentDate(documentData) !== day.date) return false
+  const programming = documentData.programming || {}
+  if (programming.programmingDayId) return programming.programmingDayId === day.id
+    || (programming.sessionKey && programming.sessionKey === day.sessionKey)
+  if (programming.sessionKey) return programming.sessionKey === day.sessionKey
+  return Boolean(day.primaryForDate)
+}
+
+const documentsByDay = computed(() => {
   const result = new Map()
-  documents.value.forEach((documentData) => {
-    const date = programmingDocumentDate(documentData)
-    if (!date) return
-    const entries = result.get(date) || []
-    entries.push(documentData)
-    result.set(date, entries)
+  days.value.forEach((day) => {
+    result.set(day.id, documents.value.filter((documentData) => documentBelongsToDay(documentData, day)))
   })
   return result
 })
@@ -77,13 +84,25 @@ function dateLabel(date) {
     .replace(/^./, (letter) => letter.toLocaleUpperCase('es'))
 }
 
+function readableTextColor(backgroundColor) {
+  const hex = String(backgroundColor || '').replace('#', '')
+  if (!/^[0-9a-f]{6}$/iu.test(hex)) return '#294f7d'
+  const [red, green, blue] = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16))
+  return ((red * 299) + (green * 587) + (blue * 114)) / 1000 < 145 ? '#fff' : '#294f7d'
+}
+
+function dayHeaderStyle(day) {
+  if (!day.color) return undefined
+  return { backgroundColor: day.color, color: readableTextColor(day.color) }
+}
+
 function documentTitle(documentData) {
   return documentData.campos?.title || documentData.campos?.titulo || documentData.assessment?.shortName || documentData.plantilla?.nombre || 'Documento'
 }
 
-function registerDayElement(date, element) {
-  if (element) dayElements.set(date, element)
-  else dayElements.delete(date)
+function registerDayElement(dayId, element) {
+  if (element) dayElements.set(dayId, element)
+  else dayElements.delete(dayId)
 }
 
 async function load() {
@@ -102,7 +121,7 @@ async function load() {
     const today = new Date()
     const current = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
     const target = loadedDays.find((day) => day.date >= current) || loadedDays.at(-1)
-    dayElements.get(target?.date)?.scrollIntoView?.({ block: 'center', behavior: 'instant' })
+    dayElements.get(target?.id)?.scrollIntoView?.({ block: 'center', behavior: 'instant' })
   } catch (error) {
     console.error('No se ha podido cargar la programación:', error)
     showAppErrorToast(error.message || 'No se ha podido cargar la programación del grupo.')
@@ -111,8 +130,8 @@ async function load() {
   }
 }
 
-function isEditing(date) {
-  return editingDates.value.has(date)
+function isEditing(dayId) {
+  return editingDates.value.has(dayId)
 }
 
 function setSaving(date, value) {
@@ -123,7 +142,7 @@ function setSaving(date, value) {
 }
 
 async function persist(day) {
-  setSaving(day.date, true)
+  setSaving(day.id, true)
   try {
     for (const content of day.contents || []) {
       if (!content?.id || !String(content.code || '').trim()) continue
@@ -139,25 +158,25 @@ async function persist(day) {
     showAppErrorToast(error.message || 'No se han podido guardar los cambios de este día.')
     throw error
   } finally {
-    setSaving(day.date, false)
+    setSaving(day.id, false)
   }
 }
 
 async function toggleEditing(day) {
-  if (isEditing(day.date)) {
+  if (isEditing(day.id)) {
     try { await persist(day) } catch { return }
   }
   const next = new Set(editingDates.value)
-  if (next.has(day.date)) {
-    next.delete(day.date)
+  if (next.has(day.id)) {
+    next.delete(day.id)
     const noteEditors = new Set(noteEditorDates.value)
-    noteEditors.delete(day.date)
+    noteEditors.delete(day.id)
     noteEditorDates.value = noteEditors
   } else {
-    next.add(day.date)
+    next.add(day.id)
     if (day.notes) {
       const noteEditors = new Set(noteEditorDates.value)
-      noteEditors.add(day.date)
+      noteEditors.add(day.id)
       noteEditorDates.value = noteEditors
     }
   }
@@ -166,9 +185,9 @@ async function toggleEditing(day) {
 
 function openNoteEditor(day) {
   const next = new Set(noteEditorDates.value)
-  next.add(day.date)
+  next.add(day.id)
   noteEditorDates.value = next
-  nextTick(() => dayElements.get(day.date)?.querySelector?.('textarea')?.focus?.())
+  nextTick(() => dayElements.get(day.id)?.querySelector?.('textarea')?.focus?.())
 }
 
 function openRubrics(day) {
@@ -183,6 +202,8 @@ async function addRubric(rubric) {
     const result = await addRubricToProgrammingDay({
       groupId: props.group.id,
       date: day.date,
+      programmingDayId: day.id,
+      session: day,
       rubric,
       teacherId: props.teacherId,
     })
@@ -228,7 +249,7 @@ async function receiveFile(event) {
   const day = fileDay.value
   event.target.value = ''
   if (!file || !day) return
-  setSaving(day.date, true)
+  setSaving(day.id, true)
   try {
     const resource = await uploadProgrammingResource({
       teacherId: props.teacherId,
@@ -242,7 +263,7 @@ async function receiveFile(event) {
   } catch (error) {
     showAppErrorToast(error.message || 'No se ha podido subir el archivo.')
   } finally {
-    setSaving(day.date, false)
+    setSaving(day.id, false)
   }
 }
 
@@ -423,6 +444,7 @@ async function confirmInstrumentRemoval() {
       const result = await withRemovalTimeout(removeRubricFromProgrammingDay({
         groupId: props.group.id,
         date: target.day.date,
+        programmingDayId: target.day.id,
         instrument: target.value,
         evaluationStructure: props.group.evaluaciones?.estructura || [],
         dayRubricInstruments: target.day.rubricInstruments,
@@ -457,7 +479,7 @@ function removalDeletesAssessment() {
 }
 
 async function flush() {
-  const pending = days.value.filter((day) => isEditing(day.date))
+  const pending = days.value.filter((day) => isEditing(day.id))
   await Promise.allSettled(pending.map((day) => persist(day)))
 }
 
@@ -481,35 +503,38 @@ defineExpose({ flush })
     <div v-if="loading" class="programming-state"><v-progress-circular indeterminate color="primary" /><span>Preparando los días lectivos…</span></div>
     <div v-else-if="!days.length" class="programming-state">
       <v-icon icon="mdi-calendar-alert-outline" size="42" color="primary" />
-      <strong>{{ hasTeachingSchedule ? 'Falta delimitar el curso' : 'No hay clases en el horario' }}</strong>
-      <span v-if="hasTeachingSchedule">Asigna un inicio y un fin de curso a este grupo en el calendario escolar.</span>
-      <span v-else>Configura al menos una clase de esta asignatura en el horario semanal.</span>
+      <strong>{{ hasProgrammingSchedule ? 'Falta delimitar el curso' : 'No hay clases ni tutorías en el horario' }}</strong>
+      <span v-if="hasProgrammingSchedule">Asigna un inicio y un fin de curso a este grupo en el calendario escolar.</span>
+      <span v-else>Configura al menos una clase o tutoría para este grupo en el horario semanal.</span>
     </div>
     <div v-else class="programming-days">
       <article
         v-for="day in days"
-        :key="day.date"
-        :ref="(element) => registerDayElement(day.date, element)"
+        :key="day.id"
+        :ref="(element) => registerDayElement(day.id, element)"
         class="programming-day"
-        :class="{ 'programming-day-editing': isEditing(day.date) }"
+        :class="{ 'programming-day-editing': isEditing(day.id), 'programming-day-tutoring': day.sessionType === 'tutoring' }"
       >
-        <header class="programming-day-header">
-          <div><strong>{{ dateLabel(day.date) }}</strong></div>
+        <header class="programming-day-header" :style="dayHeaderStyle(day)">
+          <div class="programming-day-heading">
+            <strong>{{ dateLabel(day.date) }}</strong>
+            <span>{{ day.title }}</span>
+          </div>
           <v-btn
             icon="mdi-cog-outline"
             size="small"
             rounded="circle"
-            :loading="savingDates.has(day.date)"
-            :color="isEditing(day.date) ? 'primary' : undefined"
-            :variant="isEditing(day.date) ? 'tonal' : 'text'"
-            :aria-label="isEditing(day.date) ? 'Finalizar edición' : 'Configurar día'"
+            :loading="savingDates.has(day.id)"
+            :color="isEditing(day.id) ? undefined : 'currentColor'"
+            :variant="isEditing(day.id) ? 'flat' : 'text'"
+            :aria-label="isEditing(day.id) ? 'Finalizar edición' : 'Configurar sesión'"
             @click="toggleEditing(day)"
           />
         </header>
 
         <div class="programming-day-body">
           <v-textarea
-            v-if="isEditing(day.date) && noteEditorDates.has(day.date)"
+            v-if="isEditing(day.id) && noteEditorDates.has(day.id)"
             v-model="day.notes"
             label="Anotaciones"
             placeholder="Planificación, incidencias, recordatorios…"
@@ -529,7 +554,7 @@ defineExpose({ flush })
               :content="content"
               :templates="templates"
               :resources="day.resources"
-              :editing="isEditing(day.date)"
+              :editing="isEditing(day.id)"
               :compiling="compilingContentIds.has(content.id)"
               @update-code="setContentValue(content, 'code', $event)"
               @update-template="setContentValue(content, 'templateFile', $event)"
@@ -539,9 +564,9 @@ defineExpose({ flush })
             />
           </section>
 
-          <section v-if="documentsByDate.get(day.date)?.length || day.rubricInstruments.length" class="programming-instruments">
+          <section v-if="documentsByDay.get(day.id)?.length || day.rubricInstruments.length" class="programming-instruments">
             <div
-              v-for="documentData in documentsByDate.get(day.date) || []"
+              v-for="documentData in documentsByDay.get(day.id) || []"
               :key="documentData.id"
               class="programming-chip programming-document"
             >
@@ -550,12 +575,12 @@ defineExpose({ flush })
                 <span>{{ documentTitle(documentData) }}</span>
                 <small v-if="documentData.assessment?.evaluable">Evaluable</small>
               </a>
-              <v-btn v-if="isEditing(day.date)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Retirar documento" @click="requestInstrumentRemoval(day, 'document', documentData)" />
+              <v-btn v-if="isEditing(day.id)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Retirar documento" @click="requestInstrumentRemoval(day, 'document', documentData)" />
             </div>
             <div v-for="instrument in day.rubricInstruments" :key="instrument.id" class="programming-chip programming-rubric">
               <v-icon icon="mdi-table-star" size="18" />
               <span>{{ instrument.title }}</span>
-              <v-btn v-if="isEditing(day.date)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar rúbrica" @click="requestInstrumentRemoval(day, 'rubric', instrument)" />
+              <v-btn v-if="isEditing(day.id)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar rúbrica" @click="requestInstrumentRemoval(day, 'rubric', instrument)" />
             </div>
           </section>
 
@@ -566,12 +591,12 @@ defineExpose({ flush })
                 <span>{{ resource.title }}</span>
                 <code v-if="resource.compilerName && String(resource.contentType || '').startsWith('image/')">{{ resource.compilerName }}</code>
               </a>
-              <v-btn v-if="isEditing(day.date)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar recurso" @click="removeResource(day, resource)" />
+              <v-btn v-if="isEditing(day.id)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar recurso" @click="removeResource(day, resource)" />
             </div>
           </section>
 
-          <footer v-if="isEditing(day.date)" class="programming-tools">
-            <v-btn size="small" variant="text" prepend-icon="mdi-file-plus-outline" @click="emit('new-document', { date: day.date })">Documento</v-btn>
+          <footer v-if="isEditing(day.id)" class="programming-tools">
+            <v-btn size="small" variant="text" prepend-icon="mdi-file-plus-outline" @click="emit('new-document', { date: day.date, programmingDayId: day.id, sessionKey: day.sessionKey, sessionType: day.sessionType, sessionTitle: day.title, sessionColor: day.color })">Documento</v-btn>
             <v-btn size="small" variant="text" prepend-icon="mdi-table-star" @click="openRubrics(day)">Rúbrica</v-btn>
             <v-btn size="small" variant="text" prepend-icon="mdi-note-edit-outline" @click="openNoteEditor(day)">Anotación</v-btn>
             <v-btn size="small" variant="text" prepend-icon="mdi-language-latex" @click="addContent(day)">Contenido</v-btn>
@@ -632,8 +657,10 @@ defineExpose({ flush })
 .group-programming { height: 100%; overflow: auto; background: #f4f7fb; }
 .programming-days { width: min(1080px, 100%); margin: 0 auto; padding: 12px; display: grid; gap: 10px; }
 .programming-day { background: #fff; border: 1px solid #d6e0ed; border-radius: 7px; overflow: hidden; box-shadow: 0 2px 7px rgb(28 66 111 / 5%); content-visibility: auto; contain-intrinsic-size: 150px; }
-.programming-day-header { min-height: 42px; padding: 4px 8px 4px 14px; display: flex; align-items: center; justify-content: space-between; color: #294f7d; background: #e8f0fa; border-bottom: 1px solid #d6e0ed; }
-.programming-day-editing .programming-day-header { color: #fff; background: #315f96; }
+.programming-day-header { min-height: 42px; padding: 4px 8px 4px 14px; display: flex; align-items: center; justify-content: space-between; color: #294f7d; background: #e8f0fa; border-bottom: 1px solid rgb(23 52 82 / 18%); }
+.programming-day-heading { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.programming-day-heading span { font-size: .76rem; font-weight: 700; opacity: .82; text-transform: uppercase; letter-spacing: .055em; }
+.programming-day-editing .programming-day-header { box-shadow: inset 0 0 0 2px currentColor; }
 .programming-day-body { padding: 12px; display: grid; gap: 10px; }
 .programming-notes { margin: 0; white-space: pre-wrap; color: #344e6e; line-height: 1.5; }
 .programming-contents { display: grid; gap: 10px; }
