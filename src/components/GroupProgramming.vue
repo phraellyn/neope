@@ -34,6 +34,8 @@ const documents = ref([])
 const rubrics = ref([])
 const loading = ref(false)
 const editingDates = ref(new Set())
+const expandedDayIds = ref(new Set())
+const focusedDayId = ref(null)
 const noteEditorDates = ref(new Set())
 const savingDates = ref(new Set())
 const dayElements = new Map()
@@ -104,6 +106,58 @@ function registerDayElement(dayId, element) {
   else dayElements.delete(dayId)
 }
 
+function todayIso() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+function isExpanded(dayId) {
+  return expandedDayIds.value.has(dayId)
+}
+
+function setExpanded(dayId, expanded) {
+  const next = new Set(expandedDayIds.value)
+  if (expanded) next.add(dayId)
+  else next.delete(dayId)
+  expandedDayIds.value = next
+}
+
+function toggleDayExpansion(day) {
+  if (!day?.id) return
+  setExpanded(day.id, !isExpanded(day.id))
+}
+
+function isFocusedDay(day) {
+  return day?.id && day.id === focusedDayId.value
+}
+
+function focusLabel(day) {
+  if (!isFocusedDay(day)) return ''
+  return day.date === todayIso() ? 'Hoy' : 'Próxima clase'
+}
+
+function countLabel(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function daySummary(day) {
+  const documentsCount = documentsByDay.value.get(day.id)?.length || 0
+  const notesCount = String(day.notes || '').trim() ? 1 : 0
+  const rubricCount = day.rubricInstruments?.length || 0
+  const contentCount = day.contents?.length || 0
+  const fileCount = (day.resources || []).filter((resource) => resource.type === 'file').length
+  const linkCount = (day.resources || []).filter((resource) => resource.type === 'link').length
+  const parts = [
+    documentsCount && countLabel(documentsCount, 'documento', 'documentos'),
+    notesCount && countLabel(notesCount, 'anotación', 'anotaciones'),
+    rubricCount && countLabel(rubricCount, 'rúbrica', 'rúbricas'),
+    contentCount && countLabel(contentCount, 'contenido', 'contenidos'),
+    fileCount && countLabel(fileCount, 'archivo', 'archivos'),
+    linkCount && countLabel(linkCount, 'enlace', 'enlaces'),
+  ].filter(Boolean)
+  return parts.join(' · ') || 'Sin contenido'
+}
+
 async function load() {
   if (!props.group?.id || !props.teacherId) return
   loading.value = true
@@ -117,9 +171,12 @@ async function load() {
     documents.value = loadedDocuments
     rubrics.value = loadedRubrics
     await nextTick()
-    const today = new Date()
-    const current = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const current = todayIso()
     const target = loadedDays.find((day) => day.date >= current) || loadedDays.at(-1)
+    focusedDayId.value = target?.id || null
+    const availableIds = new Set(loadedDays.map((day) => day.id))
+    const preserved = [...expandedDayIds.value].filter((id) => availableIds.has(id))
+    expandedDayIds.value = new Set(preserved.length ? preserved : (target?.id ? [target.id] : []))
     dayElements.get(target?.id)?.scrollIntoView?.({ block: 'center', behavior: 'instant' })
   } catch (error) {
     console.error('No se ha podido cargar la programación:', error)
@@ -163,6 +220,7 @@ async function persist(day) {
 }
 
 async function toggleEditing(day) {
+  setExpanded(day.id, true)
   if (isEditing(day.id)) {
     try { await persist(day) } catch { return }
   }
@@ -515,26 +573,46 @@ defineExpose({ flush })
         :key="day.id"
         :ref="(element) => registerDayElement(day.id, element)"
         class="programming-day"
-        :class="{ 'programming-day-editing': isEditing(day.id), 'programming-day-tutoring': day.sessionType === 'tutoring' }"
+        :class="{
+          'programming-day-editing': isEditing(day.id),
+          'programming-day-expanded': isExpanded(day.id) || isEditing(day.id),
+          'programming-day-current': isFocusedDay(day),
+          'programming-day-tutoring': day.sessionType === 'tutoring',
+        }"
       >
-        <header class="programming-day-header" :style="dayHeaderStyle(day)">
+        <header
+          class="programming-day-header"
+          :style="dayHeaderStyle(day)"
+          role="button"
+          tabindex="0"
+          :aria-expanded="isExpanded(day.id) || isEditing(day.id)"
+          @click="toggleDayExpansion(day)"
+          @keydown.enter.prevent="toggleDayExpansion(day)"
+          @keydown.space.prevent="toggleDayExpansion(day)"
+        >
           <div class="programming-day-heading">
             <strong>{{ dateLabel(day.date) }}</strong>
             <span>{{ day.title }}</span>
+            <em v-if="focusLabel(day)" class="programming-day-focus-label">{{ focusLabel(day) }}</em>
           </div>
-          <v-btn
-            icon="mdi-cog-outline"
-            size="small"
-            rounded="circle"
-            :loading="savingDates.has(day.id)"
-            :color="isEditing(day.id) ? undefined : 'currentColor'"
-            :variant="isEditing(day.id) ? 'flat' : 'text'"
-            :aria-label="isEditing(day.id) ? 'Finalizar edición' : 'Configurar sesión'"
-            @click="toggleEditing(day)"
-          />
+          <div class="programming-day-actions">
+            <v-icon :icon="isExpanded(day.id) || isEditing(day.id) ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="20" />
+            <v-btn
+              icon="mdi-cog-outline"
+              size="small"
+              rounded="circle"
+              :loading="savingDates.has(day.id)"
+              :color="isEditing(day.id) ? undefined : 'currentColor'"
+              :variant="isEditing(day.id) ? 'flat' : 'text'"
+              :aria-label="isEditing(day.id) ? 'Finalizar edición' : 'Configurar sesión'"
+              @click.stop="toggleEditing(day)"
+            />
+          </div>
         </header>
 
-        <div class="programming-day-body">
+        <p v-if="!isExpanded(day.id) && !isEditing(day.id)" class="programming-day-summary">{{ daySummary(day) }}</p>
+
+        <div v-else class="programming-day-body">
           <v-textarea
             v-if="isEditing(day.id) && noteEditorDates.has(day.id)"
             v-model="day.notes"
@@ -658,12 +736,17 @@ defineExpose({ flush })
 <style scoped>
 .group-programming { height: 100%; overflow: auto; background: #f4f7fb; }
 .programming-days { width: min(1080px, 100%); margin: 0 auto; padding: 12px; display: grid; gap: 10px; }
-.programming-day { background: #fff; border: 1px solid #d6e0ed; border-radius: 7px; overflow: hidden; box-shadow: 0 2px 7px rgb(28 66 111 / 5%); content-visibility: auto; contain-intrinsic-size: 150px; }
-.programming-day-header { min-height: 42px; padding: 4px 8px 4px 14px; display: flex; align-items: center; justify-content: space-between; color: #294f7d; background: #e8f0fa; border-bottom: 1px solid rgb(23 52 82 / 18%); }
+.programming-day { background: #fff; border: 1px solid #d6e0ed; border-radius: 7px; overflow: hidden; box-shadow: 0 2px 7px rgb(28 66 111 / 5%); content-visibility: auto; contain-intrinsic-size: 72px; }
+.programming-day-header { min-height: 42px; padding: 4px 8px 4px 14px; display: flex; align-items: center; justify-content: space-between; color: #294f7d; background: #e8f0fa; border-bottom: 1px solid rgb(23 52 82 / 18%); cursor: pointer; user-select: none; }
+.programming-day-header:focus-visible { outline: 3px solid rgb(49 95 150 / 35%); outline-offset: -3px; }
 .programming-day-heading { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
 .programming-day-heading span { font-size: .76rem; font-weight: 700; opacity: .82; text-transform: uppercase; letter-spacing: .055em; }
+.programming-day-focus-label { padding: 2px 6px; border-radius: 8px; background: rgb(255 255 255 / 32%); color: inherit; font-size: .57rem; font-style: normal; font-weight: 850; letter-spacing: .05em; text-transform: uppercase; }
+.programming-day-actions { display: inline-flex; align-items: center; gap: 2px; }
+.programming-day-current { border-color: #3974b7; box-shadow: 0 0 0 2px rgb(57 116 183 / 20%), 0 4px 10px rgb(28 66 111 / 10%); }
 .programming-day-editing .programming-day-header { box-shadow: inset 0 0 0 2px currentColor; }
 .programming-day-body { padding: 12px; display: grid; gap: 10px; }
+.programming-day-summary { margin: 0; padding: 9px 14px 10px; color: #657e9c; font-size: .74rem; line-height: 1.35; }
 .programming-notes { margin: 0; white-space: pre-wrap; color: #344e6e; line-height: 1.5; }
 .programming-contents { display: grid; gap: 10px; }
 .programming-instruments, .programming-resources { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 9px; border-top: 1px solid #e3e9f1; }

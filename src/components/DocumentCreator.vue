@@ -101,6 +101,7 @@ const documentContent = ref(createDocumentContent())
 const curriculumDialog = ref(false)
 const sourceFileInput = ref(null)
 const sourceFiles = ref([])
+const isPreparingSourceFiles = ref(false)
 const sourceLatexDraft = ref('')
 // El creador actual sigue trabajando con una cola para conservar su interfaz,
 // pero esa cola ya es la lista de bloques del modelo de contenido común.
@@ -256,24 +257,112 @@ function sourceCompilerName(file, index = 0) {
   return raw || `fuente-${index + 1}`
 }
 
-function onSourceFilesSelected(event) {
+function imageJpegName(file, index = 0) {
+  const raw = String(file?.name || `imagen-${index + 1}`).replace(/\.[^.]+$/, '') || `imagen-${index + 1}`
+  return `${raw}.jpg`
+}
+
+async function decodeImageForJpeg(file) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+      return {
+        source: bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+        release: () => bitmap.close?.(),
+      }
+    } catch {
+      // Safari no implementa todas las variantes de createImageBitmap para
+      // HEIC; el elemento Image sí puede decodificarlo en iPadOS.
+    }
+  }
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const element = new Image()
+      element.onload = () => resolve(element)
+      element.onerror = () => reject(new Error(`No se ha podido leer «${file.name}» como imagen.`))
+      element.src = objectUrl
+    })
+    return {
+      source: image,
+      width: image.naturalWidth || image.width,
+      height: image.naturalHeight || image.height,
+      release: () => URL.revokeObjectURL(objectUrl),
+    }
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl)
+    throw error
+  }
+}
+
+async function normalizeSourceImage(file, index) {
+  const decoded = await decodeImageForJpeg(file)
+  try {
+    const largestSide = Math.max(decoded.width, decoded.height, 1)
+    // Mantiene suficiente definición para OCR y diagramas, pero impide que
+    // varias fotos de iPad superen el límite práctico de la llamada de IA.
+    const scale = Math.min(1, 2800 / largestSide)
+    const width = Math.max(1, Math.round(decoded.width * scale))
+    const height = Math.max(1, Math.round(decoded.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d', { alpha: false })
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, width, height)
+    context.drawImage(decoded.source, 0, 0, width, height)
+    const blob = await new Promise((resolve, reject) => canvas.toBlob(
+      (result) => result ? resolve(result) : reject(new Error(`No se ha podido convertir «${file.name}» a JPEG.`)),
+      'image/jpeg',
+      0.9,
+    ))
+    return new File([blob], imageJpegName(file, index), {
+      type: 'image/jpeg',
+      lastModified: file.lastModified || Date.now(),
+    })
+  } finally {
+    decoded.release()
+  }
+}
+
+async function onSourceFilesSelected(event) {
   const files = [...(event.target?.files || [])]
   if (!files.length) return
-  revokeSourceFiles()
-  sourceFiles.value = files.map((file, index) => ({
-    id: globalThis.crypto?.randomUUID?.() || `source-${Date.now()}-${index}`,
-    file,
-    name: file.name,
-    contentType: file.type || '',
-    size: file.size,
-    compilerName: sourceCompilerName(file, index),
-    previewUrl: URL.createObjectURL(file),
-  }))
-  const type = sourceFileType(files[0])
-  setDocumentSource(type, sourceOptionsFor(type, {
-    files: sourceFiles.value.map(({ id, name, contentType, size, compilerName }) => ({ id, name, contentType, size, compilerName })),
-  }))
-  if (event.target) event.target.value = ''
+  isPreparingSourceFiles.value = true
+  try {
+    // La conversión de varias fotos de iPad se hace de una en una: decodificar
+    // varios HEIC grandes simultáneamente puede provocar presión de memoria en
+    // Safari y cerrar la pestaña antes de llegar a la generación.
+    const normalizedFiles = []
+    for (const [index, file] of files.entries()) {
+      normalizedFiles.push(
+        file.type.startsWith('image/') || /\.(?:heic|heif|png|jpe?g|webp)$/i.test(file.name || '')
+          ? await normalizeSourceImage(file, index)
+          : file,
+      )
+    }
+    revokeSourceFiles()
+    sourceFiles.value = normalizedFiles.map((file, index) => ({
+      id: globalThis.crypto?.randomUUID?.() || `source-${Date.now()}-${index}`,
+      file,
+      name: file.name,
+      contentType: file.type || '',
+      size: file.size,
+      compilerName: sourceCompilerName(file, index),
+      previewUrl: URL.createObjectURL(file),
+    }))
+    const type = sourceFileType(normalizedFiles[0])
+    setDocumentSource(type, sourceOptionsFor(type, {
+      files: sourceFiles.value.map(({ id, name, contentType, size, compilerName }) => ({ id, name, contentType, size, compilerName })),
+    }))
+  } catch (error) {
+    showAppErrorToast(error?.message || 'No se han podido preparar las imágenes seleccionadas.')
+  } finally {
+    isPreparingSourceFiles.value = false
+    if (event.target) event.target.value = ''
+  }
 }
 
 function removeSourceFile(id) {
@@ -3040,8 +3129,8 @@ defineExpose({
                   @compile="compileCurrentSourceLatex"
                 />
                 <footer class="document-source-files">
-                  <input ref="sourceFileInput" type="file" accept="image/png,image/jpeg,application/pdf,.png,.jpg,.jpeg,.pdf" multiple hidden @change="onSourceFilesSelected">
-                  <v-btn prepend-icon="mdi-paperclip-plus" size="small" rounded="pill" variant="text" @click="chooseSourceFiles">Añadir imagen o PDF</v-btn>
+                  <input ref="sourceFileInput" type="file" accept="image/*,image/heic,image/heif,application/pdf,.heic,.heif,.png,.jpg,.jpeg,.webp,.pdf" multiple hidden @change="onSourceFilesSelected">
+                  <v-btn prepend-icon="mdi-paperclip-plus" size="small" rounded="pill" variant="text" :loading="isPreparingSourceFiles" :disabled="isPreparingSourceFiles" @click="chooseSourceFiles">Añadir imágenes o PDF</v-btn>
                   <div v-if="sourceFiles.length" class="document-source-file-list">
                     <article v-for="file in sourceFiles" :key="file.id">
                       <img v-if="file.contentType.startsWith('image/')" :src="file.previewUrl" alt="">

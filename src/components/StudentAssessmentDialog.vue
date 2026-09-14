@@ -21,6 +21,10 @@ const localResult = ref(null)
 const exercises = ref([])
 const loading = ref(false)
 const changed = ref(false)
+// La matriz no depende del alumno, solo del documento evaluable. Mantener una
+// única matriz activa evita reconstruirla y volver a montar sus PDF al pasar
+// de un alumno a otro en el aula, sin retener recursos de documentos antiguos.
+let activeDocumentMatrix = null
 const dialog = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value),
@@ -32,10 +36,15 @@ const total = computed(() => Number(localResult.value?.total) || 0)
 
 const clone = (value) => value === undefined || value === null ? null : JSON.parse(JSON.stringify(value))
 
+function documentMatrixKey(item) {
+  const assessment = item?.documentAssessment || {}
+  return assessment.documentId ? `${assessment.documentId}:${item?.id || ''}` : ''
+}
+
 async function initialize() {
   changed.value = false
-  exercises.value = []
   if (isRubric.value) {
+    exercises.value = []
     localResult.value = createRubricAssessment(
       props.item.rubric,
       props.result?.type === 'rubric' ? clone(props.result) : null,
@@ -46,9 +55,19 @@ async function initialize() {
     localResult.value = props.result?.type === 'document'
       ? clone(props.result)
       : { type: 'document', total: 0, selectedAchievementIds: [], updatedAt: new Date().toISOString() }
+    const matrixKey = documentMatrixKey(props.item)
+    if (matrixKey && activeDocumentMatrix?.key === matrixKey) {
+      // No vaciamos `exercises`: si Vuetify conserva el diálogo montado, los
+      // visores PDF permanecen intactos; si no, al menos reutilizan la matriz.
+      exercises.value = activeDocumentMatrix.exercises
+      return
+    }
+    exercises.value = []
     loading.value = true
     try {
-      exercises.value = await loadDocumentAssessmentExercises(props.item)
+      const loadedExercises = await loadDocumentAssessmentExercises(props.item)
+      activeDocumentMatrix = { key: matrixKey, exercises: loadedExercises }
+      exercises.value = loadedExercises
     } catch (error) {
       showAppErrorToast(error?.message || 'No se ha podido abrir la matriz de evaluación.')
       dialog.value = false
