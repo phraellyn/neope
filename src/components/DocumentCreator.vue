@@ -257,6 +257,20 @@ function sourceCompilerName(file, index = 0) {
   return raw || `fuente-${index + 1}`
 }
 
+function uniqueSourceCompilerName(file, index, existingNames = new Set()) {
+  const base = sourceCompilerName(file, index)
+  if (!existingNames.has(base.toLocaleLowerCase('es'))) return base
+  const extension = base.match(/\.[A-Za-z0-9]+$/)?.[0] || ''
+  const stem = extension ? base.slice(0, -extension.length) : base
+  let suffix = 2
+  let candidate = `${stem}-${suffix}${extension}`
+  while (existingNames.has(candidate.toLocaleLowerCase('es'))) {
+    suffix += 1
+    candidate = `${stem}-${suffix}${extension}`
+  }
+  return candidate
+}
+
 function imageJpegName(file, index = 0) {
   const raw = String(file?.name || `imagen-${index + 1}`).replace(/\.[^.]+$/, '') || `imagen-${index + 1}`
   return `${raw}.jpg`
@@ -328,7 +342,14 @@ async function normalizeSourceImage(file, index) {
 }
 
 async function onSourceFilesSelected(event) {
-  const files = [...(event.target?.files || [])]
+  const selectedFiles = [...(event.target?.files || [])]
+  const remainingSlots = Math.max(0, 6 - sourceFiles.value.length)
+  const files = selectedFiles.slice(0, remainingSlots)
+  if (!remainingSlots) {
+    showAppErrorToast('Puedes utilizar un máximo de seis imágenes o páginas por documento.')
+    if (event.target) event.target.value = ''
+    return
+  }
   if (!files.length) return
   isPreparingSourceFiles.value = true
   try {
@@ -337,26 +358,36 @@ async function onSourceFilesSelected(event) {
     // Safari y cerrar la pestaña antes de llegar a la generación.
     const normalizedFiles = []
     for (const [index, file] of files.entries()) {
+      const sourceIndex = sourceFiles.value.length + index
       normalizedFiles.push(
         file.type.startsWith('image/') || /\.(?:heic|heif|png|jpe?g|webp)$/i.test(file.name || '')
-          ? await normalizeSourceImage(file, index)
+          ? await normalizeSourceImage(file, sourceIndex)
           : file,
       )
     }
-    revokeSourceFiles()
-    sourceFiles.value = normalizedFiles.map((file, index) => ({
-      id: globalThis.crypto?.randomUUID?.() || `source-${Date.now()}-${index}`,
-      file,
-      name: file.name,
-      contentType: file.type || '',
-      size: file.size,
-      compilerName: sourceCompilerName(file, index),
-      previewUrl: URL.createObjectURL(file),
-    }))
-    const type = sourceFileType(normalizedFiles[0])
+    const usedCompilerNames = new Set(sourceFiles.value.map((file) => String(file.compilerName || '').toLocaleLowerCase('es')))
+    const appendedFiles = normalizedFiles.map((file, index) => {
+      const sourceIndex = sourceFiles.value.length + index
+      const compilerName = uniqueSourceCompilerName(file, sourceIndex, usedCompilerNames)
+      usedCompilerNames.add(compilerName.toLocaleLowerCase('es'))
+      return {
+        id: globalThis.crypto?.randomUUID?.() || `source-${Date.now()}-${sourceIndex}`,
+        file,
+        name: file.name,
+        contentType: file.type || '',
+        size: file.size,
+        compilerName,
+        previewUrl: URL.createObjectURL(file),
+      }
+    })
+    sourceFiles.value = [...sourceFiles.value, ...appendedFiles]
+    const type = sourceFileType(sourceFiles.value[0].file || sourceFiles.value[0])
     setDocumentSource(type, sourceOptionsFor(type, {
       files: sourceFiles.value.map(({ id, name, contentType, size, compilerName }) => ({ id, name, contentType, size, compilerName })),
     }))
+    if (selectedFiles.length > files.length) {
+      showAppErrorToast('Se han añadido las primeras imágenes hasta alcanzar el máximo de seis páginas.')
+    }
   } catch (error) {
     showAppErrorToast(error?.message || 'No se han podido preparar las imágenes seleccionadas.')
   } finally {
