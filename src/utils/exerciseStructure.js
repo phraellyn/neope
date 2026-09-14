@@ -525,8 +525,10 @@ export function buildExerciseLatex(value = {}, options = {}) {
     includeDurationMetadata ? scoreCommand('T', structure.tiempo) : '',
   ].filter(Boolean).join(' ')
   const firstLine = `\\ej${exerciseMetadata ? ` ${exerciseMetadata}\\\\` : ''}`
-  const chunks = [firstLine]
-  if (text(structure.enunciado).trim()) chunks.push(structure.enunciado.trim())
+  const statement = text(structure.enunciado).trim()
+  // `\\` ya provoca el salto de línea visual. Una línea vacía adicional crea
+  // un nuevo párrafo y desperdicia altura en todos los documentos.
+  const chunks = [statement ? `${firstLine}\n${statement}` : firstLine]
   if (!structure.apartados.length && includeAnswers && text(structure.respuesta).trim()) {
     chunks.push(answerCommand(structure.respuesta, 0))
   }

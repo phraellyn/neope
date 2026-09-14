@@ -17,7 +17,7 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
-import { getIdTokenResult, onIdTokenChanged, signOut } from 'firebase/auth'
+import { getIdTokenResult, onAuthStateChanged, signOut } from 'firebase/auth'
 import { deleteObject, getDownloadURL, listAll, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
@@ -48,7 +48,16 @@ import StudentPortal from './components/StudentPortal.vue'
 import RubricManager from './components/RubricManager.vue'
 import { programmingDatesForGroup } from './services/programmingRepository'
 import { mathSubjects, normalizeHierarchySelection } from './data/mathCurriculum'
-import { deleteStudentIdentitiesEverywhere, saveStudentIdentities } from './services/localStudentIdentity'
+import {
+  deleteStudentIdentitiesEverywhere,
+  LOCAL_IDENTITY_BACKUP_EVENT,
+  saveStudentIdentities,
+} from './services/localStudentIdentity'
+import {
+  authSessionMatches,
+  hasAuthorizedRole,
+  needsAdministratorBootstrap,
+} from './utils/authSession'
 import { normalizeDisplayMathDelimiters } from './utils/latexNormalization'
 import { showAppErrorToast } from './composables/useAppErrorToast'
 import {
@@ -199,16 +208,53 @@ const isLoadingTemplates = ref(false)
 const isSavingTemplate = ref(false)
 const templatesError = ref('')
 
-;[
+const teacherUiErrors = [
   mathConceptsError,
   teacherProfileError,
   exercisesError,
   templatesError,
   firestoreError,
   exerciseDeleteError,
-].forEach((source) => watch(source, (message) => {
-  if (message) showAppErrorToast(message)
-}))
+]
+
+teacherUiErrors.forEach((source) => {
+  let lastPresentedError = ''
+  watch([source, authReady, authRole], ([message, ready, role]) => {
+    if (!message) {
+      lastPresentedError = ''
+      return
+    }
+    if (!ready || role !== 'teacher' || message === lastPresentedError) return
+    lastPresentedError = message
+    showAppErrorToast(message)
+  })
+})
+
+function isActiveTeacherSession(uid) {
+  return Boolean(uid && auth.currentUser?.uid === uid && currentTeacherId.value === uid)
+}
+
+let teacherTokenRefreshPromise = null
+
+function isFirestoreAuthError(error) {
+  const code = String(error?.code || '')
+  return code.endsWith('permission-denied') || code.endsWith('unauthenticated')
+}
+
+async function runTeacherReadWithAuthRetry(sessionUid, read) {
+  try {
+    return await read()
+  } catch (error) {
+    if (!isFirestoreAuthError(error) || !isActiveTeacherSession(sessionUid)) throw error
+    if (!teacherTokenRefreshPromise) {
+      teacherTokenRefreshPromise = auth.currentUser.getIdToken(true)
+        .finally(() => { teacherTokenRefreshPromise = null })
+    }
+    await teacherTokenRefreshPromise
+    if (!isActiveTeacherSession(sessionUid)) throw error
+    return read()
+  }
+}
 const templateEditorHost = ref(null)
 const templateFileInput = ref(null)
 let templateCodeEditor
@@ -232,7 +278,7 @@ const programmingRef = ref(null)
 const isCompilingDocument = ref(false)
 const documentSearchQuery = ref('')
 const documentsTab = ref('documents')
-const documentWorkflow = ref({ mode: 'library', step: 0, totalSteps: 4, canContinue: false, canGoBack: false, canSave: false, isSaving: false })
+const documentWorkflow = ref({ mode: 'library', step: 0, totalSteps: 3, canContinue: false, canGoBack: false, canSave: false, isSaving: false })
 const rubricManagerRef = ref(null)
 const rubricSearchQuery = ref('')
 const rubricSubjectFilter = ref('')
@@ -242,6 +288,19 @@ const rubricSubjectOptions = Object.freeze(mathSubjects.map((subject) => ({
   value: subject.id,
 })))
 const mathSubjectsById = new Map(mathSubjects.map((subject) => [subject.id, subject]))
+// Materias que pueden aparecer en el horario, aunque no se clasifiquen todavía
+// en el mapa curricular de ejercicios.
+const scheduleOnlyMathSubjects = Object.freeze([
+  { id: '1eso-refuerzo-matematicas', course: '1ºESO', title: 'Refuerzo de Matemáticas' },
+  { id: '2eso-refuerzo-matematicas', course: '2ºESO', title: 'Refuerzo de Matemáticas' },
+  { id: '2eso-matematicas-pendientes', course: '2ºESO', title: 'Matemáticas pendientes' },
+  { id: '3eso-refuerzo-matematicas', course: '3ºESO', title: 'Refuerzo de Matemáticas' },
+  { id: '3eso-matematicas-pendientes', course: '3ºESO', title: 'Matemáticas pendientes' },
+  { id: '4eso-refuerzo-matematicas', course: '4ºESO', title: 'Refuerzo de Matemáticas' },
+  { id: '4eso-matematicas-pendientes', course: '4ºESO', title: 'Matemáticas pendientes' },
+])
+const scheduleMathSubjects = Object.freeze([...mathSubjects, ...scheduleOnlyMathSubjects])
+const scheduleSubjectsById = new Map(scheduleMathSubjects.map((subject) => [subject.id, subject]))
 const isAppleTouchDevice = /iPad|iPhone|iPod/.test(navigator.userAgent || '')
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 const exerciseBatchSize = isAppleTouchDevice ? 6 : 9
@@ -345,7 +404,7 @@ const exerciseCompilationLabel = computed(() => ({
 const selectedTemplate = computed(() => templates.value.find((template) => template.id === selectedTemplateId.value) || null)
 const preambleOptions = computed(() => templates.value.filter((template) => template.archivo))
 
-const scheduleSubjectOptions = Object.freeze(mathSubjects.map((subject) => ({
+const scheduleSubjectOptions = Object.freeze(scheduleMathSubjects.map((subject) => ({
   title: `${subject.course} — ${subject.title}`,
   value: subject.id,
   course: subject.course,
@@ -376,7 +435,10 @@ const scheduleAssignmentValue = computed({
 const scheduleSegmentTypeOptions = Object.freeze([
   { title: 'Actividad complementaria', value: 'actividad-complementaria', color: '#2F6F4E' },
   { title: 'Guardia', value: 'guardia', color: '#B85C1E' },
+  { title: 'Guardia de Patio', value: 'guardia-patio', color: '#B85C1E' },
+  { title: 'Guardia de Biblioteca', value: 'guardia-biblioteca', color: '#B85C1E' },
   { title: 'Apoyo a Guardia', value: 'apoyo-guardia', color: '#806A00' },
+  { title: 'Atención a familias', value: 'atencion-familias', color: '#B78F00' },
   { title: 'Reunión de Departamento', value: 'reunion-departamento', color: '#315F94' },
   { title: 'Reunión de Tutores', value: 'reunion-tutores', color: '#674C8F' },
 ])
@@ -641,7 +703,7 @@ function emptyScheduleForm() {
 function scheduleSubjectId(course, subject) {
   const normalizedCourse = String(course || '').trim().replace(/\s+[A-Z]$/u, '')
   const normalizedSubject = String(subject || '').trim()
-  return mathSubjects.find((candidate) => (
+  return scheduleMathSubjects.find((candidate) => (
     candidate.course === normalizedCourse && candidate.title === normalizedSubject
   ))?.id || null
 }
@@ -662,12 +724,12 @@ function updateScheduleCourse(groupName) {
   scheduleForm.value.type = 'teaching'
   scheduleForm.value.nonTeachingKind = null
   if (!course || !scheduleForm.value.subjectId) return
-  const selectedSubject = mathSubjectsById.get(scheduleForm.value.subjectId)
+  const selectedSubject = scheduleSubjectsById.get(scheduleForm.value.subjectId)
   if (selectedSubject?.course !== course) selectScheduleSubject(null)
 }
 
 function selectScheduleSubject(subjectId) {
-  const selectedSubject = mathSubjectsById.get(subjectId)
+  const selectedSubject = scheduleSubjectsById.get(subjectId)
   scheduleForm.value.subjectId = selectedSubject?.id || null
   scheduleForm.value.subject = selectedSubject?.title || ''
   scheduleForm.value.type = selectedSubject ? 'teaching' : 'nonTeaching'
@@ -680,7 +742,7 @@ function selectScheduleAssignment(value) {
   const tutorOption = scheduleTutorOptions.find((option) => option.value === value)
   if (tutorOption) {
     const subjectId = scheduleForm.value.subjectId || filteredScheduleSubjectOptions.value[0]?.value || null
-    const subject = mathSubjectsById.get(subjectId)
+    const subject = scheduleSubjectsById.get(subjectId)
     scheduleForm.value.subjectId = subjectId
     scheduleForm.value.subject = subject?.title || ''
     scheduleForm.value.tutorType = tutorOption.value
@@ -1693,7 +1755,8 @@ async function loadExercises({ reset = false } = {}) {
   // Los eventos de scroll y búsqueda siguen activos mientras se muestra el
   // acceso. No consultamos Firestore hasta disponer de una sesión docente;
   // las reglas rechazan correctamente cualquier lectura anónima.
-  if (!currentTeacherId.value) return
+  const sessionUid = currentTeacherId.value
+  if (!sessionUid) return
   if (reset && isLoadingExercises.value) return
   if (!reset && (isLoadingMoreExercises.value || !hasMoreExercises.value)) return
   if (reset) {
@@ -1707,7 +1770,11 @@ async function loadExercises({ reset = false } = {}) {
   try {
     const constraints = [orderBy(documentId()), firestoreLimit(exerciseBatchSize)]
     if (lastExerciseDocument) constraints.splice(1, 0, startAfter(lastExerciseDocument))
-    const snapshot = await getDocs(firestoreQuery(collection(db, 'ejercicios'), ...constraints))
+    const snapshot = await runTeacherReadWithAuthRetry(
+      sessionUid,
+      () => getDocs(firestoreQuery(collection(db, 'ejercicios'), ...constraints)),
+    )
+    if (!isActiveTeacherSession(sessionUid)) return
     const loadedExercises = snapshot.docs.map((exercise) => normalizeExercise({ id: exercise.id, ...exercise.data() }))
     if (reset) {
       exercises.value = loadedExercises
@@ -1722,6 +1789,7 @@ async function loadExercises({ reset = false } = {}) {
     lastExerciseDocument = snapshot.docs.at(-1) || lastExerciseDocument
     hasMoreExercises.value = snapshot.size === exerciseBatchSize
   } catch (error) {
+    if (!isActiveTeacherSession(sessionUid)) return
     exercisesError.value = reset
       ? 'No se han podido cargar los ejercicios de Firestore.'
       : 'No se han podido cargar más ejercicios de Firestore.'
@@ -1756,10 +1824,16 @@ watch(exerciseSearchQuery, async () => {
 })
 
 async function loadMathConcepts() {
+  const sessionUid = currentTeacherId.value
+  if (!sessionUid) return
   isLoadingMathConcepts.value = true
   mathConceptsError.value = ''
   try {
-    const snapshot = await getDoc(doc(db, 'especialidades', 'Matemáticas'))
+    const snapshot = await runTeacherReadWithAuthRetry(
+      sessionUid,
+      () => getDoc(doc(db, 'especialidades', 'Matemáticas')),
+    )
+    if (!isActiveTeacherSession(sessionUid)) return
     const storedData = snapshot.exists() ? snapshot.data() : {}
     const storedNodes = Array.isArray(storedData?.nodes) ? storedData.nodes : []
     const siblingIndexes = new Map()
@@ -1785,6 +1859,7 @@ async function loadMathConcepts() {
       return [subject.id, Array.isArray(nodeIds) ? [...new Set(nodeIds.filter((id) => typeof id === 'string'))] : []]
     }))
   } catch (error) {
+    if (!isActiveTeacherSession(sessionUid)) return
     mathConceptsError.value = 'No se ha podido cargar el mapa de Matemáticas.'
     console.error('Error al cargar el mapa de Matemáticas:', error)
   } finally {
@@ -1970,10 +2045,16 @@ function groupMathConcepts({ parentId, nodeIds }) {
 }
 
 async function loadTemplates() {
+  const sessionUid = auth.currentUser?.uid || null
+  if (!sessionUid || authRole.value !== 'teacher') return
   isLoadingTemplates.value = true
   templatesError.value = ''
   try {
-    const metadataSnapshot = await getDocs(collection(db, 'plantillas'))
+    const metadataSnapshot = await runTeacherReadWithAuthRetry(
+      sessionUid,
+      () => getDocs(collection(db, 'plantillas')),
+    )
+    if (auth.currentUser?.uid !== sessionUid || authRole.value !== 'teacher') return
     templates.value = metadataSnapshot.docs.map((template) => {
       const data = template.data()
       return {
@@ -2004,6 +2085,7 @@ async function loadTemplates() {
       templatesError.value = `Las plantillas se han cargado desde Firestore, pero no se han podido sincronizar ${failures.length} con el servidor LaTeX: ${failures.join(' · ')}`
     }
   } catch (error) {
+    if (auth.currentUser?.uid !== sessionUid || authRole.value !== 'teacher') return
     templatesError.value = 'No se han podido cargar las plantillas de Firestore.'
     console.error('Error al cargar plantillas:', error)
   } finally {
@@ -2590,7 +2672,8 @@ function prettyPrintLatex(source) {
 
     if (pendingBlankLine) {
       const closesCompactBlock = leadingEnds.some((name) => latexCompactEnvironments.has(name))
-      if (!closesCompactBlock && output.at(-1) !== '') output.push('')
+      const followsExerciseHeader = /^\\ej\b.*\\\\$/.test(String(output.at(-1) || '').trim())
+      if (!closesCompactBlock && !followsExerciseHeader && output.at(-1) !== '') output.push('')
       pendingBlankLine = false
     }
 
@@ -3454,7 +3537,7 @@ function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
         studentsLoaded: true,
       }),
       nombre: first.course,
-      curso: mathSubjectsById.get(subjectBlock.subjectId)?.course || String(first.course || '').replace(/\s+[A-Z]$/u, ''),
+      curso: scheduleSubjectsById.get(subjectBlock.subjectId)?.course || String(first.course || '').replace(/\s+[A-Z]$/u, ''),
       subjectId: subjectBlock.subjectId || null,
       asignatura: subjectBlock.subject || '',
       tutor: Boolean(groupBlocks.some((block) => block.tutorType)),
@@ -3477,10 +3560,15 @@ function groupsFromSchedule(blocks, existingGroups = teacherGroups.value) {
 }
 
 async function loadTeacherSchedule() {
+  const sessionUid = currentTeacherId.value
+  if (!sessionUid) return
   firestoreError.value = ''
   try {
-    if (!teacherDocument.value || !currentTeacherId.value) return
-    const snapshot = await getDoc(teacherDocument.value)
+    if (!teacherDocument.value) return
+    const snapshot = await runTeacherReadWithAuthRetry(
+      sessionUid,
+      () => getDoc(teacherDocument.value),
+    )
     if (snapshot.exists()) {
       let teacherData = snapshot.data() || {}
       const storedCourses = teacherData?.carrera?.cursos || []
@@ -3496,11 +3584,15 @@ async function loadTeacherSchedule() {
       schoolCalendar.value = normalizeSchoolCalendar()
       await setDoc(teacherDocument.value, { groupMigration: { schemaVersion: 2 } }, { merge: true })
     }
-    const [loadedGroups, nonTeachingSchedule, storedScheduleTimePoints] = await Promise.all([
-      loadGroupsForTeacher(currentTeacherId.value, currentAcademicYear()),
-      loadNonTeachingSchedule(currentTeacherId.value, currentAcademicYear()),
-      loadScheduleTimePoints(currentTeacherId.value, currentAcademicYear()),
-    ])
+    const [loadedGroups, nonTeachingSchedule, storedScheduleTimePoints] = await runTeacherReadWithAuthRetry(
+      sessionUid,
+      () => Promise.all([
+        loadGroupsForTeacher(sessionUid, currentAcademicYear()),
+        loadNonTeachingSchedule(sessionUid, currentAcademicYear()),
+        loadScheduleTimePoints(sessionUid, currentAcademicYear()),
+      ]),
+    )
+    if (!isActiveTeacherSession(sessionUid)) return
     scheduleTimePoints.value = normalizeScheduleTimePoints(storedScheduleTimePoints)
     teacherGroups.value = loadedGroups
     scheduleBlocks.value = [
@@ -3512,6 +3604,7 @@ async function loadTeacherSchedule() {
       })),
     ]
   } catch (error) {
+    if (!isActiveTeacherSession(sessionUid)) return
     firestoreError.value = 'No se ha podido cargar el horario de Firestore.'
     console.error('Error al cargar los grupos y el horario:', error)
   }
@@ -4146,13 +4239,30 @@ function openClassroomLayoutDialog() {
   gradebookRef.value?.openLayoutDialog?.()
 }
 
-async function saveGradebook({ includeIdentities = false } = {}) {
+async function syncGradebookAccessCodes(group) {
+  const codes = (group?.alumnos || []).map((student) => student.id).filter(Boolean)
+  await httpsCallable(functions, 'syncStudentAccessCodes')({ groupId: group.id, codes })
+}
+
+async function saveGradebook({ includeIdentities = false, retryAccessCodes = false } = {}) {
   if (!gradebookValid.value) {
     firestoreError.value = 'Completa correctamente los nombres antes de salir de la configuración.'
     return false
   }
   if (gradebookSavePromise) await gradebookSavePromise
-  if (!gradebookDirty.value) return true
+  if (!gradebookDirty.value) {
+    if (!retryAccessCodes) return true
+    const currentGroup = gradebookRef.value?.getGroup?.()
+    if (!currentGroup) return false
+    try {
+      await syncGradebookAccessCodes(currentGroup)
+      return true
+    } catch (error) {
+      firestoreError.value = 'No se han podido sincronizar los accesos de alumnos.'
+      console.error('Error al sincronizar los accesos de alumnos:', error)
+      return false
+    }
+  }
 
   const saveTask = (async () => {
     isSavingGradebook.value = true
@@ -4165,9 +4275,15 @@ async function saveGradebook({ includeIdentities = false } = {}) {
       const previousGroup = teacherGroups.value.find((group) => group.id === updatedGroup.id)
       const previousStudentIds = (previousGroup?.alumnos || []).map((student) => student.id).filter(Boolean)
       const savedGroup = await saveGroup(updatedGroup, previousStudentIds, currentTeacherId.value)
-      const savedStudentIds = (savedGroup.alumnos || []).map((student) => student.id).filter(Boolean)
-      if (previousStudentIds.slice().sort().join('|') !== savedStudentIds.slice().sort().join('|')) {
-        await httpsCallable(functions, 'syncStudentAccessCodes')({ groupId: savedGroup.id, codes: savedStudentIds })
+      try {
+        // También reintenta accesos que una versión anterior hubiera dejado
+        // pendientes tras guardar correctamente el cuaderno.
+        await syncGradebookAccessCodes(savedGroup)
+      } catch (error) {
+        // El grupo ya está guardado: el acceso del alumno puede reintentarse
+        // más tarde sin convertir un éxito en un falso fallo del cuaderno.
+        firestoreError.value = 'El cuaderno se ha guardado, pero no se han podido sincronizar los accesos de alumnos.'
+        console.error('Error al sincronizar los accesos de alumnos:', error)
       }
       teacherGroups.value = teacherGroups.value.map((group) => group.id === savedGroup.id ? savedGroup : group)
       if (includeIdentities) {
@@ -4200,7 +4316,7 @@ async function toggleGradebookConfiguration() {
     gradebookConfigurationMode.value = true
     return
   }
-  const saved = await saveGradebook({ includeIdentities: true })
+  const saved = await saveGradebook({ includeIdentities: true, retryAccessCodes: true })
   if (saved) gradebookConfigurationMode.value = false
 }
 
@@ -4293,8 +4409,13 @@ async function closeSession() {
 let currentTimeInterval
 let stopAuthWatch = null
 let loadedTeacherUid = null
+let authSessionSequence = 0
 
 async function initializeTeacherWorkspace() {
+  mathConceptsError.value = ''
+  exercisesError.value = ''
+  templatesError.value = ''
+  firestoreError.value = ''
   await Promise.all([
     loadTeacherSchedule(),
     loadExercises({ reset: true }),
@@ -4304,48 +4425,59 @@ async function initializeTeacherWorkspace() {
 }
 
 async function handleAuthenticatedUser(user) {
+  const sameUser = Boolean(user && authUser.value?.uid === user.uid)
   authUser.value = user
-  authClaims.value = {}
+  if (!sameUser) authClaims.value = {}
   if (!user) {
     loadedTeacherUid = null
     teacherGroups.value = []
     scheduleBlocks.value = []
     exercises.value = []
     templates.value = []
+    mathConceptsError.value = ''
+    exercisesError.value = ''
+    templatesError.value = ''
+    firestoreError.value = ''
     return
   }
   let token = await getIdTokenResult(user)
-  if (user.email?.toLowerCase() === 'carlos.s@educa.madrid.org'
-    && (token.claims.role !== 'teacher' || token.claims.admin !== true)) {
-    await httpsCallable(functions, 'bootstrapAdminAccount')()
+  const missingRole = !hasAuthorizedRole(token.claims)
+  const incompleteAdministratorClaims = needsAdministratorBootstrap(user, token.claims)
+  if (missingRole || incompleteAdministratorClaims) {
+    if (incompleteAdministratorClaims) await httpsCallable(functions, 'bootstrapAdminAccount')()
     await user.getIdToken(true)
     token = await getIdTokenResult(user)
   }
+  if (!authSessionMatches(auth, user)) return
   authClaims.value = token.claims || {}
-  if (!['teacher', 'student'].includes(authClaims.value.role)) {
-    await signOut(auth)
+  if (!hasAuthorizedRole(authClaims.value)) {
     throw new Error('Esta cuenta no tiene una invitación válida de Neope.')
   }
   if (authClaims.value.role === 'teacher' && loadedTeacherUid !== user.uid) {
     loadedTeacherUid = user.uid
-    if (isAdministrator.value) {
-      await httpsCallable(functions, 'bootstrapAdminAccount')()
-      await user.getIdToken(true)
-      authClaims.value = (await getIdTokenResult(user)).claims || authClaims.value
-    }
     await initializeTeacherWorkspace()
   }
 }
 
+function handleLocalIdentityBackupStatus(event) {
+  if (event?.detail?.state !== 'error') return
+  showAppErrorToast(event.detail.message || 'No se ha podido actualizar la copia externa de los datos locales.', {
+    color: 'warning',
+    copy: false,
+  })
+}
+
 onMounted(() => {
-  stopAuthWatch = onIdTokenChanged(auth, async (user) => {
+  stopAuthWatch = onAuthStateChanged(auth, async (user) => {
+    const sequence = ++authSessionSequence
     try {
       await handleAuthenticatedUser(user)
     } catch (error) {
+      if (sequence !== authSessionSequence) return
       console.error('No se ha podido inicializar la sesión:', error)
       showAppErrorToast(error?.message || 'No se ha podido iniciar la sesión de Neope.')
     } finally {
-      authReady.value = true
+      if (sequence === authSessionSequence) authReady.value = true
     }
   })
   currentTimeInterval = window.setInterval(() => { currentTime.value = new Date() }, 30_000)
@@ -4353,6 +4485,7 @@ onMounted(() => {
   window.addEventListener('wheel', handleExerciseScroll, { passive: true })
   window.addEventListener('touchmove', handleExerciseScroll, { passive: true })
   window.addEventListener('pagehide', flushGradebookOnPageHide)
+  window.addEventListener(LOCAL_IDENTITY_BACKUP_EVENT, handleLocalIdentityBackupStatus)
   document.addEventListener('visibilitychange', flushGradebookWhenHidden)
 })
 
@@ -4364,6 +4497,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('wheel', handleExerciseScroll)
   window.removeEventListener('touchmove', handleExerciseScroll)
   window.removeEventListener('pagehide', flushGradebookOnPageHide)
+  window.removeEventListener(LOCAL_IDENTITY_BACKUP_EVENT, handleLocalIdentityBackupStatus)
   document.removeEventListener('visibilitychange', flushGradebookWhenHidden)
   flushGradebookOnPageHide()
   stopWatchingExerciseCompilation()
@@ -4637,14 +4771,14 @@ onBeforeUnmount(() => {
         <template v-else-if="documentsTab === 'documents'">
           <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" :disabled="isCompilingDocument" @click="closeActiveDocument">Documentos</v-btn>
           <v-spacer />
-          <span class="document-toolbar-step">Paso {{ documentWorkflow.step }} de {{ documentWorkflow.totalSteps || 4 }}</span>
+          <span class="document-toolbar-step">Paso {{ documentWorkflow.step }} de {{ documentWorkflow.totalSteps || 3 }}</span>
           <v-spacer />
           <v-btn v-if="documentWorkflow.step > 1" variant="text" prepend-icon="mdi-chevron-left" :disabled="isCompilingDocument" @click="previousDocumentStep">Anterior</v-btn>
-          <v-tooltip v-if="documentWorkflow.step === 4" text="Recompilar documento" location="bottom">
+          <v-tooltip v-if="documentWorkflow.step === (documentWorkflow.totalSteps || 3)" text="Recompilar documento" location="bottom">
             <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-refresh" variant="text" color="primary" aria-label="Recompilar documento" :loading="isCompilingDocument" @click="compileActiveDocument" /></template>
           </v-tooltip>
           <v-btn
-            v-if="documentWorkflow.step < (documentWorkflow.totalSteps || 4)"
+            v-if="documentWorkflow.step < (documentWorkflow.totalSteps || 3)"
             color="primary"
             variant="flat"
             append-icon="mdi-chevron-right"
@@ -4874,7 +5008,8 @@ onBeforeUnmount(() => {
             :subjects="mathSubjects"
             :search-query="rubricSearchQuery"
             :subject-filter="rubricSubjectFilter || ''"
-            :ai-model="selectedAiModel"
+            v-model:ai-model="selectedAiModel"
+            :ai-model-options="aiModelOptions"
             @state-change="rubricWorkflow = $event"
           />
         </section>
@@ -5235,6 +5370,8 @@ onBeforeUnmount(() => {
             :groups="groups"
             :compiler-base-url="compilerBaseUrl"
             :library-query="documentSearchQuery"
+            v-model:ai-model="selectedAiModel"
+            :ai-model-options="aiModelOptions"
             @busy-change="isCompilingDocument = $event"
             @state-change="documentWorkflow = $event"
             @assessment-saved="applyDocumentAssessmentToLoadedGroups"
@@ -5311,6 +5448,7 @@ onBeforeUnmount(() => {
             :key="selectedCareerGroup.id"
             :group="selectedCareerGroup"
             :date="classroomDate"
+            :calendar="schoolCalendar"
             :existing-student-ids="existingStudentIds"
             :teacher-id="currentTeacherId || ''"
             :configuration-mode="gradebookConfigurationMode"

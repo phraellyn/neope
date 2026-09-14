@@ -10,7 +10,12 @@
     "test:exercise-structure": "node tests/exerciseStructure.test.mjs",
     "test:rubric-assessment": "node tests/rubricAssessment.test.mjs",
     "test:document-assessment": "node tests/documentAssessmentMatrix.test.mjs",
-    "test:student-competency-progress": "node tests/studentCompetencyProgress.test.mjs"
+    "test:document-content": "node tests/documentContent.test.mjs",
+    "test:student-competency-progress": "node tests/studentCompetencyProgress.test.mjs",
+    "test:local-identities": "node tests/localIdentityRecovery.test.mjs",
+    "test:local-identity-migrations": "node tests/localStudentIdentityMigrations.test.mjs",
+    "test:auth-session": "node tests/authSession.test.mjs",
+    "test:student-roster": "node tests/studentRoster.test.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

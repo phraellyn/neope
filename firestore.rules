@@ -25,7 +25,10 @@ service cloud.firestore {
     function isOwnStudentRecord(groupId, code) {
       return isStudent()
         && request.auth.token.studentCode == code
-        && get(/databases/$(database)/documents/studentAccessCodes/$(code)).data.groupId == groupId
+        && (
+          get(/databases/$(database)/documents/studentAccessCodes/$(code)).data.groupId == groupId
+          || get(/databases/$(database)/documents/studentAccessCodes/$(code)).data.groupIds.hasAny([groupId])
+        )
         && get(/databases/$(database)/documents/studentAccessCodes/$(code)).data.authUid == request.auth.uid
         && get(/databases/$(database)/documents/studentAccessCodes/$(code)).data.active == true;
     }
@@ -45,7 +48,10 @@ service cloud.firestore {
         && resource.data.teacherId == request.auth.uid
         && request.resource.data.teacherId == request.auth.uid;
       allow read: if isStudent()
-        && get(/databases/$(database)/documents/studentAccessCodes/$(request.auth.token.studentCode)).data.groupId == groupId
+        && (
+          get(/databases/$(database)/documents/studentAccessCodes/$(request.auth.token.studentCode)).data.groupId == groupId
+          || get(/databases/$(database)/documents/studentAccessCodes/$(request.auth.token.studentCode)).data.groupIds.hasAny([groupId])
+        )
         && get(/databases/$(database)/documents/studentAccessCodes/$(request.auth.token.studentCode)).data.active == true;
 
       match /alumnos/{code} {

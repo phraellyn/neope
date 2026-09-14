@@ -62,10 +62,9 @@ const hasProgrammingSchedule = computed(() => (props.group.horario || []).some((
 )))
 
 function documentBelongsToDay(documentData, day) {
-  if (programmingDocumentDate(documentData) !== day.date) return false
   const programming = documentData.programming || {}
   if (programming.programmingDayId) return programming.programmingDayId === day.id
-    || (programming.sessionKey && programming.sessionKey === day.sessionKey)
+  if (programmingDocumentDate(documentData) !== day.date) return false
   if (programming.sessionKey) return programming.sessionKey === day.sessionKey
   return Boolean(day.primaryForDate)
 }
@@ -150,6 +149,7 @@ async function persist(day) {
         teacherId: props.teacherId,
         groupId: props.group.id,
         date: day.date,
+        programmingDayId: day.id,
         content,
       })
     }
@@ -255,6 +255,7 @@ async function receiveFile(event) {
       teacherId: props.teacherId,
       groupId: props.group.id,
       date: day.date,
+      programmingDayId: day.id,
       file,
       existingResources: day.resources,
     })
@@ -366,6 +367,7 @@ async function compileContent(day, content) {
       teacherId: props.teacherId,
       groupId: props.group.id,
       date: day.date,
+      programmingDayId: day.id,
       contentId: content.id,
       blob,
       previousPdf: content.pdf,

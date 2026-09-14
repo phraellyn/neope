@@ -1,6 +1,12 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { deleteStudentIdentitiesForGroup, loadStudentIdentitiesForGroup, saveStudentIdentities } from '../services/localStudentIdentity'
+import {
+  deleteStudentIdentitiesForGroup,
+  identityRecoveryMessage,
+  loadStudentIdentitiesForGroup,
+  saveStudentIdentities,
+  studentIdentityDiagnostics,
+} from '../services/localStudentIdentity'
 import { loadRubrics } from '../services/rubricRepository'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
@@ -12,6 +18,12 @@ import {
   rubricSnapshot,
   setRubricCategoryScore,
 } from '../utils/rubricAssessment'
+import {
+  nextSourceGroup,
+  normalizedSourceGroup,
+  shortStudentName,
+  sourceGroupOptions,
+} from '../utils/studentRoster'
 
 const props = defineProps({
   group: { type: Object, required: true },
@@ -26,6 +38,7 @@ const emit = defineEmits(['dirty-change', 'validity-change', 'autosave-request',
 const STUDENT_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz123456789'
 const MAX_STUDENTS = 50
 const RESULT_COLUMN_MIN_WIDTH = 72
+const studentSourceBlueTones = Object.freeze(['#dcecff', '#a9c9ea', '#6f9fd2', '#3f73ac', '#274f82', '#19375f'])
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -122,6 +135,7 @@ watch(identityError, (message) => {
   if (message) showAppErrorToast(message)
 })
 const removedStudentIds = new Set()
+const automaticShortNameStudentIds = new Set()
 const deleteGroupDialog = ref(false)
 const pendingDeleteGroup = ref(null)
 const editNodeDialog = ref(false)
@@ -137,6 +151,7 @@ let localIdentitySaveTimer = null
 
 const structure = computed(() => localGroup.value.evaluaciones.estructura)
 const students = computed(() => localGroup.value.alumnos)
+const studentSourceGroups = computed(() => sourceGroupOptions(localGroup.value.nombre || localGroup.value.name))
 function resultWasEntered(result) {
   if (result && typeof result === 'object') {
     return Boolean(result.evaluatedAt || (result.type === 'document' && result.updatedAt))
@@ -218,18 +233,56 @@ function normalizeStudentName(student) {
   }
   const [surnames, givenName] = student.nombre.split(',')
   student.nombre = `${surnames.trim().toLocaleUpperCase('es-ES')}, ${givenName.trim()}`
+  student.nombreCorto ||= shortStudentName(student.nombre)
   sortStudentsByName()
   markDirty()
 }
 
-function sortStudentsByName() {
-  localGroup.value.alumnos.sort((left, right) => {
+function updateStudentName(student) {
+  if (automaticShortNameStudentIds.has(student.id)) student.nombreCorto = shortStudentName(student.nombre)
+  markDirty()
+}
+
+function studentSourceGroup(student) {
+  return normalizedSourceGroup(student?.sourceGroup, studentSourceGroups.value)
+}
+
+function studentSourceStyle(student) {
+  const sourceIndex = Math.max(0, studentSourceGroups.value.indexOf(studentSourceGroup(student)))
+  const background = studentSourceBlueTones[sourceIndex % studentSourceBlueTones.length]
+  const channels = [0, 2, 4].map((offset) => Number.parseInt(background.slice(offset + 1, offset + 3), 16) / 255)
+  const luminance = (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2])
+  return {
+    '--student-source-color': background,
+    '--student-source-text-color': luminance < 0.52 ? '#fff' : '#315f93',
+  }
+}
+
+function cycleStudentSourceGroup(student) {
+  if (props.disabled || !props.configurationMode || studentSourceGroups.value.length < 2) return
+  student.sourceGroup = nextSourceGroup(student.sourceGroup, studentSourceGroups.value)
+  sortStudentsByName()
+  markDirty()
+}
+
+function compareStudentsByName(left, right) {
     const leftName = String(left?.nombre || '').trim()
     const rightName = String(right?.nombre || '').trim()
     if (!leftName && !rightName) return 0
     if (!leftName) return 1
     if (!rightName) return -1
     return leftName.localeCompare(rightName, 'es', { sensitivity: 'base' })
+}
+
+function sortStudentsByName() {
+  const sourceGroups = studentSourceGroups.value
+  localGroup.value.alumnos.sort((left, right) => {
+    if (sourceGroups.length > 1) {
+      const leftSourceIndex = sourceGroups.indexOf(studentSourceGroup(left))
+      const rightSourceIndex = sourceGroups.indexOf(studentSourceGroup(right))
+      if (leftSourceIndex !== rightSourceIndex) return leftSourceIndex - rightSourceIndex
+    }
+    return compareStudentsByName(left, right)
   })
 }
 
@@ -261,9 +314,20 @@ function randomStudentId() {
   return id
 }
 
+function isStudentCode(value) {
+  const code = String(value || '').trim()
+  return code.length === 6 && [...code].every((character) => STUDENT_ID_ALPHABET.includes(character))
+}
+
 function addStudent() {
   if (props.disabled || !props.configurationMode || students.value.length >= MAX_STUDENTS) return
-  const student = { id: randomStudentId(), nombre: '' }
+  const student = {
+    id: randomStudentId(),
+    nombre: '',
+    nombreCorto: '',
+    ...(studentSourceGroups.value.length > 1 ? { sourceGroup: studentSourceGroups.value[0] } : {}),
+  }
+  automaticShortNameStudentIds.add(student.id)
   students.value.push(student)
   const rubricItems = descendantItems(structure.value).filter((item) => item.rubric)
   if (rubricItems.length) {
@@ -280,25 +344,47 @@ function openBulkStudentDialog() {
   bulkStudentDialog.value = true
 }
 
-function importBulkStudents() {
+async function importBulkStudents() {
   if (props.disabled || !props.configurationMode) return
   const available = MAX_STUDENTS - students.value.length
-  const names = bulkStudentText.value
+  const entries = bulkStudentText.value
     .split(/[\r\n\t]+/u)
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, available)
-  if (!names.length) return
+  if (!entries.length) return
+  const existingIds = new Set(students.value.map((student) => student.id))
   const rubricItems = descendantItems(structure.value).filter((item) => item.rubric)
-  names.forEach((nombre) => {
-    const student = { id: randomStudentId(), nombre }
+  const addedStudents = []
+  entries.forEach((entry) => {
+    const reusedCode = isStudentCode(entry) ? entry : null
+    const id = reusedCode || randomStudentId()
+    if (existingIds.has(id)) return
+    existingIds.add(id)
+    const student = {
+      id,
+      nombre: reusedCode ? '' : entry,
+      nombreCorto: reusedCode ? '' : shortStudentName(entry),
+      ...(studentSourceGroups.value.length > 1 ? { sourceGroup: studentSourceGroups.value[0] } : {}),
+    }
     students.value.push(student)
+    addedStudents.push(student)
     if (rubricItems.length) {
       localGroup.value.evaluaciones.resultados[student.id] = Object.fromEntries(
         rubricItems.map((item) => [item.id, createRubricAssessment(item.rubric)]),
       )
     }
   })
+  if (!addedStudents.length) return
+  identityLoading.value = true
+  try {
+    await hydrateStudentIdentities()
+  } catch (error) {
+    identityError.value = error?.message || 'No se han podido abrir los datos identificativos guardados en este dispositivo.'
+    console.error('Error al recuperar las identidades locales:', error)
+  } finally {
+    identityLoading.value = false
+  }
   sortStudentsByName()
   bulkStudentDialog.value = false
   markDirty()
@@ -307,8 +393,18 @@ function importBulkStudents() {
 function removeStudent(studentId) {
   if (props.disabled || !props.configurationMode) return
   removedStudentIds.add(studentId)
+  automaticShortNameStudentIds.delete(studentId)
   localGroup.value.alumnos = students.value.filter((student) => student.id !== studentId)
   delete localGroup.value.evaluaciones.resultados[studentId]
+  // Al eliminar el pseudónimo del grupo no deben quedar datos académicos
+  // huérfanos que pudieran atribuirse a un alumno creado posteriormente.
+  Object.values(localGroup.value.attendance || {}).forEach((entry) => {
+    if (entry?.records) delete entry.records[studentId]
+  })
+  if (Array.isArray(localGroup.value.disposicion?.asientos)) {
+    localGroup.value.disposicion.asientos = localGroup.value.disposicion.asientos
+      .map((occupant) => occupant === studentId ? null : occupant)
+  }
   markDirty()
 }
 
@@ -990,17 +1086,43 @@ function confirmFusion() {
 
 function getGroup() {
   const cloudGroup = clone(localGroup.value)
-  cloudGroup.alumnos = students.value.map((student) => ({ id: student.id }))
+  cloudGroup.alumnos = students.value.map((student) => ({
+    id: student.id,
+    ...(studentSourceGroups.value.length > 1 ? { sourceGroup: studentSourceGroup(student) } : {}),
+  }))
   return cloudGroup
+}
+
+function privateStudentIdentity(student) {
+  const { sourceGroup: _sourceGroup, ...identity } = student
+  return identity
 }
 
 async function persistLocalIdentities() {
   identityError.value = ''
   try {
-    await saveStudentIdentities(localGroup.value.id, students.value.map((student) => ({ ...student })))
+    await saveStudentIdentities(localGroup.value.id, students.value.map(privateStudentIdentity))
   } catch (error) {
     identityError.value = 'No se han podido guardar los datos identificativos en este dispositivo.'
     throw error
+  }
+}
+
+async function hydrateStudentIdentities() {
+  const storedIdentities = await loadStudentIdentitiesForGroup(localGroup.value)
+  const diagnostics = studentIdentityDiagnostics(storedIdentities)
+  students.value.forEach((student) => {
+    const sourceGroup = student.sourceGroup
+    const localIdentity = storedIdentities.get(student.id)
+    Object.assign(student, localIdentity || {})
+    if (studentSourceGroups.value.length > 1) student.sourceGroup = normalizedSourceGroup(sourceGroup, studentSourceGroups.value)
+    else delete student.sourceGroup
+    student.nombre ||= ''
+    student.nombreCorto ||= shortStudentName(student.nombre)
+  })
+  sortStudentsByName()
+  if (diagnostics.failed) {
+    showAppErrorToast(identityRecoveryMessage(diagnostics), { color: 'warning', copy: false })
   }
 }
 
@@ -1034,15 +1156,9 @@ onMounted(async () => {
   identityLoading.value = true
   identityError.value = ''
   try {
-    const storedIdentities = await loadStudentIdentitiesForGroup(localGroup.value)
-    students.value.forEach((student) => {
-      const localIdentity = storedIdentities.get(student.id)
-      Object.assign(student, localIdentity || {})
-      student.nombre ||= ''
-    })
-    sortStudentsByName()
+    await hydrateStudentIdentities()
   } catch (error) {
-    identityError.value = 'No se han podido abrir los datos identificativos guardados en este dispositivo.'
+    identityError.value = error?.message || 'No se han podido abrir los datos identificativos guardados en este dispositivo.'
     console.error('Error al cargar las identidades locales:', error)
   } finally {
     identityLoading.value = false
@@ -1166,6 +1282,7 @@ defineExpose({
             <th class="gradebook-student-cell" :style="studentFlagStyle(student)">
               <div class="gradebook-student-content">
                 <img v-if="student.foto" class="gradebook-student-avatar" :src="student.foto" :alt="student.nombreCorto || student.nombre || student.id">
+                <span v-else class="gradebook-student-avatar gradebook-student-avatar-empty" aria-hidden="true"></span>
                 <input v-if="configurationMode"
                   v-model="student.nombre"
                   type="text"
@@ -1174,13 +1291,23 @@ defineExpose({
                   :title="studentNameIsValid(student.nombre) ? '' : 'Usa el formato APELLIDO 1 APELLIDO 2, Nombre'"
                   placeholder="APELLIDO 1 APELLIDO 2, Nombre"
                   aria-label="Nombre del alumno"
-                  @input="markDirty"
+                  @input="updateStudentName(student)"
                   @blur="normalizeStudentName(student)"
                 >
                 <button v-else type="button" class="gradebook-student-name" @click="emit('student-selected', { ...student })">
                   {{ student.nombre || student.id }}
                 </button>
-                <code :title="`ID del alumno: ${student.id}`">{{ student.id }}</code>
+                <button
+                  v-if="studentSourceGroups.length > 1"
+                  type="button"
+                  class="gradebook-student-source"
+                  :style="studentSourceStyle(student)"
+                  :class="{ 'gradebook-student-source-editable': configurationMode }"
+                  :disabled="disabled || !configurationMode"
+                  :aria-label="configurationMode ? `Cambiar subgrupo de ${student.nombre || student.id}` : `Subgrupo ${studentSourceGroup(student)}`"
+                  :title="configurationMode ? 'Cambiar subgrupo' : `Subgrupo ${studentSourceGroup(student)}`"
+                  @click="cycleStudentSourceGroup(student)"
+                >{{ studentSourceGroup(student) }}</button>
                 <button v-if="configurationMode" type="button" class="gradebook-student-remove" :aria-label="`Eliminar ${student.nombre || 'alumno'}`" @click="removeStudent(student.id)">
                   <v-icon icon="mdi-delete-outline" size="16" />
                 </button>
@@ -1274,8 +1401,8 @@ defineExpose({
       <v-card>
         <v-card-title class="px-6 pt-5">Añadir alumnos</v-card-title>
         <v-card-text class="px-6 pb-2">
-          <p class="text-body-2 text-medium-emphasis mb-4">Pega una columna de nombres. Los nombres permanecerán únicamente en este dispositivo; al backend solo llegarán los códigos anónimos.</p>
-          <v-textarea v-model="bulkStudentText" label="Nombres" placeholder="APELLIDO 1 APELLIDO 2, Nombre" rows="10" auto-grow variant="outlined" autofocus hide-details />
+          <p class="text-body-2 text-medium-emphasis mb-4">Pega una columna de nombres o de códigos. Un código de seis caracteres reutiliza la ficha local existente; al backend solo llegarán los códigos anónimos.</p>
+          <v-textarea v-model="bulkStudentText" label="Nombres o códigos" placeholder="APELLIDO 1 APELLIDO 2, Nombre\nA7xQ2M" rows="10" auto-grow variant="outlined" autofocus hide-details />
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
           <v-spacer />

@@ -36,4 +36,14 @@ const vuetify = createVuetify({
   },
 })
 
-createApp(App).use(vuetify).mount('#app')
+// En el Mac de desarrollo, `localhost` y `127.0.0.1` son orígenes distintos
+// para IndexedDB. Usamos uno solo para que los datos locales no parezcan
+// desaparecer al escribir la otra dirección. No se aplica a accesos desde la
+// red local (iPad u otros dispositivos).
+if (import.meta.env.DEV && window.location.hostname === 'localhost') {
+  const canonicalUrl = new URL(window.location.href)
+  canonicalUrl.hostname = '127.0.0.1'
+  window.location.replace(canonicalUrl)
+} else {
+  createApp(App).use(vuetify).mount('#app')
+}

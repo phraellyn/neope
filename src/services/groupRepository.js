@@ -204,7 +204,10 @@ function groupView(id, data, students = null) {
         .filter(([itemId]) => !legacyAttendanceIds.has(itemId))),
     },
     attendance,
-    alumnos: loadedStudents.map((student) => ({ id: student.id })),
+    alumnos: loadedStudents.map((student) => ({
+      id: student.id,
+      ...(student.sourceGroup ? { sourceGroup: String(student.sourceGroup).trim() } : {}),
+    })),
     disposicion: normalizeClassroomLayout({ classroomLayout: data.classroomLayout }),
     studentCount: Number(data.studentCount) || loadedStudents.length,
     tutor: Boolean(data.tutor),
@@ -349,6 +352,7 @@ export async function loadStudentsForGroup(group) {
   const students = snapshot.docs.map((studentSnapshot) => ({
     id: studentSnapshot.id,
     results: clone(studentSnapshot.data()?.results, {}) || {},
+    sourceGroup: String(studentSnapshot.data()?.sourceGroup || '').trim(),
   }))
   const groupData = groupSnapshot?.exists() ? groupSnapshot.data() : groupDocumentFromView(group, group.teacherId)
   return groupView(group.id, groupData, students)
@@ -367,6 +371,7 @@ export async function saveGroup(group, previousStudentIds = [], teacherId = DEVE
     batch.set(doc(groupReference, 'alumnos', student.id), {
       code: student.id,
       results: clone(group.evaluaciones?.resultados?.[student.id], {}) || {},
+      ...(student.sourceGroup ? { sourceGroup: String(student.sourceGroup).trim() } : {}),
       updatedAt: new Date().toISOString(),
     })
   })
@@ -377,6 +382,7 @@ export async function saveGroup(group, previousStudentIds = [], teacherId = DEVE
   return groupView(group.id, groupData, students.map((student) => ({
     id: student.id,
     results: group.evaluaciones?.resultados?.[student.id] || {},
+    sourceGroup: String(student.sourceGroup || '').trim(),
   })))
 }
 

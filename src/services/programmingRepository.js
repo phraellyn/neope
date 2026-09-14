@@ -13,7 +13,7 @@ import {
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { db, storage } from './firebase'
 import { rubricSnapshot } from '../utils/rubricAssessment'
-import { programmingSessionsForGroup } from '../utils/programmingSchedule'
+import { programmingSessionsForGroup, reconcileProgrammingSessions } from '../utils/programmingSchedule'
 
 export { programmingDatesForGroup, programmingSessionsForGroup } from '../utils/programmingSchedule'
 
@@ -46,6 +46,8 @@ function normalizeDay(snapshot, groupId) {
     resources: Array.isArray(data.resources) ? clone(data.resources, []) : [],
     contents: Array.isArray(data.contents) ? clone(data.contents, []) : [],
     sessionKey: data.sessionKey || null,
+    streamKey: data.streamKey || null,
+    sequenceIndex: Number.isInteger(Number(data.sequenceIndex)) ? Number(data.sequenceIndex) : null,
     sessionType: data.sessionType || null,
     title: String(data.title || ''),
     color: data.color || null,
@@ -64,52 +66,79 @@ export async function loadAndSynchronizeProgrammingDays({ group, calendar, teach
   if (!sessions.length) return []
   const daysCollection = collection(db, 'grupos', group.id, 'programmingDays')
   const snapshot = await getDocs(daysCollection)
-  const existing = new Map(snapshot.docs.map((item) => [item.id, normalizeDay(item, group.id)]))
-  const resolved = new Map()
-  const claimedLegacyDates = new Set()
-  sessions.forEach((session) => {
-    const exact = existing.get(session.id)
-    if (exact) {
-      resolved.set(session.id, { ...exact, ...session, id: exact.id })
-      return
-    }
-    const legacy = session.primaryForDate && !claimedLegacyDates.has(session.date)
-      ? existing.get(session.date)
-      : null
-    if (legacy) {
-      claimedLegacyDates.add(session.date)
-      resolved.set(session.id, { ...legacy, ...session, id: legacy.id })
-    }
+  const existingDays = snapshot.docs.map((item) => normalizeDay(item, group.id))
+  const existingById = new Map(existingDays.map((day) => [day.id, day]))
+  const resolved = reconcileProgrammingSessions(sessions, existingDays, group)
+  const now = new Date().toISOString()
+  const writes = resolved.filter((day) => {
+    const stored = existingById.get(day.id)
+    return !stored
+      || stored.date !== day.date
+      || stored.sessionKey !== day.sessionKey
+      || stored.streamKey !== day.streamKey
+      || stored.sequenceIndex !== day.sequenceIndex
+      || stored.primaryForDate !== day.primaryForDate
+      || stored.schemaVersion < 4
   })
-  const missing = sessions.filter((session) => !resolved.has(session.id))
-  for (let offset = 0; offset < missing.length; offset += 450) {
+  for (let offset = 0; offset < writes.length; offset += 450) {
     const batch = writeBatch(db)
-    missing.slice(offset, offset + 450).forEach((session) => {
-      batch.set(doc(daysCollection, session.id), {
-        ...session,
+    writes.slice(offset, offset + 450).forEach((day) => {
+      const stored = existingById.get(day.id)
+      batch.set(doc(daysCollection, day.id), {
+        date: day.date,
+        sessionKey: day.sessionKey,
+        streamKey: day.streamKey,
+        sequenceIndex: day.sequenceIndex,
+        sessionType: day.sessionType,
+        title: day.title,
+        color: day.color,
+        tutorType: day.tutorType,
+        subjectId: day.subjectId,
+        subject: day.subject,
+        dayIndex: day.dayIndex,
+        moduleIndex: day.moduleIndex,
+        primaryForDate: day.primaryForDate,
         groupId: group.id,
         teacherId,
         academicYear: group.academicYear || '',
-        notes: '',
-        rubricInstruments: [],
-        resources: [],
-        contents: [],
-        schemaVersion: 3,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      })
+        schemaVersion: 4,
+        ...(!stored ? {
+          notes: '',
+          rubricInstruments: [],
+          resources: [],
+          contents: [],
+          createdAt: now,
+        } : {}),
+        updatedAt: now,
+      }, { merge: true })
     })
     await batch.commit()
   }
-  return sessions.map((session) => resolved.get(session.id) || {
-    ...session,
+  return resolved.map((day) => ({
+    ...day,
     groupId: group.id,
-    notes: '',
-    rubricInstruments: [],
-    resources: [],
-    contents: [],
-    schemaVersion: 3,
-  })
+    notes: day.notes || '',
+    rubricInstruments: day.rubricInstruments || [],
+    resources: day.resources || [],
+    contents: day.contents || [],
+    schemaVersion: 4,
+  }))
+}
+
+export function programmingDayForDate(days = [], date = '') {
+  const matching = days.filter((day) => day.date === date)
+  if (!matching.length) return null
+  const primary = matching.find((day) => day.primaryForDate)
+    || matching.find((day) => day.sessionType === 'teaching')
+    || matching[0]
+  const uniqueById = (items) => [...new Map(items.filter(Boolean).map((item) => [item.id, item])).values()]
+  return {
+    ...primary,
+    sessionIds: matching.map((day) => day.id),
+    rubricInstruments: uniqueById(matching.flatMap((day) => day.rubricInstruments || [])),
+    resources: uniqueById(matching.flatMap((day) => day.resources || [])),
+    contents: uniqueById(matching.flatMap((day) => day.contents || [])),
+  }
 }
 
 export async function loadProgrammingDay(groupId, date) {
@@ -120,16 +149,7 @@ export async function loadProgrammingDay(groupId, date) {
     const legacy = await getDoc(doc(daysCollection, date))
     return legacy.exists() ? normalizeDay(legacy, groupId) : null
   }
-  const primary = matching.find((day) => day.primaryForDate)
-    || matching.find((day) => day.sessionType === 'teaching')
-    || matching[0]
-  const uniqueById = (items) => [...new Map(items.filter(Boolean).map((item) => [item.id, item])).values()]
-  return {
-    ...primary,
-    rubricInstruments: uniqueById(matching.flatMap((day) => day.rubricInstruments || [])),
-    resources: uniqueById(matching.flatMap((day) => day.resources || [])),
-    contents: uniqueById(matching.flatMap((day) => day.contents || [])),
-  }
+  return programmingDayForDate(matching, date)
 }
 
 export async function saveProgrammingDay(groupId, day, teacherId) {
@@ -142,6 +162,8 @@ export async function saveProgrammingDay(groupId, day, teacherId) {
     resources: clone(day.resources, []) || [],
     contents: clone(day.contents, []) || [],
     sessionKey: day.sessionKey || null,
+    streamKey: day.streamKey || null,
+    sequenceIndex: Number.isInteger(Number(day.sequenceIndex)) ? Number(day.sequenceIndex) : null,
     sessionType: day.sessionType || null,
     title: String(day.title || ''),
     color: day.color || null,
@@ -151,7 +173,7 @@ export async function saveProgrammingDay(groupId, day, teacherId) {
     dayIndex: Number.isInteger(Number(day.dayIndex)) ? Number(day.dayIndex) : null,
     moduleIndex: Number.isInteger(Number(day.moduleIndex)) ? Number(day.moduleIndex) : null,
     primaryForDate: Boolean(day.primaryForDate),
-    schemaVersion: 3,
+    schemaVersion: 4,
     updatedAt: new Date().toISOString(),
   }
   await setDoc(doc(db, 'grupos', groupId, 'programmingDays', day.id || day.date), payload, { merge: true })
@@ -198,6 +220,8 @@ export async function addRubricToProgrammingDay({ groupId, date, programmingDayI
       groupId,
       teacherId,
       sessionKey: session.sessionKey || null,
+      streamKey: session.streamKey || null,
+      sequenceIndex: Number.isInteger(Number(session.sequenceIndex)) ? Number(session.sequenceIndex) : null,
       sessionType: session.sessionType || null,
       title: String(session.title || ''),
       color: session.color || null,
@@ -210,7 +234,7 @@ export async function addRubricToProgrammingDay({ groupId, date, programmingDayI
       rubricInstruments: [...(dayData.rubricInstruments || []), instrument],
       resources: dayData.resources || [],
       notes: dayData.notes || '',
-      schemaVersion: 3,
+      schemaVersion: 4,
       updatedAt: new Date().toISOString(),
     }, { merge: true })
   })
@@ -336,11 +360,12 @@ function imageCompilerName(file, existingResources = []) {
   return `imagen${index}${extension}`
 }
 
-export async function uploadProgrammingResource({ teacherId, groupId, date, file, existingResources = [] }) {
+export async function uploadProgrammingResource({ teacherId, groupId, date, programmingDayId = '', file, existingResources = [] }) {
   const resourceId = globalThis.crypto?.randomUUID?.() || `archivo-${Date.now()}`
   const safeName = safeProgrammingFileName(file.name)
   const compilerName = imageCompilerName(file, existingResources)
-  const path = `teachers/${teacherId}/programacion/${groupId}/${date}/${resourceId}-${safeName}`
+  const dayKey = safeProgrammingFileName(programmingDayId || date)
+  const path = `teachers/${teacherId}/programacion/${groupId}/${dayKey}/${resourceId}-${safeName}`
   const reference = storageRef(storage, path)
   await uploadBytes(reference, file, { contentType: file.type || 'application/octet-stream' })
   return {
@@ -359,8 +384,9 @@ export async function deleteProgrammingResource(resource) {
   if (resource?.type === 'file' && resource.path) await deleteObject(storageRef(storage, resource.path))
 }
 
-function programmingContentBasePath({ teacherId, groupId, date, contentId }) {
-  return `teachers/${teacherId}/programacion/${groupId}/${date}/contenidos/${contentId}`
+function programmingContentBasePath({ teacherId, groupId, date, programmingDayId = '', contentId }) {
+  const dayKey = safeProgrammingFileName(programmingDayId || date)
+  return `teachers/${teacherId}/programacion/${groupId}/${dayKey}/contenidos/${contentId}`
 }
 
 export function programmingContentSourceHash(code) {
@@ -373,19 +399,19 @@ export function programmingContentSourceHash(code) {
   return (hash >>> 0).toString(36)
 }
 
-export async function uploadProgrammingContentSource({ teacherId, groupId, date, content }) {
+export async function uploadProgrammingContentSource({ teacherId, groupId, date, programmingDayId = '', content }) {
   const code = String(content?.code || '')
   const hash = programmingContentSourceHash(code)
   if (content?.source?.hash === hash && content.source.path && content.source.url) return content.source
-  const path = `${programmingContentBasePath({ teacherId, groupId, date, contentId: content.id })}.tex`
+  const path = `${programmingContentBasePath({ teacherId, groupId, date, programmingDayId, contentId: content.id })}.tex`
   const reference = storageRef(storage, path)
   await uploadBytes(reference, new Blob([code], { type: 'application/x-tex;charset=utf-8' }), { contentType: 'application/x-tex' })
   return { path, url: await getDownloadURL(reference), hash, updatedAt: new Date().toISOString() }
 }
 
-export async function uploadProgrammingContentPdf({ teacherId, groupId, date, contentId, blob, previousPdf = null }) {
+export async function uploadProgrammingContentPdf({ teacherId, groupId, date, programmingDayId = '', contentId, blob, previousPdf = null }) {
   const revision = Date.now()
-  const path = `${programmingContentBasePath({ teacherId, groupId, date, contentId })}-${revision}.pdf`
+  const path = `${programmingContentBasePath({ teacherId, groupId, date, programmingDayId, contentId })}-${revision}.pdf`
   const reference = storageRef(storage, path)
   await uploadBytes(reference, blob, { contentType: 'application/pdf' })
   const pdf = { path, url: await getDownloadURL(reference), revision, updatedAt: new Date().toISOString() }

@@ -125,8 +125,13 @@ body { margin: 0; background: #f8f9fe; }
 .gradebook-student-cell { position: sticky; z-index: 2; left: 0; width: 310px; min-width: 310px; padding: 0 8px 0 18px !important; border-right-color: #b8c7da !important; background: #f7f9fc; font-weight: 500; text-align: left; }
 .gradebook-student-cell::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 6px; background: var(--student-flag-gradient); }
 .gradebook-student-avatar { flex: 0 0 40px; width: 40px; height: 40px; margin-left: -8px; margin-right: 4px; border-radius: 50%; object-fit: cover; }
+.gradebook-student-avatar-empty { border: 1px solid #b9c4d2; background: #e7ecf2; box-sizing: border-box; }
 .gradebook-student-name { min-width: 0; padding: 4px 0; border: 0; background: transparent; color: #29496f; font: inherit; font-weight: 650; line-height: 1.15; text-align: left; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
-.gradebook-student-content { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
+.gradebook-student-content { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 7px; }
+.gradebook-student-source { display: grid; width: 24px; height: 24px; flex: 0 0 24px; justify-self: end; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--student-source-color, #b5cfe9) 72%, #315f93); border-radius: 50%; background: var(--student-source-color, #b5cfe9); color: var(--student-source-text-color, #315f93); font-size: .68rem; font-weight: 800; line-height: 1; }
+.gradebook-student-source:disabled { opacity: 1; }
+.gradebook-student-source-editable { cursor: pointer; }
+.gradebook-student-source-editable:hover, .gradebook-student-source-editable:focus-visible { border-color: #315f93; background: #315f93; color: #fff; outline: none; }
 .gradebook-student-cell input { min-width: 0; height: 30px; padding: 0 7px; border: 1px solid transparent; border-radius: 6px; outline: none; background: transparent; color: #29496f; font: inherit; font-weight: 650; }
 .gradebook-student-cell input::placeholder { color: #99a6b8; font-weight: 500; }
 .gradebook-student-cell input:hover { border-color: #d0dae8; background: #fff; }
@@ -134,7 +139,6 @@ body { margin: 0; background: #f8f9fe; }
 .gradebook-student-cell input:disabled { color: #29496f; opacity: 1; cursor: default; }
 .gradebook-student-cell input[readonly] { cursor: pointer; }
 .gradebook-student-cell input.gradebook-student-name-invalid:not(:placeholder-shown) { border-color: #d88a8a; background: #fff7f7; }
-.gradebook-student-cell code { padding: 2px 5px; border-radius: 5px; background: #e5ecf5; color: #6b7f99; font-size: .58rem; letter-spacing: .04em; }
 .gradebook-student-remove { display: grid; width: 25px; height: 25px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #9aa8b9; cursor: pointer; opacity: 0; }
 .gradebook-student-cell:hover .gradebook-student-remove, .gradebook-student-remove:focus-visible { opacity: 1; }
 .gradebook-student-remove:hover { background: #f9e5e5; color: #b84242; }

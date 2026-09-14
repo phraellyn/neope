@@ -147,6 +147,7 @@ const pdfSource = computed(() => {
 let pdfDocument = null
 let loadingTask = null
 let renderTask = null
+let renderCancellation = Promise.resolve()
 let resizeObserver = null
 let intersectionObserver = null
 let renderFrame = 0
@@ -154,6 +155,18 @@ let renderVersion = 0
 let isVisible = false
 let observedWidth = 0
 let releaseTimer = 0
+
+async function cancelCurrentRender() {
+  const task = renderTask
+  if (task) {
+    renderTask = null
+    task.cancel?.()
+    renderCancellation = Promise.resolve(task.promise).catch((error) => {
+      if (error?.name !== 'RenderingCancelledException') throw error
+    })
+  }
+  await renderCancellation
+}
 
 function cropCanvasToContent(pixelRatio) {
   if (!props.cropBottom || !canvas.value) return
@@ -223,13 +236,11 @@ function emitThumbnail(metrics) {
 
 async function clearDocument() {
   renderVersion += 1
-  const currentRenderTask = renderTask
   const currentLoadingTask = loadingTask
   const currentPdfDocument = pdfDocument
-  renderTask = null
   loadingTask = null
   pdfDocument = null
-  currentRenderTask?.cancel()
+  try { await cancelCurrentRender() } catch { /* El render ya no se reutilizará. */ }
   if (currentLoadingTask) {
     try { await currentLoadingTask.destroy() } catch { /* La carga puede haber finalizado ya. */ }
   }
@@ -262,6 +273,10 @@ async function renderPreview() {
   await withRenderSlot(async () => {
     if (!isVisible || version !== renderVersion || !container.value || !canvas.value) return
     try {
+    // PDF.js conserva el canvas hasta que la promesa de cancelación termina.
+    // Esperar aquí evita que un resize y un cambio de src lo reutilicen a la vez.
+    await cancelCurrentRender()
+    if (!isVisible || version !== renderVersion || !container.value || !canvas.value) return
     const availableWidth = Math.max(container.value.clientWidth, 1)
     const pixelRatio = Math.min(window.devicePixelRatio || 1, isAppleTouchDevice ? (props.thumbnail ? 1 : 1.25) : 2)
     const cacheKey = previewCacheKey(pdfSource.value, availableWidth, pixelRatio, props.cropBottom)
@@ -284,9 +299,15 @@ async function renderPreview() {
       if (version !== renderVersion) return
       const bytes = await cachedPdfBytes(pdfSource.value)
       if (version !== renderVersion) return
-      loadingTask = getDocument({ data: new Uint8Array(isAppleTouchDevice ? bytes : bytes.slice(0)) })
-      pdfDocument = await loadingTask.promise
-      loadingTask = null
+      const currentLoadingTask = getDocument({ data: new Uint8Array(isAppleTouchDevice ? bytes : bytes.slice(0)) })
+      loadingTask = currentLoadingTask
+      const loadedDocument = await currentLoadingTask.promise
+      if (loadingTask === currentLoadingTask) loadingTask = null
+      if (version !== renderVersion) {
+        try { await loadedDocument.destroy() } catch { /* La fuente ya ha cambiado. */ }
+        return
+      }
+      pdfDocument = loadedDocument
     }
     const page = await pdfDocument.getPage(1)
     if (version !== renderVersion) return
@@ -309,15 +330,15 @@ async function renderPreview() {
     canvas.value.style.width = `${Math.floor(viewport.width)}px`
     canvas.value.style.height = `${Math.floor(viewport.height)}px`
 
-    renderTask?.cancel()
-    renderTask = page.render({
+    const currentRenderTask = page.render({
       canvasContext: context,
       viewport,
       transform: pixelRatio === 1 ? null : [pixelRatio, 0, 0, pixelRatio, 0, 0],
       background: '#ffffff',
     })
-    await renderTask.promise
-    renderTask = null
+    renderTask = currentRenderTask
+    await currentRenderTask.promise
+    if (renderTask === currentRenderTask) renderTask = null
     if (version === renderVersion) cropCanvasToContent(pixelRatio)
 
     if (version === renderVersion) {

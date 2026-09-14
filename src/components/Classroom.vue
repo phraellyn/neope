@@ -1,13 +1,24 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { loadStudentIdentitiesForGroup } from '../services/localStudentIdentity'
-import { loadProgrammingDay, loadProgrammingDocuments, programmingDocumentDate } from '../services/programmingRepository'
+import {
+  identityRecoveryMessage,
+  loadStudentIdentitiesForGroup,
+  studentIdentityDiagnostics,
+} from '../services/localStudentIdentity'
+import {
+  loadAndSynchronizeProgrammingDays,
+  loadProgrammingDocuments,
+  programmingDayForDate,
+  programmingDocumentDate,
+} from '../services/programmingRepository'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import StudentAssessmentDialog from './StudentAssessmentDialog.vue'
 
 const props = defineProps({
   group: { type: Object, required: true },
   date: { type: String, default: '' },
+  calendar: { type: Object, default: () => ({}) },
+  teacherId: { type: String, default: '' },
   configurationMode: { type: Boolean, default: false },
 })
 const emit = defineEmits(['dirty-change', 'validity-change', 'autosave-request', 'student-selected'])
@@ -109,10 +120,12 @@ async function loadTodayAssessments() {
       selectedAssessmentId.value = null
       return
     }
-    const [day, groupDocuments] = await Promise.all([
-      loadProgrammingDay(localGroup.value.id, date),
+    const [programmingDays, groupDocuments] = await Promise.all([
+      loadAndSynchronizeProgrammingDays({ group: localGroup.value, calendar: props.calendar, teacherId: props.teacherId }),
       loadProgrammingDocuments(localGroup.value.id),
     ])
+    const day = programmingDayForDate(programmingDays, date)
+    const programmingDayIds = new Set(day?.sessionIds || (day?.id ? [day.id] : []))
     const items = evaluationItems(localGroup.value.evaluaciones?.estructura || [])
     const itemsById = new Map(items.map((item) => [item.id, item]))
     const candidates = []
@@ -121,7 +134,13 @@ async function loadTodayAssessments() {
       if (item) candidates.push(item)
     })
     groupDocuments
-      .filter((documentData) => documentData.assessment?.evaluable && programmingDocumentDate(documentData) === date)
+      .filter((documentData) => {
+        if (!documentData.assessment?.evaluable) return false
+        const programmingDayId = documentData.programming?.programmingDayId
+        return programmingDayId
+          ? programmingDayIds.has(programmingDayId)
+          : programmingDocumentDate(documentData) === date
+      })
       .forEach((documentData) => {
         const item = itemsById.get(documentData.assessment?.gradebookItemId) || pendingDocumentItem(documentData, date)
         if (item) candidates.push(item)
@@ -297,9 +316,14 @@ function studentFlagStyle(id) {
 async function loadLocalIdentities() {
   try {
     localIdentities.value = await loadStudentIdentitiesForGroup(localGroup.value)
+    const diagnostics = studentIdentityDiagnostics(localIdentities.value)
+    if (diagnostics.failed) {
+      showAppErrorToast(identityRecoveryMessage(diagnostics), { color: 'warning', copy: false })
+    }
   } catch (error) {
     localIdentities.value = new Map()
     console.error('Error al cargar las identidades locales del aula:', error)
+    showAppErrorToast(error?.message || 'No se han podido abrir los datos identificativos guardados en este dispositivo.')
   }
 }
 function markDirty() { revision += 1; emit('dirty-change', true) }

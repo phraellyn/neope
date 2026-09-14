@@ -61,7 +61,8 @@ export function prettyPrintLatex(source) {
 
     if (pendingBlankLine) {
       const closesCompactBlock = leadingEnds.some((name) => compactEnvironments.has(name))
-      if (!closesCompactBlock && output.at(-1) !== '') output.push('')
+      const followsExerciseHeader = /^\\ej\b.*\\\\$/.test(String(output.at(-1) || '').trim())
+      if (!closesCompactBlock && !followsExerciseHeader && output.at(-1) !== '') output.push('')
       pendingBlankLine = false
     }
 

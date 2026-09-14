@@ -13,6 +13,84 @@ export function hasLegacyDisplayMathDelimiters(text) {
   return /(?<!\\)\\\[|(?<!\\)\\\]/.test(String(text || ''))
 }
 
+function escapedAt(source, index) {
+  let slashes = 0
+  for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) slashes += 1
+  return slashes % 2 === 1
+}
+
+function inMathModeAt(source, limit) {
+  let inlineMath = false
+  let displayMath = false
+  let mathEnvironmentDepth = 0
+  const mathEnvironment = /\\(begin|end)\s*\{(?:equation\*?|align\*?|gather\*?|multline\*?|displaymath|math)\}/y
+  for (let cursor = 0; cursor < limit;) {
+    if (source[cursor] === '%' && !escapedAt(source, cursor)) {
+      const newline = source.indexOf('\n', cursor)
+      cursor = newline === -1 ? limit : newline + 1
+      continue
+    }
+    if (source[cursor] === '$' && !escapedAt(source, cursor)) {
+      if (source[cursor + 1] === '$') {
+        displayMath = !displayMath
+        cursor += 2
+      } else {
+        inlineMath = !inlineMath
+        cursor += 1
+      }
+      continue
+    }
+    if (source[cursor] === '\\') {
+      mathEnvironment.lastIndex = cursor
+      const environment = mathEnvironment.exec(source)
+      if (environment && environment.index === cursor) {
+        mathEnvironmentDepth += environment[1] === 'begin' ? 1 : -1
+        mathEnvironmentDepth = Math.max(0, mathEnvironmentDepth)
+        cursor = mathEnvironment.lastIndex
+        continue
+      }
+    }
+    cursor += 1
+  }
+  return inlineMath || displayMath || mathEnvironmentDepth > 0
+}
+
+// `aligned` no abre por sí mismo el modo matemático. Algunos modelos lo
+// producen como bloque autónomo; lo envolvemos de forma determinista para que
+// la corrección no dependa de una nueva llamada a la IA.
+export function ensureAlignedInDisplayMath(text) {
+  const source = String(text || '')
+  const pattern = /\\begin\s*\{aligned\}[\s\S]*?\\end\s*\{aligned\}/g
+  let result = ''
+  let cursor = 0
+  for (const match of source.matchAll(pattern)) {
+    result += source.slice(cursor, match.index)
+    result += inMathModeAt(source, match.index)
+      ? match[0]
+      : `$$\n${match[0]}\n$$`
+    cursor = match.index + match[0].length
+  }
+  return `${result}${source.slice(cursor)}`
+}
+
+const latexAccentCharacters = Object.freeze({
+  "'a": 'á', "'e": 'é', "'i": 'í', "'o": 'ó', "'u": 'ú',
+  "'A": 'Á', "'E": 'É', "'I": 'Í', "'O": 'Ó', "'U": 'Ú',
+  '"u': 'ü', '"U': 'Ü', '~n': 'ñ', '~N': 'Ñ',
+})
+
+// Las plantillas trabajan en UTF-8. Convertir estas formas heredadas mejora la
+// legibilidad del código sin modificar los comandos matemáticos ordinarios.
+export function normalizeLatexTextAccents(text) {
+  return String(text || '')
+    .replace(/\\(['"~])\s*(?:\{([A-Za-z])\}|([A-Za-z]))/g, (match, accent, braced, plain) => (
+      latexAccentCharacters[`${accent}${braced || plain}`] || match
+    ))
+    .replace(/\\c\s*\{([cC])\}/g, (_, letter) => letter === 'C' ? 'Ç' : 'ç')
+    .replace(/\\'\s*\{\\i\}/g, 'í')
+    .normalize('NFC')
+}
+
 export function hasTrailingInfoCommand(text, expectedInfo) {
   const match = String(text || '').trim().match(/\\info\s*\{([^{}]*)\}\s*$/)
   return Boolean(match && match[1].trim() === String(expectedInfo || '').trim())

@@ -40,6 +40,13 @@ function assertStudentCode(code) {
   return normalized
 }
 
+function accessGroupIds(data = {}) {
+  return [...new Set([
+    ...(Array.isArray(data.groupIds) ? data.groupIds : []),
+    data.groupId,
+  ].map((groupId) => String(groupId || '').trim()).filter(Boolean))]
+}
+
 function publicTeacherInvitation(snapshot) {
   const data = snapshot.data() || {}
   return {
@@ -75,7 +82,7 @@ async function ensureTeacher(request) {
 async function migrateLegacyTeacher(uid) {
   const teacherReference = db.doc(`teachers/${uid}`)
   const teacherSnapshot = await teacherReference.get()
-  if (Number(teacherSnapshot.data()?.authMigration?.schemaVersion) >= 2) return
+  if (Number(teacherSnapshot.data()?.authMigration?.schemaVersion) >= 3) return
 
   let legacyAdmin = null
   try {
@@ -85,9 +92,14 @@ async function migrateLegacyTeacher(uid) {
   }
   const sourceIds = ['test']
   if (legacyAdmin?.uid && legacyAdmin.uid !== uid) sourceIds.push(legacyAdmin.uid)
+  const previousCorporateProfiles = await db.collection('teachers').where('email', '==', ADMIN_EMAIL).get()
+  previousCorporateProfiles.docs.forEach((entry) => {
+    if (entry.id !== uid) sourceIds.push(entry.id)
+  })
+  const uniqueSourceIds = [...new Set(sourceIds)]
 
   let foundLegacyTeacher = false
-  for (const sourceId of sourceIds) {
+  for (const sourceId of uniqueSourceIds) {
     const sourceReference = db.doc(`teachers/${sourceId}`)
     const sourceSnapshot = await sourceReference.get()
     if (!sourceSnapshot.exists) continue
@@ -116,7 +128,7 @@ async function migrateLegacyTeacher(uid) {
     }, { merge: true })
   }
 
-  for (const sourceId of sourceIds) {
+  for (const sourceId of uniqueSourceIds) {
     for (const collectionName of ['grupos', 'ejercicios', 'documentos']) {
       const fieldName = collectionName === 'grupos' ? 'teacherId' : 'ownerId'
       const snapshots = await db.collection(collectionName).where(fieldName, '==', sourceId).get()
@@ -138,6 +150,7 @@ async function migrateLegacyTeacher(uid) {
       await db.doc(`studentAccessCodes/${student.id}`).set({
         code: student.id,
         groupId: group.id,
+        groupIds: FieldValue.arrayUnion(group.id),
         teacherId: uid,
         active: true,
         updatedAt: FieldValue.serverTimestamp(),
@@ -145,7 +158,7 @@ async function migrateLegacyTeacher(uid) {
     }
   }
   await teacherReference.set({
-    authMigration: { schemaVersion: 2, completedAt: FieldValue.serverTimestamp() },
+    authMigration: { schemaVersion: 3, completedAt: FieldValue.serverTimestamp() },
   }, { merge: true })
 
   if (legacyAdmin?.uid && legacyAdmin.uid !== uid) {
@@ -159,12 +172,9 @@ export const bootstrapAdminAccount = onCall(callableOptions, async () => {
   try {
     user = await auth.getUserByEmail(ADMIN_EMAIL)
     if (!user.emailVerified) {
-      await auth.deleteUser(user.uid)
-      user = await auth.createUser({
-        email: ADMIN_EMAIL,
+      user = await auth.updateUser(user.uid, {
         emailVerified: true,
         displayName: 'Carlos Sánchez Catalá',
-        password: randomBytes(32).toString('base64url'),
       })
     }
   } catch (error) {
@@ -308,22 +318,68 @@ export const syncStudentAccessCodes = onCall(callableOptions, async (request) =>
   const groupId = String(request.data?.groupId || '').trim()
   const codes = [...new Set((Array.isArray(request.data?.codes) ? request.data.codes : []).map(assertStudentCode))]
   const groupReference = db.doc(`grupos/${groupId}`)
-  const group = await groupReference.get()
-  if (!group.exists || group.data()?.teacherId !== teacherId) {
-    throw new HttpsError('permission-denied', 'El grupo no pertenece al profesor.')
-  }
-  const existing = await db.collection('studentAccessCodes').where('groupId', '==', groupId).get()
-  const wanted = new Set(codes)
-  for (const current of existing.docs) {
-    if (!wanted.has(current.id)) await current.ref.set({ active: false, updatedAt: FieldValue.serverTimestamp() }, { merge: true })
-  }
-  for (const code of codes) {
-    const reference = db.doc(`studentAccessCodes/${code}`)
-    const snapshot = await reference.get()
-    if (snapshot.exists && snapshot.data()?.groupId !== groupId) {
-      throw new HttpsError('already-exists', `El código ${code} ya pertenece a otro alumno.`)
+  const references = codes.map((code) => db.doc(`studentAccessCodes/${code}`))
+
+  // Un código identifica a un alumno, no a una matrícula: puede pertenecer a
+  // varios grupos del mismo profesor (por ejemplo, Matemáticas y Refuerzo).
+  // La reserva sigue siendo exclusiva entre profesores distintos.
+  await db.runTransaction(async (transaction) => {
+    const group = await transaction.get(groupReference)
+    if (!group.exists || group.data()?.teacherId !== teacherId) {
+      throw new HttpsError('permission-denied', 'El grupo no pertenece al profesor.')
     }
-    await reference.set({ code, groupId, teacherId, active: true, updatedAt: FieldValue.serverTimestamp() }, { merge: true })
+
+    const snapshots = []
+    for (const reference of references) snapshots.push(await transaction.get(reference))
+    for (let index = 0; index < codes.length; index += 1) {
+      const snapshot = snapshots[index]
+      if (snapshot.exists && snapshot.data()?.teacherId !== teacherId) {
+        throw new HttpsError('already-exists', `El código ${codes[index]} ya pertenece a otro alumno.`)
+      }
+    }
+
+    for (let index = 0; index < codes.length; index += 1) {
+      const groupIds = [...new Set([
+        ...accessGroupIds(snapshots[index]?.data?.() || {}),
+        groupId,
+      ])]
+      transaction.set(references[index], {
+        code: codes[index],
+        groupId: groupIds[0],
+        groupIds,
+        teacherId,
+        active: true,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true })
+    }
+  })
+
+  const [legacyExisting, sharedExisting] = await Promise.all([
+    db.collection('studentAccessCodes').where('groupId', '==', groupId).get(),
+    db.collection('studentAccessCodes').where('groupIds', 'array-contains', groupId).get(),
+  ])
+  const existing = new Map([...legacyExisting.docs, ...sharedExisting.docs].map((entry) => [entry.id, entry]))
+  const wanted = new Set(codes)
+  const stale = [...existing.values()].filter((current) => !wanted.has(current.id))
+  if (stale.length) {
+    const batch = db.batch()
+    for (const current of stale) {
+      const remainingGroupIds = accessGroupIds(current.data()).filter((id) => id !== groupId)
+      batch.set(current.ref, remainingGroupIds.length
+        ? {
+            groupId: remainingGroupIds[0],
+            groupIds: remainingGroupIds,
+            active: true,
+            updatedAt: FieldValue.serverTimestamp(),
+          }
+        : {
+            groupId: FieldValue.delete(),
+            groupIds: [],
+            active: false,
+            updatedAt: FieldValue.serverTimestamp(),
+          }, { merge: true })
+    }
+    await batch.commit()
   }
   return { synced: codes.length }
 })
@@ -343,7 +399,7 @@ export const resetStudentAccess = onCall(callableOptions, async (request) => {
   const code = assertStudentCode(request.data?.code)
   const reference = db.doc(`studentAccessCodes/${code}`)
   const snapshot = await reference.get()
-  if (!snapshot.exists || snapshot.data()?.teacherId !== teacherId || snapshot.data()?.groupId !== groupId) {
+  if (!snapshot.exists || snapshot.data()?.teacherId !== teacherId || !accessGroupIds(snapshot.data()).includes(groupId)) {
     throw new HttpsError('permission-denied', 'El código no pertenece a este grupo.')
   }
   const authUid = snapshot.data()?.authUid
@@ -356,10 +412,12 @@ export const resetStudentAccess = onCall(callableOptions, async (request) => {
     resetAt: FieldValue.serverTimestamp(),
     active: true,
   }, { merge: true })
-  await db.doc(`grupos/${groupId}/alumnos/${code}`).set({
-    authUid: FieldValue.delete(),
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true })
+  await Promise.all(accessGroupIds(snapshot.data()).map((linkedGroupId) => (
+    db.doc(`grupos/${linkedGroupId}/alumnos/${code}`).set({
+      authUid: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })
+  )))
   return { reset: true }
 })
 
@@ -391,10 +449,12 @@ export const claimStudentAccount = onCall(callableOptions, async (request) => {
       const fresh = await transaction.get(reference)
       if (fresh.data()?.authUid) throw new HttpsError('aborted', 'Este código ya se ha activado.')
       transaction.update(reference, { authUid: user.uid, claimedAt: FieldValue.serverTimestamp() })
-      transaction.set(db.doc(`grupos/${fresh.data().groupId}/alumnos/${code}`), {
-        authUid: user.uid,
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true })
+      accessGroupIds(fresh.data()).forEach((groupId) => {
+        transaction.set(db.doc(`grupos/${groupId}/alumnos/${code}`), {
+          authUid: user.uid,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true })
+      })
     })
   } catch (error) {
     if (user?.uid) await auth.deleteUser(user.uid).catch(() => {})
@@ -413,7 +473,8 @@ export const getStudentDashboard = onCall(callableOptions, async (request) => {
   if (!access.exists || access.data()?.authUid !== request.auth.uid || access.data()?.active !== true) {
     throw new HttpsError('permission-denied', 'El acceso de este alumno ya no está activo.')
   }
-  const group = await db.doc(`grupos/${access.data().groupId}`).get()
+  const groupIds = accessGroupIds(access.data())
+  const group = await db.doc(`grupos/${groupIds[0]}`).get()
   const student = await group.ref.collection('alumnos').doc(code).get()
   if (!group.exists || !student.exists) throw new HttpsError('not-found', 'No se han encontrado los datos académicos.')
   const groupData = group.data()

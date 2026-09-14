@@ -2,7 +2,12 @@
 import { computed, ref, watch } from 'vue'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../services/firebase'
-import { loadStudentIdentitiesForGroup, saveStudentIdentities } from '../services/localStudentIdentity'
+import {
+  identityRecoveryMessage,
+  loadStudentIdentitiesForGroup,
+  saveStudentIdentities,
+  studentIdentityDiagnostics,
+} from '../services/localStudentIdentity'
 import { loadStudentCompetencyProgress } from '../services/studentCompetencyProgress'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import StudentCompetencyRadar from './StudentCompetencyRadar.vue'
@@ -148,10 +153,14 @@ async function load() {
   ready = false
   try {
     const stored = await loadStudentIdentitiesForGroup(props.group)
+    const diagnostics = studentIdentityDiagnostics(stored)
     applyStudent({ ...props.student, ...(stored.get(props.student.id) || {}) })
+    if (diagnostics.failed) {
+      showAppErrorToast(identityRecoveryMessage(diagnostics), { color: 'warning', copy: false })
+    }
   } catch (cause) {
     applyStudent(props.student)
-    error.value = 'No se han podido abrir los datos locales de este alumno.'
+    error.value = cause?.message || 'No se han podido abrir los datos locales de este alumno.'
     emit('error', cause)
   } finally {
     isLoading.value = false

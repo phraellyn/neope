@@ -1,8 +1,9 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/firestore'
+import { httpsCallable } from 'firebase/functions'
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
-import { auth, db, storage } from '../services/firebase'
+import { auth, db, functions, storage } from '../services/firebase'
 import { mathSubjects } from '../data/mathCurriculum'
 import ExerciseCurriculumPicker from './ExerciseCurriculumPicker.vue'
 import ExercisePdfPreview from './ExercisePdfPreview.vue'
@@ -11,12 +12,24 @@ import DocumentPdfPreview from './DocumentPdfPreview.vue'
 import DocumentCodeEditor from './DocumentCodeEditor.vue'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
 import MasonryGrid from './MasonryGrid.vue'
-import { aggregateExerciseStructure, buildExerciseLatex, mergeExerciseStructure, parseExerciseLatex } from '../utils/exerciseStructure'
+import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, mergeExerciseStructure, parseExerciseLatex } from '../utils/exerciseStructure'
 import { compactExerciseConceptLabel, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
 import { normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import { syncDocumentAssessment } from '../services/documentAssessmentRepository'
 import { assessmentExerciseModel } from '../utils/documentAssessmentMatrix'
+import {
+  DOCUMENT_CONTENT_SOURCE_TYPES,
+  createDocumentContent,
+  createExerciseDocumentBlock,
+  createToolDocumentBlock,
+  documentContentFromRecord,
+  replaceDocumentContentBlocks,
+  replaceDocumentContentSource,
+  replaceDocumentSurroundingLatex,
+  serializeDocumentContent,
+  touchDocumentContent,
+} from '../utils/documentContent'
 
 const props = defineProps({
   templates: { type: Array, default: () => [] },
@@ -28,18 +41,23 @@ const props = defineProps({
   groups: { type: Array, default: () => [] },
   compilerBaseUrl: { type: String, default: '/compiler-api/v1' },
   libraryQuery: { type: String, default: '' },
+  aiModel: { type: String, default: 'google/gemini-3-flash-preview' },
+  aiModelOptions: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['busy-change', 'state-change', 'assessment-saved'])
+const emit = defineEmits(['busy-change', 'state-change', 'assessment-saved', 'update:ai-model'])
+const documentAiModel = computed({
+  get: () => props.aiModel,
+  set: (value) => emit('update:ai-model', value),
+})
 
 const baseSteps = Object.freeze([
   { number: 1, title: 'Plantilla', icon: 'mdi-file-document-outline' },
-  { number: 2, title: 'Contenidos', icon: 'mdi-chart-donut-variant' },
-  { number: 3, title: 'Ejercicios', icon: 'mdi-format-list-numbered' },
-  { number: 4, title: 'Vista previa', icon: 'mdi-file-pdf-box' },
+  { number: 2, title: 'Contenido', icon: 'mdi-pencil-ruler' },
+  { number: 3, title: 'Documentos generados', icon: 'mdi-file-pdf-box' },
 ])
 const steps = computed(() => baseSteps)
-const lastStep = computed(() => steps.value.at(-1)?.number || 4)
+const lastStep = computed(() => steps.value.at(-1)?.number || 3)
 const ASSESSMENT_PREVIEW_KEY = '__assessment_matrix__'
 
 const defaultMetadata = Object.freeze({
@@ -79,7 +97,43 @@ const documentCurriculum = ref(emptyCurriculum())
 const curriculumPickerKey = ref(0)
 const exerciseQuery = ref('')
 const selectedVersions = reactive({})
-const exerciseQueue = ref([])
+const documentContent = ref(createDocumentContent())
+const curriculumDialog = ref(false)
+const sourceFileInput = ref(null)
+const sourceFiles = ref([])
+const sourceLatexDraft = ref('')
+// El creador actual sigue trabajando con una cola para conservar su interfaz,
+// pero esa cola ya es la lista de bloques del modelo de contenido común.
+const exerciseQueue = computed({
+  get: () => documentContent.value.blocks,
+  set: (blocks) => {
+    documentContent.value = replaceDocumentContentBlocks(documentContent.value, blocks)
+  },
+})
+const contentWorkspaceMode = computed({
+  get: () => {
+    const type = documentContent.value.source.type
+    if ([DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(type)) return 'latex'
+    if (type === DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM) return 'curriculum'
+    if (type === DOCUMENT_CONTENT_SOURCE_TYPES.LATEX) return 'latex'
+    return 'exercise-bank'
+  },
+  set: (modeValue) => selectContentWorkspace(modeValue),
+})
+const sourceLatexCode = computed({
+  get: () => sourceLatexDraft.value,
+  set: (code) => updateSourceLatex(code),
+})
+const sourcePreviewFile = computed(() => sourceFiles.value[0] || null)
+const sourcePreviewIsPdf = computed(() => Boolean(
+  sourcePreviewFile.value
+  && (sourcePreviewFile.value.contentType === 'application/pdf' || /\.pdf$/i.test(sourcePreviewFile.value.name || '')),
+))
+const sourcePreviewIsImage = computed(() => Boolean(
+  sourcePreviewFile.value
+  && !sourcePreviewIsPdf.value
+  && (sourcePreviewFile.value.contentType?.startsWith('image/') || /\.(?:png|jpe?g)$/i.test(sourcePreviewFile.value.name || '')),
+))
 const optionalRequiredCount = ref(1)
 const previewUrl = ref('')
 const previewBlob = ref(null)
@@ -88,10 +142,10 @@ const previewAssetSignature = ref('')
 const previewDocuments = ref([])
 const documentCode = ref('')
 const documentCodeNeedsRegeneration = ref(true)
-const showDocumentCode = ref(false)
 const compileError = ref('')
 const compileErrorVisible = ref(false)
 const isCompiling = ref(false)
+const isGeneratingContent = ref(false)
 const isSaving = ref(false)
 const dragPayload = ref(null)
 const viewedDocument = ref(null)
@@ -99,9 +153,147 @@ const viewerAssessmentExercises = ref([])
 const viewerAssessmentLoading = ref(false)
 const queueStructureCache = new WeakMap()
 const grayscaleLogoCache = new Map()
+const generatedSegmentArtifacts = new Map()
 
 function emptyCurriculum() {
   return { course: null, subjectId: null, conceptIds: [], competencial: false }
+}
+
+function sourceOptionsFor(type, overrides = {}) {
+  const previous = documentContent.value.source.options || {}
+  if (type === DOCUMENT_CONTENT_SOURCE_TYPES.LATEX) {
+    return { code: String(overrides.code ?? sourceLatexDraft.value ?? previous.code ?? '') }
+  }
+  if ([DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(type)) {
+    return {
+      code: String(overrides.code ?? sourceLatexDraft.value ?? previous.code ?? ''),
+      files: Array.isArray(overrides.files) ? overrides.files : (Array.isArray(previous.files) ? previous.files : []),
+    }
+  }
+  if (type === DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM) {
+    return {
+      course: documentCurriculum.value.course || null,
+      subjectId: documentCurriculum.value.subjectId || null,
+      conceptIds: [...new Set(documentCurriculum.value.conceptIds || [])],
+      competencial: Boolean(documentCurriculum.value.competencial),
+    }
+  }
+  return {}
+}
+
+function setDocumentSource(type, options = null) {
+  const changedType = documentContent.value.source.type !== type
+  documentContent.value = replaceDocumentContentSource(documentContent.value, {
+    type,
+    options: options || sourceOptionsFor(type),
+  })
+  if (changedType) {
+    exerciseQueue.value = []
+    documentContent.value = replaceDocumentSurroundingLatex(documentContent.value)
+  }
+  documentCodeNeedsRegeneration.value = true
+  documentCode.value = ''
+  invalidatePreview()
+}
+
+function selectContentWorkspace(modeValue) {
+  if (modeValue === 'curriculum') {
+    setDocumentSource(DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM)
+    return
+  }
+  if (modeValue === 'latex') {
+    const currentType = documentContent.value.source.type
+    const nextType = [DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(currentType)
+      ? currentType
+      : (sourceFiles.value.length ? sourceFileType(sourceFiles.value[0].file || sourceFiles.value[0]) : DOCUMENT_CONTENT_SOURCE_TYPES.LATEX)
+    setDocumentSource(nextType)
+    return
+  }
+  setDocumentSource(DOCUMENT_CONTENT_SOURCE_TYPES.EXERCISE_BANK)
+}
+
+function updateSourceLatex(code) {
+  sourceLatexDraft.value = String(code || '')
+  const currentType = documentContent.value.source.type
+  const type = [DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(currentType)
+    ? currentType
+    : DOCUMENT_CONTENT_SOURCE_TYPES.LATEX
+  documentContent.value = replaceDocumentContentSource(documentContent.value, {
+    type,
+    options: sourceOptionsFor(type, { code }),
+  })
+  if (exerciseQueue.value.some((item) => item.type !== 'tool' && item.snapshot)) {
+    exerciseQueue.value = []
+    documentContent.value = replaceDocumentSurroundingLatex(documentContent.value)
+  }
+  documentCodeNeedsRegeneration.value = true
+  documentCode.value = ''
+  invalidatePreview()
+}
+
+function revokeSourceFiles() {
+  sourceFiles.value.forEach((entry) => {
+    if (entry.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(entry.previewUrl)
+  })
+  sourceFiles.value = []
+}
+
+function chooseSourceFiles() {
+  sourceFileInput.value?.click()
+}
+
+function sourceFileType(file) {
+  if (file?.type === 'application/pdf' || /\.pdf$/i.test(file?.name || '')) return DOCUMENT_CONTENT_SOURCE_TYPES.PDF
+  return DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE
+}
+
+function sourceCompilerName(file, index = 0) {
+  const raw = String(file?.name || `fuente-${index + 1}`)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return raw || `fuente-${index + 1}`
+}
+
+function onSourceFilesSelected(event) {
+  const files = [...(event.target?.files || [])]
+  if (!files.length) return
+  revokeSourceFiles()
+  sourceFiles.value = files.map((file, index) => ({
+    id: globalThis.crypto?.randomUUID?.() || `source-${Date.now()}-${index}`,
+    file,
+    name: file.name,
+    contentType: file.type || '',
+    size: file.size,
+    compilerName: sourceCompilerName(file, index),
+    previewUrl: URL.createObjectURL(file),
+  }))
+  const type = sourceFileType(files[0])
+  setDocumentSource(type, sourceOptionsFor(type, {
+    files: sourceFiles.value.map(({ id, name, contentType, size, compilerName }) => ({ id, name, contentType, size, compilerName })),
+  }))
+  if (event.target) event.target.value = ''
+}
+
+function removeSourceFile(id) {
+  const target = sourceFiles.value.find((entry) => entry.id === id)
+  if (target?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(target.previewUrl)
+  sourceFiles.value = sourceFiles.value.filter((entry) => entry.id !== id)
+  const currentType = documentContent.value.source.type
+  const nextType = sourceFiles.value.length ? sourceFileType(sourceFiles.value[0].file || sourceFiles.value[0]) : DOCUMENT_CONTENT_SOURCE_TYPES.LATEX
+  setDocumentSource(nextType, sourceOptionsFor(nextType, {
+    code: documentContent.value.source.options?.code || '',
+    files: sourceFiles.value.map(({ id: fileId, name, contentType, size, compilerName, path, url }) => ({ id: fileId, name, contentType, size, compilerName, path, url })),
+  }))
+}
+
+function syncCurriculumSource() {
+  if (documentContent.value.source.type !== DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM) return
+  documentContent.value = replaceDocumentContentSource(documentContent.value, {
+    type: DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM,
+    options: sourceOptionsFor(DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM),
+  })
 }
 
 function normalizeName(value) {
@@ -221,6 +413,40 @@ const selectedMetadata = computed(() => selectedTemplate.value?.metadata || defa
 const selectedTemplates = computed(() => selectedTemplateKeys.value
   .map((key) => documentTemplates.value.find((template) => template.key === key))
   .filter(Boolean))
+
+function generationLatexCapabilities() {
+  const packages = new Set()
+  const commands = new Set()
+  const environments = new Set(['center', 'tabular', 'array', 'minipage', 'itemize', 'enumerate', 'tikzpicture'])
+  selectedTemplates.value.forEach((template) => {
+    const code = String(template?.codigo || '')
+    for (const match of code.matchAll(/\\usepackage(?:\[[^\]]*\])?\{([^}]+)\}/g)) {
+      match[1].split(',').map((name) => name.trim()).filter(Boolean).forEach((name) => packages.add(name))
+    }
+    for (const match of code.matchAll(/\\(?:newcommand|renewcommand|providecommand)\s*\{?\\([A-Za-z@]+)\}?/g)) {
+      commands.add(`\\${match[1]}`)
+    }
+    for (const match of code.matchAll(/\\(?:newenvironment|renewenvironment)\s*\{([^}]+)\}/g)) {
+      environments.add(match[1].trim())
+    }
+  })
+  return {
+    packages: [...packages].slice(0, 80),
+    customCommands: [...commands].slice(0, 120),
+    environments: [...environments].slice(0, 80),
+    standardConstructs: ['\\rule', '\\vspace', '\\hspace', '\\parbox', '\\makebox', '\\fbox', '\\framebox', '\\raisebox', 'tabular', 'minipage', 'TikZ'],
+    headerFields: unifiedFields.value.map((field) => ({
+      key: field.key,
+      label: field.label,
+      value: String(fieldValues[field.key] || '').trim(),
+    })),
+    headerInvocations: selectedTemplates.value.map((template) => ({
+      template: template.nombre || template.metadata?.name || template.archivo,
+      latex: headerCode(template),
+    })),
+  }
+}
+
 const previewTemplate = computed(() => selectedTemplates.value.find((template) => template.key === selectedPreviewTemplateKey.value)
   || selectedTemplates.value.find((template) => template.key === lastDocumentPreviewKey.value)
   || selectedTemplates.value[0]
@@ -364,17 +590,31 @@ const requiredFieldsComplete = computed(() => Boolean(selectedTemplate.value)
   && assessmentFieldsComplete.value)
 const canContinue = computed(() => {
   if (currentStep.value === 1) return requiredFieldsComplete.value
-  if (currentStep.value === 2) return Boolean(documentCurriculum.value.subjectId)
-  if (currentStep.value === 3) return selectedExercises.value.length > 0
-  if (currentStep.value === 4) return documentAssessment.evaluable && previewDocuments.value.length > 0
+  if (currentStep.value === 2) {
+    const type = documentContent.value.source.type
+    if (type === DOCUMENT_CONTENT_SOURCE_TYPES.EXERCISE_BANK) return selectedExercises.value.length > 0
+    if (type === DOCUMENT_CONTENT_SOURCE_TYPES.LATEX) return Boolean(sourceLatexCode.value.trim())
+    if ([DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(type)) {
+      return Boolean(sourceLatexCode.value.trim() || sourceFiles.value.length)
+    }
+    return Boolean(documentCurriculum.value.subjectId && documentCurriculum.value.conceptIds?.length)
+  }
+  if (currentStep.value === 3) return previewDocuments.value.length > 0
   return false
+})
+const contentCanGenerate = computed(() => {
+  const type = documentContent.value.source.type
+  if (type === DOCUMENT_CONTENT_SOURCE_TYPES.EXERCISE_BANK) return selectedExercises.value.length > 0
+  if (type === DOCUMENT_CONTENT_SOURCE_TYPES.LATEX) return Boolean(sourceLatexCode.value.trim())
+  if ([DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(type)) return Boolean(sourceLatexCode.value.trim() || sourceFiles.value.length)
+  return Boolean(documentCurriculum.value.subjectId && documentCurriculum.value.conceptIds?.length)
 })
 const workflowState = computed(() => ({
   mode: mode.value,
   step: currentStep.value,
   canContinue: canContinue.value,
   canGoBack: currentStep.value > 1,
-  isCompiling: isCompiling.value,
+  isCompiling: isCompiling.value || isGeneratingContent.value,
   isSaving: isSaving.value,
   totalSteps: lastStep.value,
   canSave: currentStep.value === lastStep.value && Boolean(previewUrl.value) && !isCompiling.value,
@@ -384,6 +624,357 @@ watch(workflowState, (state) => emit('state-change', state), { immediate: true }
 watch(selectedPreviewTemplateKey, (key) => {
   if (key && key !== ASSESSMENT_PREVIEW_KEY) lastDocumentPreviewKey.value = key
 })
+
+function onDocumentCurriculumUpdate(value) {
+  documentCurriculum.value = { ...emptyCurriculum(), ...(value || {}) }
+  syncCurriculumSource()
+  invalidatePreview()
+}
+
+function conceptPath(nodeId) {
+  const byId = new Map(props.conceptNodes.map((node) => [node.id, node]))
+  const titles = []
+  let current = byId.get(nodeId)
+  while (current) {
+    if (current.id !== 'matematicas') titles.unshift(current.title)
+    current = current.parentId ? byId.get(current.parentId) : null
+  }
+  return titles.join(' · ')
+}
+
+function effectiveGenerationCurriculum() {
+  const course = documentCurriculum.value.course || selectedGroupOption.value?.course || null
+  const subject = mathSubjects.find((item) => item.id === documentCurriculum.value.subjectId)
+    || mathSubjects.find((item) => item.id === selectedGroupOption.value?.subjectId)
+    || matchSubject(selectedGroupOption.value?.subject || summaryFieldValue(fieldValues, ['subject', 'asignatura']), course)
+  return {
+    course: course || subject?.course || null,
+    subjectId: subject?.id || null,
+    subjectTitle: subject?.title || selectedGroupOption.value?.subject || summaryFieldValue(fieldValues, ['subject', 'asignatura']),
+    conceptIds: [...new Set(documentCurriculum.value.conceptIds || [])],
+  }
+}
+
+function generationConceptCatalog(curriculum) {
+  const subjectIds = Array.isArray(props.subjectSelections?.[curriculum.subjectId])
+    ? props.subjectSelections[curriculum.subjectId]
+    : []
+  const allowed = new Set([...subjectIds, ...curriculum.conceptIds])
+  return props.conceptNodes
+    .filter((node) => !allowed.size || allowed.has(node.id) || node.id === 'matematicas')
+    .map((node) => ({
+      id: node.id,
+      title: node.title,
+      path: conceptPath(node.id),
+      selected: curriculum.conceptIds.includes(node.id),
+    }))
+}
+
+function structureWithQueueMetrics(item) {
+  const structure = aggregateExerciseStructure(queueStructure(item))
+  const metrics = queueMetrics(item)
+  if (structure.apartados.length) {
+    structure.apartados.forEach((part, index) => {
+      part.puntuacion = Number(metrics.apartados?.[index]?.puntuacion) || 0
+      part.tiempo = Number(metrics.apartados?.[index]?.tiempo) || 0
+    })
+  } else {
+    structure.puntuacion = Number(metrics.puntuacion) || 0
+    structure.tiempo = Number(metrics.tiempo) || 0
+  }
+  return aggregateExerciseStructure(structure)
+}
+
+function generationExercisePayload(item) {
+  const structure = structureWithQueueMetrics(item)
+  const segments = structure.apartados.length
+    ? structure.apartados.map((part, index) => ({
+      segmentIndex: index,
+      points: part.puntuacion,
+      statement: part.enunciado,
+      answer: part.respuesta,
+      workedSolution: part.solucion,
+      contentIds: part.contenidos || [],
+    }))
+    : [{
+      segmentIndex: -1,
+      points: structure.puntuacion,
+      statement: structure.enunciado,
+      answer: structure.respuesta,
+      workedSolution: structure.solucion,
+      contentIds: structure.contenidos || [],
+    }]
+  return {
+    sourceBlockId: item.blockId,
+    latex: buildExerciseLatex(structure),
+    segments,
+  }
+}
+
+async function sourceFilesForAi() {
+  const files = []
+  let encodedSize = 0
+  for (const source of sourceFiles.value.slice(0, 6)) {
+    let blob = source.file || null
+    if (!blob && source.url) {
+      const response = await fetch(browserAssetUrl(source.url))
+      if (!response.ok) throw new Error(`No se ha podido leer ${source.name}.`)
+      blob = await response.blob()
+    }
+    if (!blob) continue
+    const dataUrl = `data:${source.contentType || blob.type};base64,${binaryBase64(await blob.arrayBuffer())}`
+    encodedSize += dataUrl.length
+    if (encodedSize > 7_500_000) throw new Error('Los adjuntos superan el tamaño máximo de 7,5 MB para analizarlos con IA.')
+    files.push({
+      name: source.compilerName || source.name,
+      mimeType: source.contentType || blob.type,
+      dataUrl,
+    })
+  }
+  return files
+}
+
+function revokeGeneratedSegmentArtifacts() {
+  generatedSegmentArtifacts.forEach((artifact) => {
+    if (artifact.url?.startsWith('blob:')) URL.revokeObjectURL(artifact.url)
+  })
+  generatedSegmentArtifacts.clear()
+}
+
+function segmentCompilerCode(code) {
+  return `\\shorthandoff{<>}\n\\noindent\n\\hspace*{2.5mm}\n\\begin{minipage}{8.5cm}\n\\vspace*{2.5mm}\n${normalizeDisplayMathDelimiters(code).trim()}\n\\par\n\\vspace*{2.5mm}\n\\end{minipage}\n\\hspace*{2.5mm}`
+}
+
+function exercisePreambleTemplate() {
+  return props.templates.find((template) => /(?:^|\/)ejercicio(?:\.tex)?$/i.test(template.archivo || ''))
+    || props.templates.find((template) => /^ejercicio$/i.test(template.nombre || template.metadata?.name || ''))
+    || null
+}
+
+async function compileGeneratedSegment(code, preambleName, assets) {
+  const response = await compilerRequest('/compile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: segmentCompilerCode(code), preamble_name: preambleName, assets }),
+  })
+  return response.blob()
+}
+
+async function compileGeneratedSegmentPreviews(blocks) {
+  const generatedBlocks = blocks.filter((block) => block.type !== 'tool' && block.snapshot)
+  if (!generatedBlocks.length) return
+  const template = exercisePreambleTemplate()
+  if (!template) throw new Error('No se encuentra la plantilla «ejercicio» necesaria para crear la matriz de evaluación.')
+  await compilerRequest('/preambles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: template.archivo, content: template.codigo }),
+  })
+  const assets = await documentAssets()
+  revokeGeneratedSegmentArtifacts()
+  for (const block of generatedBlocks) {
+    const structure = aggregateExerciseStructure(block.snapshot.structure || versionStructure(block.snapshot, 0))
+    const compileAndAttach = async (key, code, assign) => {
+      if (!String(code || '').trim()) return
+      const blob = await compileGeneratedSegment(code, template.archivo, assets)
+      const url = URL.createObjectURL(blob)
+      generatedSegmentArtifacts.set(`${block.exerciseId}:${key}`, { exerciseId: block.exerciseId, key, blob, url })
+      assign(url)
+    }
+    await compileAndAttach('main-statement', buildExercisePartLatex(structure), (url) => {
+      structure.pdfenunciado = url
+    })
+    if (!structure.apartados.length) {
+      await compileAndAttach('main-solved', buildExercisePartLatex(structure, null, { includeSolutions: true }), (url) => {
+        structure.pdfsolucion = url
+        structure.pdfsolucioncompleto = url
+      })
+    } else {
+      for (const [index, part] of structure.apartados.entries()) {
+        await compileAndAttach(`part-${index}-solved`, buildExercisePartLatex(structure, index, { includeSolutions: true }), (url) => {
+          part.pdfsolucion = url
+        })
+      }
+    }
+    block.snapshot.structure = aggregateExerciseStructure(structure)
+  }
+}
+
+function generatedSnapshot(generated, curriculum, index) {
+  const parts = (generated.parts || []).map((part) => ({
+    id: globalThis.crypto?.randomUUID?.() || `part-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    enunciado: part.statement,
+    respuesta: part.answer,
+    solucion: part.workedSolution,
+    puntuacion: part.points,
+    tiempo: part.durationMinutes,
+    contenidos: part.contentIds || [],
+    achievements: part.achievements || [],
+  }))
+  const structure = aggregateExerciseStructure({
+    enunciado: generated.statement,
+    respuesta: generated.answer,
+    solucion: generated.workedSolution,
+    puntuacion: generated.points,
+    tiempo: generated.durationMinutes,
+    apartadosEnv: parts.length ? generated.partsEnvironment : null,
+    partsEnvironment: parts.length ? generated.partsEnvironment : null,
+    apartados: parts,
+    final: '',
+    info: generated.info,
+    contenidosGenerales: generated.contentIds || [],
+    contenidos: generated.contentIds || [],
+    achievements: generated.achievements || [],
+  })
+  const id = `document-generated-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${index}`}`
+  const code = buildExerciseLatex(structure)
+  return {
+    id,
+    enunciado: code,
+    codigo: code,
+    structure,
+    curriculum: {
+      course: curriculum.course,
+      subjectId: curriculum.subjectId,
+      conceptIds: structure.contenidos,
+      competencial: true,
+    },
+    autorEnunciado: `IA · ${documentAiModel.value}`,
+    autorSolucion: `IA · ${documentAiModel.value}`,
+    archivos: sourceFiles.value.map((file) => ({ ...file, file: undefined, previewUrl: undefined })),
+    variaciones: [],
+  }
+}
+
+function alignedSnapshot(item, alignments, curriculum) {
+  const original = exerciseForQueue(item)
+  const structure = structureWithQueueMetrics(item)
+  alignments.filter((entry) => entry.sourceBlockId === item.blockId).forEach((entry) => {
+    const target = entry.segmentIndex < 0 ? structure : structure.apartados[entry.segmentIndex]
+    if (!target) return
+    target.contenidos = entry.contentIds || []
+    target.achievements = entry.achievements || []
+  })
+  const aggregated = aggregateExerciseStructure(structure)
+  const active = activeVersion(original, item.version)
+  const code = buildExerciseLatex(aggregated)
+  return {
+    ...original,
+    ...active,
+    id: `${item.exerciseId}-document-${item.blockId}`,
+    enunciado: code,
+    codigo: code,
+    structure: aggregated,
+    curriculum: {
+      ...(original?.curriculum || {}),
+      course: curriculum.course || original?.curriculum?.course,
+      subjectId: curriculum.subjectId || original?.curriculum?.subjectId,
+      conceptIds: aggregated.contenidos,
+      competencial: true,
+    },
+    variaciones: [],
+  }
+}
+
+async function generateOrRegenerateContent() {
+  if (!contentCanGenerate.value || isGeneratingContent.value || isCompiling.value) {
+    if (!contentCanGenerate.value) {
+      compileError.value = 'Completa la fuente del contenido antes de generar.'
+      compileErrorVisible.value = true
+    }
+    return
+  }
+  const curriculum = effectiveGenerationCurriculum()
+  if (!curriculum.course || !curriculum.subjectId) {
+    compileError.value = 'Selecciona primero un curso y una asignatura para contextualizar la generación.'
+    compileErrorVisible.value = true
+    return
+  }
+  isGeneratingContent.value = true
+  emit('busy-change', true)
+  compileError.value = ''
+  compileErrorVisible.value = false
+  try {
+    const sourceType = documentContent.value.source.type
+    const alignOnly = sourceType === DOCUMENT_CONTENT_SOURCE_TYPES.EXERCISE_BANK
+    // La generación completa puede incluir OCR, resoluciones y vinculación
+    // competencial. El SDK cancela las callables a los 70 s por defecto, aunque
+    // la función tenga un plazo mayor.
+    const response = await httpsCallable(functions, 'generateDocumentContent', { timeout: 310_000 })({
+      model: documentAiModel.value,
+      mode: alignOnly ? 'align' : 'generate',
+      sourceType,
+      course: curriculum.course,
+      subjectId: curriculum.subjectId,
+      subjectTitle: curriculum.subjectTitle,
+      selectedConceptIds: curriculum.conceptIds,
+      concepts: generationConceptCatalog(curriculum),
+      latex: sourceLatexCode.value,
+      latexCapabilities: generationLatexCapabilities(),
+      exercises: alignOnly ? selectedExercises.value.map(generationExercisePayload) : [],
+      files: [DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(sourceType)
+        ? await sourceFilesForAi()
+        : [],
+    })
+    let blocks
+    if (alignOnly) {
+      blocks = exerciseQueue.value.map((item) => item.type === 'tool' ? item : {
+        ...item,
+        version: 0,
+        generated: false,
+        snapshot: alignedSnapshot(item, response.data?.alignments || [], curriculum),
+      })
+    } else {
+      let previousSourcePage = 1
+      blocks = (response.data?.generatedExercises || []).map((exercise, index) => {
+        const sourcePage = Math.max(1, Math.floor(Number(exercise?.sourcePage) || 1))
+        const pageBreakBefore = sourcePage > previousSourcePage || (index === 0 && sourcePage > 1)
+        previousSourcePage = Math.max(previousSourcePage, sourcePage)
+        const snapshot = generatedSnapshot(exercise, curriculum, index)
+        return createExerciseDocumentBlock(snapshot.id, {
+          snapshot,
+          generated: true,
+          metrics: metricsForVersion(snapshot, 0),
+          sourcePage,
+          pageBreakBefore,
+        })
+      })
+      if (!blocks.length) throw new Error('La IA no ha generado ningún ejercicio utilizable.')
+      const beforeExercisesLatex = String(response.data?.beforeExercisesLatex || '').trim()
+      const afterExercisesLatex = String(response.data?.afterExercisesLatex || '').trim()
+      documentContent.value = replaceDocumentSurroundingLatex(documentContent.value, {
+        beforeExercisesLatex,
+        afterExercisesLatex,
+      })
+      const body = blocks.map((block) => [
+        block.pageBreakBefore ? '\\salto' : '',
+        block.snapshot.enunciado,
+      ].filter(Boolean).join('\n')).join('\n\n')
+      sourceLatexDraft.value = [
+        beforeExercisesLatex,
+        `\\begin{ejercicios}\n${body}\n\\end{ejercicios}`,
+        afterExercisesLatex,
+      ].filter(Boolean).join('\n\n')
+      documentContent.value = replaceDocumentContentSource(documentContent.value, {
+        type: sourceType,
+        revision: documentContent.value.source.revision,
+        options: sourceOptionsFor(sourceType, { code: sourceLatexDraft.value }),
+      }, { touch: false })
+    }
+    exerciseQueue.value = blocks
+    documentCurriculum.value = { ...documentCurriculum.value, ...curriculum }
+    invalidateContentPreview()
+    await compileGeneratedSegmentPreviews(exerciseQueue.value)
+    await compileDocument(true)
+  } catch (error) {
+    compileError.value = error?.message || 'No se ha podido generar el contenido con IA.'
+    compileErrorVisible.value = true
+    showAppErrorToast(compileError.value, { copyText: compileError.value })
+  } finally {
+    isGeneratingContent.value = false
+    emit('busy-change', false)
+  }
+}
 function conceptAncestors(conceptId) {
   const byId = new Map(props.conceptNodes.map((node) => [node.id, node]))
   const ids = []
@@ -527,6 +1118,8 @@ function setSelectedVersion(exercise, version) {
   if (queued) {
     queued.version = version
     queued.metrics = metricsForVersion(exercise, version)
+    invalidateContentPreview()
+    return
   }
   invalidatePreview()
 }
@@ -561,7 +1154,7 @@ function statementCode(code = '') {
 }
 
 function exerciseForQueue(item) {
-  return props.exercises.find((exercise) => exercise.id === item.exerciseId) || null
+  return item?.snapshot || props.exercises.find((exercise) => exercise.id === item.exerciseId) || null
 }
 
 function exerciseImageFiles(exercise) {
@@ -592,8 +1185,20 @@ function adaptExerciseEnvironmentsToTemplate(code, template) {
   return code.replace(/\\begin\s*\{apartadosc\}(?!\s*\{)/g, '\\begin{apartadosc}{}')
 }
 
+function uncommentedTemplateCode(code = '') {
+  return String(code).split('\n').map((line) => {
+    for (let index = 0; index < line.length; index += 1) {
+      if (line[index] !== '%') continue
+      let slashes = 0
+      for (let cursor = index - 1; cursor >= 0 && line[cursor] === '\\'; cursor -= 1) slashes += 1
+      if (slashes % 2 === 0) return line.slice(0, index)
+    }
+    return line
+  }).join('\n')
+}
+
 function templateDefinesEnvironment(template, environmentName) {
-  const code = String(template?.codigo || '')
+  const code = uncommentedTemplateCode(template?.codigo || '')
   const escapedName = String(environmentName).replace(/[^A-Za-z@*]/g, '')
   return new RegExp(`\\\\(?:newenvironment|renewenvironment)\\*?\\s*\\{${escapedName}\\}`, 'i').test(code)
     || new RegExp(`\\\\(?:New|Renew|Provide)DocumentEnvironment\\s*\\{${escapedName}\\}`, 'i').test(code)
@@ -602,10 +1207,23 @@ function templateDefinesEnvironment(template, environmentName) {
 }
 
 function templateDefinesCommand(template, commandName) {
-  const code = String(template?.codigo || '')
+  const code = uncommentedTemplateCode(template?.codigo || '')
   const escapedName = String(commandName).replace(/[^A-Za-z@]/g, '')
   return new RegExp(`\\\\(?:newcommand|renewcommand|providecommand)\\*?\\s*\\{?\\\\${escapedName}\\}?`, 'i').test(code)
     || new RegExp(`\\\\(?:def|gdef|edef|xdef)\\s*\\\\${escapedName}\\b`, 'i').test(code)
+}
+
+function directSourceCodeForTemplate(code, template) {
+  let result = normalizeDisplayMathDelimiters(String(code || '').trim())
+  if (!templateDefinesEnvironment(template, 'solucion')) {
+    result = result.replace(/\\begin\s*\{solucion\}[\s\S]*?\\end\s*\{solucion\}/g, '\n')
+  }
+  const availableAnswerCommands = ['lsol', 'sol', 'esol', 'csol']
+    .filter((command) => templateDefinesCommand(template, command))
+  const unavailableAnswerCommands = ['lsol', 'sol', 'esol', 'csol']
+    .filter((command) => !availableAnswerCommands.includes(command))
+  if (unavailableAnswerCommands.length) result = stripBalancedCommands(result, unavailableAnswerCommands)
+  return result.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n').trim()
 }
 
 function queueExerciseCode(item, template = selectedTemplate.value) {
@@ -633,7 +1251,10 @@ function queueExerciseCode(item, template = selectedTemplate.value) {
     // documentos no necesitan definir \T ni \t para poder usar ejercicios.
     includeDurationMetadata: false,
   }) || statementCode(sourceVersion?.enunciado || '')
-  return rewriteExerciseImageReferences(adaptExerciseEnvironmentsToTemplate(code, template), exercise)
+  const exerciseCode = rewriteExerciseImageReferences(adaptExerciseEnvironmentsToTemplate(code, template), exercise)
+  if (!item.pageBreakBefore) return exerciseCode
+  const pageBreak = templateDefinesCommand(template, 'salto') ? '\\salto' : '\\newpage'
+  return `${pageBreak}\n${exerciseCode}`
 }
 
 function queueExercisePdf(item) {
@@ -672,17 +1293,17 @@ function addExercise(exercise, section = 'required') {
     ;[item] = exerciseQueue.value.splice(existingIndex, 1)
   } else {
     const version = selectedVersionFor(exercise)
-    item = { type: 'exercise', exerciseId: exercise.id, version, metrics: metricsForVersion(exercise, version) }
+    item = createExerciseDocumentBlock(exercise.id, { version, metrics: metricsForVersion(exercise, version) })
   }
   item.section = 'required'
   exerciseQueue.value.push(item)
   normalizeQueueSections()
-  invalidatePreview()
+  invalidateContentPreview()
 }
 
 function updateQueueMetric(item, field, value, apartadoIndex = null) {
   if (!item.metrics) item.metrics = metricsForVersion(exerciseForQueue(item), item.version)
-  const number = Math.max(0, Number(value) || 0)
+  const number = Math.max(0, Number(String(value ?? '').replace(',', '.')) || 0)
   const normalized = field === 'puntuacion' ? Math.round(number * 4) / 4 : Math.round(number)
   if (typeof apartadoIndex === 'number' && item.metrics.apartados?.[apartadoIndex]) {
     item.metrics.apartados[apartadoIndex][field] = normalized
@@ -690,7 +1311,7 @@ function updateQueueMetric(item, field, value, apartadoIndex = null) {
   } else {
     item.metrics[field] = normalized
   }
-  invalidatePreview()
+  invalidateContentPreview()
 }
 
 function queueMetrics(item) {
@@ -722,14 +1343,10 @@ function queueApartadoPdf(item, apartadoIndex) {
   return queueApartados(item)[apartadoIndex]?.pdfenunciado || ''
 }
 
-function removeQueuedExercise(exerciseId) {
-  if (String(exerciseId).startsWith('tool:')) {
-    const toolId = String(exerciseId).slice(5)
-    exerciseQueue.value = exerciseQueue.value.filter((item) => !(item.type === 'tool' && item.toolId === toolId))
-  } else {
-    exerciseQueue.value = exerciseQueue.value.filter((item) => item.exerciseId !== exerciseId)
-  }
-  invalidatePreview()
+function removeQueuedBlock(block) {
+  if (!block?.blockId) return
+  exerciseQueue.value = exerciseQueue.value.filter((item) => item.blockId !== block.blockId)
+  invalidateContentPreview()
 }
 
 function moveQueuedExercise(item, section) {
@@ -743,9 +1360,9 @@ function startExerciseDrag(event, exercise) {
 }
 
 function startQueueDrag(event, item) {
-  dragPayload.value = { type: 'queue', itemId: item.type === 'tool' ? item.toolId : item.exerciseId, itemType: item.type || 'exercise' }
+  dragPayload.value = { type: 'queue', blockId: item.blockId }
   event.dataTransfer.effectAllowed = 'move'
-  event.dataTransfer.setData('text/plain', dragPayload.value.itemId)
+  event.dataTransfer.setData('text/plain', dragPayload.value.blockId)
 }
 
 function startToolDrag(event, tool) {
@@ -826,12 +1443,14 @@ function toolArguments(item, tool) {
 function setToolArgument(item, key, value) {
   if (!item.args) item.args = {}
   item.args[key] = value
-  invalidatePreview()
+  invalidateContentPreview()
 }
 
 function addTool(tool) {
-  exerciseQueue.value.push({ type: 'tool', toolId: tool.id, args: tool.arguments?.reduce((values, argument) => ({ ...values, [argument.key]: argument.default ?? '' }), {}), section: 'required' })
-  invalidatePreview()
+  exerciseQueue.value.push(createToolDocumentBlock(tool.id, {
+    args: tool.arguments?.reduce((values, argument) => ({ ...values, [argument.key]: argument.default ?? '' }), {}),
+  }))
+  invalidateContentPreview()
 }
 
 function toolCode(item, index = -1) {
@@ -861,7 +1480,7 @@ function numberToSpanish(value) {
   return words[Number(value)] || String(value)
 }
 
-function dropOnQueueSection(event, section, targetExerciseId = null) {
+function dropOnQueueSection(event, section, targetBlockId = null) {
   event.preventDefault()
   const payload = dragPayload.value
   dragPayload.value = null
@@ -872,31 +1491,29 @@ function dropOnQueueSection(event, section, targetExerciseId = null) {
     return
   }
   if (payload.type === 'tool') {
-    const targetIndex = targetExerciseId?.startsWith('tool:')
-      ? exerciseQueue.value.findIndex((candidate) => candidate.type === 'tool' && candidate.toolId === targetExerciseId.slice(5))
-      : (targetExerciseId ? exerciseQueue.value.findIndex((candidate) => candidate.type !== 'tool' && candidate.exerciseId === targetExerciseId) : -1)
+    const targetIndex = targetBlockId
+      ? exerciseQueue.value.findIndex((candidate) => candidate.blockId === targetBlockId)
+      : -1
     const tool = documentTools.value.find((candidate) => candidate.id === payload.toolId)
     const args = tool?.arguments?.reduce((values, argument) => ({ ...values, [argument.key]: argument.default ?? '' }), {}) || {}
-    exerciseQueue.value.splice(targetIndex === -1 ? exerciseQueue.value.length : targetIndex, 0, { type: 'tool', toolId: payload.toolId, args, section: 'required' })
+    exerciseQueue.value.splice(targetIndex === -1 ? exerciseQueue.value.length : targetIndex, 0, createToolDocumentBlock(payload.toolId, { args }))
     normalizeQueueSections()
-    invalidatePreview()
+    invalidateContentPreview()
     return
   }
   if (payload.type === 'queue') {
-    const sourceIndex = exerciseQueue.value.findIndex((item) => payload.itemType === 'tool' ? item.type === 'tool' && item.toolId === payload.itemId : item.type !== 'tool' && item.exerciseId === payload.itemId)
+    const sourceIndex = exerciseQueue.value.findIndex((item) => item.blockId === payload.blockId)
     if (sourceIndex === -1) return
     const [item] = exerciseQueue.value.splice(sourceIndex, 1)
     item.section = 'required'
-    if (targetExerciseId) {
-      const targetIndex = targetExerciseId.startsWith('tool:')
-        ? exerciseQueue.value.findIndex((candidate) => candidate.type === 'tool' && candidate.toolId === targetExerciseId.slice(5))
-        : exerciseQueue.value.findIndex((candidate) => candidate.type !== 'tool' && candidate.exerciseId === targetExerciseId)
+    if (targetBlockId) {
+      const targetIndex = exerciseQueue.value.findIndex((candidate) => candidate.blockId === targetBlockId)
       exerciseQueue.value.splice(targetIndex === -1 ? exerciseQueue.value.length : targetIndex, 0, item)
     } else {
       exerciseQueue.value.push(item)
     }
     normalizeQueueSections()
-    invalidatePreview()
+    invalidateContentPreview()
   }
 }
 
@@ -918,10 +1535,26 @@ function exercisePreambleRequirements(exercisesCode = '') {
   return requirements.join('\n')
 }
 
-function generatedCodeForTemplate(template) {
+function generatedCodeForTemplate(template, options = {}) {
   if (!template) return ''
-  const exercises = exerciseQueue.value.map((item, index) => isTool(item) ? toolCode(item, index) : queueExerciseCode(item, template)).filter(Boolean).join('\n\n')
-  const preambleRequirements = exercisePreambleRequirements(exercises)
+  const hasDirectSource = typeof options.directSourceCode === 'string'
+  const sourceType = documentContent.value.source.type
+  const usesStructuredBlocks = !hasDirectSource && (sourceType === DOCUMENT_CONTENT_SOURCE_TYPES.EXERCISE_BANK
+    || sourceType === DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM
+    || exerciseQueue.value.some((item) => item.type !== 'tool' && item.snapshot))
+  const exercises = usesStructuredBlocks
+    ? exerciseQueue.value.map((item, index) => isTool(item) ? toolCode(item, index) : queueExerciseCode(item, template)).filter(Boolean).join('\n\n')
+    : ''
+  const beforeExercises = normalizeDisplayMathDelimiters(documentContent.value.beforeExercisesLatex || '')
+  const afterExercises = normalizeDisplayMathDelimiters(documentContent.value.afterExercisesLatex || '')
+  const bodyContent = usesStructuredBlocks
+    ? [
+      beforeExercises,
+      exercises ? ['\\begin{ejercicios}', exercises, '\\end{ejercicios}'].join('\n') : '',
+      afterExercises,
+    ].filter((entry) => entry.trim()).join('\n\n')
+    : directSourceCodeForTemplate(hasDirectSource ? options.directSourceCode : sourceLatexCode.value, template)
+  const preambleRequirements = exercisePreambleRequirements(bodyContent)
   return `\\input{../${templateInputName(template)}}
 
 ${preambleRequirements}
@@ -930,7 +1563,7 @@ ${preambleRequirements}
 
 ${headerCode(template)}
 
-${exercises ? `\\begin{ejercicios}\n${exercises}\n\\end{ejercicios}` : ''}
+${bodyContent}
 
 \\end{document}`
 }
@@ -1028,7 +1661,8 @@ function documentAssetSignature() {
   const exerciseFiles = exerciseQueue.value
     .filter((item) => item.type !== 'tool')
     .flatMap((item) => exerciseImageFiles(exerciseForQueue(item)).map((file) => `${item.exerciseId}:${file.path}:${file.url}`))
-  return [currentCenterLogo.value, ...exerciseFiles].join('|')
+  const directFiles = sourceFiles.value.map((file) => [file.id, file.name, file.size, file.url || ''].join(':'))
+  return [currentCenterLogo.value, ...exerciseFiles, ...directFiles].join('|')
 }
 
 async function documentAssets() {
@@ -1046,6 +1680,11 @@ async function documentAssets() {
       assets[documentExerciseAssetName(exercise, file, index)] = { url: file.url }
     })
   })
+  for (const file of sourceFiles.value) {
+    if (!file.compilerName) continue
+    if (file.file) assets[file.compilerName] = { data: binaryBase64(await file.file.arrayBuffer()) }
+    else if (file.url) assets[file.compilerName] = { url: file.url }
+  }
   return assets
 }
 
@@ -1062,16 +1701,28 @@ function invalidatePreview() {
   previewAssetSignature.value = ''
   compileError.value = ''
   compileErrorVisible.value = false
-  if (currentStep.value < 4) documentCodeNeedsRegeneration.value = true
+  if (currentStep.value < lastStep.value) documentCodeNeedsRegeneration.value = true
 }
 
-function updateDocumentCode(value) {
-  documentCode.value = value
-  documentCodeNeedsRegeneration.value = false
-  previewBlob.value = null
-  previewCode.value = ''
-  compileError.value = ''
-  compileErrorVisible.value = false
+function invalidateContentPreview() {
+  documentContent.value = touchDocumentContent(documentContent.value)
+  documentCodeNeedsRegeneration.value = true
+  documentCode.value = ''
+  invalidatePreview()
+}
+
+function latexErrorContext(message, compilerPreamble, compilerBody) {
+  const lineNumber = Number(String(message || '').match(/\.tex:(\d+):/)?.[1])
+  if (!lineNumber) return ''
+  const source = `${compilerPreamble}\n\\begin{document}\n${compilerBody}\n\\end{document}\n`
+  const lines = source.split('\n')
+  const start = Math.max(1, lineNumber - 5)
+  const end = Math.min(lines.length, lineNumber + 5)
+  const excerpt = lines
+    .slice(start - 1, end)
+    .map((line, index) => `${String(start + index).padStart(4, ' ')} | ${line}`)
+    .join('\n')
+  return `\n\nContexto LaTeX (líneas ${start}-${end}):\n${excerpt}`
 }
 
 async function copyCompileError() {
@@ -1092,7 +1743,7 @@ async function copyCompileError() {
 
 function activeDocumentCode(template = previewTemplate.value || selectedTemplate.value) {
   const generated = generatedCodeForTemplate(template)
-  if (currentStep.value !== 4 || !documentCode.value.trim() || template?.key !== selectedPreviewTemplateKey.value) return generated
+  if (currentStep.value !== lastStep.value || !documentCode.value.trim() || template?.key !== selectedPreviewTemplateKey.value) return generated
   return hasLegacyOptionalCommand(documentCode.value) ? generated : documentCode.value
 }
 
@@ -1151,7 +1802,7 @@ function selectTemplate(template) {
   else resetFields()
   documentCurriculum.value = emptyCurriculum()
   applyCreationContext()
-  exerciseQueue.value = []
+  documentContent.value = createDocumentContent()
   optionalRequiredCount.value = 1
   Object.keys(selectedVersions).forEach((key) => delete selectedVersions[key])
   invalidatePreview()
@@ -1245,6 +1896,7 @@ function syncCurriculumFromFields() {
     subjectId: subject?.id || (currentSubject?.course === course ? currentSubject.id : null),
     conceptIds: subject?.id === documentCurriculum.value.subjectId ? documentCurriculum.value.conceptIds : [],
   }
+  syncCurriculumSource()
   invalidatePreview()
 }
 
@@ -1278,6 +1930,9 @@ function resetDocumentAssessment() {
 }
 
 function resetWorkflow() {
+  revokeSourceFiles()
+  revokeGeneratedSegmentArtifacts()
+  sourceLatexDraft.value = ''
   selectedDocumentId.value = null
   creationContext.value = null
   createdAt.value = null
@@ -1289,7 +1944,7 @@ function resetWorkflow() {
   resetDocumentAssessment()
   documentCurriculum.value = emptyCurriculum()
   exerciseQuery.value = ''
-  exerciseQueue.value = []
+  documentContent.value = createDocumentContent()
   optionalRequiredCount.value = 1
   Object.keys(selectedVersions).forEach((key) => delete selectedVersions[key])
   currentStep.value = 1
@@ -1298,7 +1953,6 @@ function resetWorkflow() {
   compileErrorVisible.value = false
   documentCode.value = ''
   documentCodeNeedsRegeneration.value = true
-  showDocumentCode.value = false
   viewedDocument.value = null
   viewerAssessmentExercises.value = []
   viewerAssessmentLoading.value = false
@@ -1326,7 +1980,7 @@ async function assessmentModelsForDocument(documentData) {
     .slice()
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
   return Promise.all(references.map(async (reference, order) => {
-    let exercise = props.exercises.find((candidate) => candidate.id === reference.exerciseId)
+    let exercise = reference.snapshot || props.exercises.find((candidate) => candidate.id === reference.exerciseId)
     if (!exercise) {
       const snapshot = await getDoc(doc(db, 'ejercicios', reference.exerciseId))
       if (!snapshot.exists()) return null
@@ -1418,6 +2072,22 @@ async function deleteDocument() {
         if (path) paths.add(path)
       }
     })
+    ;(documentData.content?.source?.options?.files || []).forEach((file) => {
+      if (file?.path) paths.add(file.path)
+      if (file?.url) {
+        const path = storagePathFromUrl(file.url)
+        if (path) paths.add(path)
+      }
+    })
+    ;(documentData.content?.blocks || []).forEach((block) => {
+      ;(block?.snapshot?.matrixFiles || []).forEach((file) => {
+        if (file?.path) paths.add(file.path)
+        else if (file?.url) {
+          const path = storagePathFromUrl(file.url)
+          if (path) paths.add(path)
+        }
+      })
+    })
     await Promise.all([...paths].map(async (path) => {
       try {
         await deleteObject(storageRef(storage, path))
@@ -1455,7 +2125,6 @@ function selectViewerDocument(entry) {
 
 function selectAssessmentPreview() {
   selectedPreviewTemplateKey.value = ASSESSMENT_PREVIEW_KEY
-  showDocumentCode.value = false
 }
 
 function previewEntryForTemplate(templateKey) {
@@ -1542,7 +2211,7 @@ async function nextStep() {
   if (!canContinue.value || currentStep.value >= lastStep.value) return
   currentStep.value += 1
   maxVisitedStep.value = Math.max(maxVisitedStep.value, currentStep.value)
-  if (currentStep.value === 4) {
+  if (currentStep.value === lastStep.value) {
     if (documentCodeNeedsRegeneration.value || !documentCode.value.trim()) documentCode.value = generatedCode()
     documentCodeNeedsRegeneration.value = false
     await compileDocument()
@@ -1552,7 +2221,7 @@ async function nextStep() {
 async function goToVisitedStep(step) {
   if (step > maxVisitedStep.value || step === currentStep.value) return
   currentStep.value = step
-  if (step === 4) {
+  if (step === lastStep.value) {
     if (documentCodeNeedsRegeneration.value || !documentCode.value.trim()) documentCode.value = generatedCode()
     documentCodeNeedsRegeneration.value = false
     await compileDocument()
@@ -1576,11 +2245,15 @@ async function compilerRequest(path, options = {}) {
   throw new Error(details.log || details.message || `Error del compilador (${response.status})`)
 }
 
-async function compileDocument(force = false) {
+async function compileDocument(force = false, options = {}) {
   if (!selectedTemplates.value.length || isCompiling.value) return
   const templatesToCompile = selectedTemplates.value
   const assetSignature = documentAssetSignature()
-  if (!force && previewDocuments.value.length === templatesToCompile.length && previewDocuments.value.every((entry) => entry.assetSignature === assetSignature && entry.code === activeDocumentCode(templatesToCompile.find((template) => template.key === entry.templateKey)))) return
+  const directSourceCode = typeof options.directSourceCode === 'string' ? options.directSourceCode : null
+  const codeForTemplate = (template) => directSourceCode === null
+    ? activeDocumentCode(template)
+    : generatedCodeForTemplate(template, { directSourceCode })
+  if (!force && previewDocuments.value.length === templatesToCompile.length && previewDocuments.value.every((entry) => entry.assetSignature === assetSignature && entry.code === codeForTemplate(templatesToCompile.find((template) => template.key === entry.templateKey)))) return
   isCompiling.value = true
   emit('busy-change', true)
   compileError.value = ''
@@ -1590,10 +2263,14 @@ async function compileDocument(force = false) {
     const compilationErrors = []
     const assets = await documentAssets()
     for (const template of templatesToCompile) {
+      let code = ''
+      let compilerPreamble = ''
+      let compilerBody = ''
       try {
-        const code = activeDocumentCode(template)
+        code = codeForTemplate(template)
         const preambleRequirements = exercisePreambleRequirements(code)
-        const compilerPreamble = [template.codigo, preambleRequirements].filter(Boolean).join('\n\n')
+        compilerPreamble = [template.codigo, preambleRequirements].filter(Boolean).join('\n\n')
+        compilerBody = bodyForCompiler(code)
         if (template.key === selectedPreviewTemplateKey.value && hasLegacyOptionalCommand(documentCode.value)) documentCode.value = code
         await compilerRequest('/preambles', {
           method: 'POST',
@@ -1603,12 +2280,13 @@ async function compileDocument(force = false) {
         const response = await compilerRequest('/compile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: bodyForCompiler(code), preamble_name: template.archivo, assets }),
+          body: JSON.stringify({ code: compilerBody, preamble_name: template.archivo, assets }),
         })
         const blob = await response.blob()
         entries.push({ templateKey: template.key, name: template.nombre || template.metadata.name, code, blob, url: URL.createObjectURL(blob), assetSignature })
       } catch (error) {
-        compilationErrors.push(`${template.nombre || template.metadata.name}: ${error.message || 'error de compilación'}`)
+        const message = error.message || 'error de compilación'
+        compilationErrors.push(`${template.nombre || template.metadata.name}: ${message}${latexErrorContext(message, compilerPreamble, compilerBody)}`)
       }
     }
     if (!entries.length) throw new Error(compilationErrors.join('\n\n') || 'No se ha podido compilar ningún documento.')
@@ -1633,6 +2311,18 @@ async function compileDocument(force = false) {
     isCompiling.value = false
     emit('busy-change', false)
   }
+}
+
+async function compileCurrentSourceLatex() {
+  const code = String(sourceLatexCode.value || '')
+  if (!code.trim()) {
+    compileError.value = 'Escribe o genera primero el código LaTeX que quieres compilar.'
+    compileErrorVisible.value = true
+    return
+  }
+  // Esta ruta es deliberadamente independiente de la generación con IA: usa
+  // exactamente el borrador visible y se limita a adaptarlo a cada plantilla.
+  await compileDocument(true, { directSourceCode: code })
 }
 
 function selectPreviewTemplate(templateKey) {
@@ -1726,25 +2416,15 @@ function editDocument(documentData) {
     competencial: Boolean(savedCurriculum.competencial),
   }
   curriculumPickerKey.value += 1
-  const storedQueue = Array.isArray(documentData.bloques) ? documentData.bloques : documentData.ejercicios
-  exerciseQueue.value = Array.isArray(storedQueue)
-    ? storedQueue.filter((item) => item?.exerciseId || item?.toolId).map((item) => item.toolId
-      ? { type: 'tool', toolId: item.toolId, args: { ...(item.args || {}) }, section: 'required' }
-      : {
-          type: 'exercise',
-          exerciseId: item.exerciseId,
-          version: Number(item.version) || 0,
-          metrics: item.metrics ? {
-            puntuacion: Number(item.metrics.puntuacion) || 0,
-            tiempo: Number(item.metrics.tiempo) || 0,
-            apartados: Array.isArray(item.metrics.apartados) ? item.metrics.apartados.map((apartado) => ({
-              puntuacion: Number(apartado.puntuacion) || 0,
-              tiempo: Number(apartado.tiempo) || 0,
-            })) : [],
-          } : undefined,
-          section: item.section === 'optional' ? 'optional' : 'required',
-        })
-    : []
+  documentContent.value = documentContentFromRecord(documentData)
+  sourceLatexDraft.value = String(documentContent.value.source.options?.code || '')
+  sourceFiles.value = (documentContent.value.source.options?.files || []).map((file, index) => ({
+    ...file,
+    id: file.id || `source-${index + 1}`,
+    compilerName: file.compilerName || sourceCompilerName(file, index),
+    previewUrl: file.url || '',
+    file: null,
+  }))
   optionalRequiredCount.value = Number(documentData.optativos?.elegir) || 1
   normalizeQueueSections()
   exerciseQueue.value.forEach((item) => { selectedVersions[item.exerciseId] = item.version })
@@ -1763,7 +2443,6 @@ function editDocument(documentData) {
       assetSignature: documentAssetSignature(),
     })).filter((entry) => entry.templateKey && entry.url)
   }
-  showDocumentCode.value = false
   currentStep.value = 1
   maxVisitedStep.value = lastStep.value
   mode.value = 'editor'
@@ -1809,7 +2488,12 @@ function documentAssessmentItem(documentId) {
       maxPoints: documentAssessmentPoints(),
       exercises: exerciseQueue.value
         .filter((item) => item.type !== 'tool')
-        .map((item, order) => ({ exerciseId: item.exerciseId, version: Number(item.version) || 0, order })),
+        .map((item, order) => ({
+          exerciseId: item.exerciseId,
+          version: Number(item.version) || 0,
+          order,
+          ...(item.snapshot ? { snapshot: item.snapshot } : {}),
+        })),
     },
   }
 }
@@ -1825,6 +2509,87 @@ async function saveDocument() {
     const reference = selectedDocumentId.value
       ? doc(db, 'documentos', selectedDocumentId.value)
       : doc(collection(db, 'documentos'))
+    const previousDocument = documents.value.find((item) => item.id === reference.id) || null
+    const previousSourcePaths = new Set(
+      (previousDocument?.content?.source?.options?.files || [])
+        .map((file) => file?.path || storagePathFromUrl(file?.url))
+        .filter(Boolean),
+    )
+    const previousPdfPaths = new Set([
+      previousDocument?.pdf?.path || storagePathFromUrl(previousDocument?.pdf?.url),
+      ...(previousDocument?.pdfs || []).map((pdf) => pdf?.path || storagePathFromUrl(pdf?.url)),
+    ].filter(Boolean))
+    const previousMatrixPaths = new Set(
+      (previousDocument?.content?.blocks || [])
+        .flatMap((block) => block?.snapshot?.matrixFiles || [])
+        .map((file) => file?.path || storagePathFromUrl(file?.url))
+        .filter(Boolean),
+    )
+    const uploadedMatrixPaths = []
+    for (const artifact of generatedSegmentArtifacts.values()) {
+      const safeKey = artifact.key.replace(/[^A-Za-z0-9_-]/g, '-')
+      const path = `documentos/${reference.id}/matriz/${artifact.exerciseId}/${safeKey}.pdf`
+      await uploadBytes(storageRef(storage, path), artifact.blob, {
+        contentType: 'application/pdf',
+        customMetadata: { documentId: reference.id, exerciseId: artifact.exerciseId, segment: artifact.key },
+      })
+      const url = await getDownloadURL(storageRef(storage, path))
+      const block = exerciseQueue.value.find((item) => item.exerciseId === artifact.exerciseId && item.snapshot)
+      if (block) {
+        const structure = block.snapshot.structure
+        if (artifact.key === 'main-statement') structure.pdfenunciado = url
+        else if (artifact.key === 'main-solved') {
+          structure.pdfsolucion = url
+          structure.pdfsolucioncompleto = url
+        } else {
+          const partIndex = Number(artifact.key.match(/^part-(\d+)-solved$/)?.[1])
+          if (Number.isInteger(partIndex) && structure.apartados?.[partIndex]) structure.apartados[partIndex].pdfsolucion = url
+        }
+        block.snapshot.matrixFiles = [...(block.snapshot.matrixFiles || []).filter((file) => file.key !== artifact.key), { key: artifact.key, path, url }]
+      }
+      uploadedMatrixPaths.push(path)
+    }
+    const uploadedSourceFiles = []
+    const activeSourceFiles = [DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(documentContent.value.source.type)
+      ? sourceFiles.value
+      : []
+    for (const [index, sourceFile] of activeSourceFiles.entries()) {
+      if (!sourceFile.file && sourceFile.url) {
+        uploadedSourceFiles.push({
+          id: sourceFile.id,
+          name: sourceFile.name,
+          compilerName: sourceFile.compilerName,
+          contentType: sourceFile.contentType || '',
+          size: Number(sourceFile.size) || 0,
+          path: sourceFile.path || '',
+          url: sourceFile.url,
+        })
+        continue
+      }
+      if (!sourceFile.file) continue
+      const safeName = sourceCompilerName(sourceFile.file, index)
+      const path = `documentos/${reference.id}/fuentes/${sourceFile.id}-${safeName}`
+      await uploadBytes(storageRef(storage, path), sourceFile.file, {
+        contentType: sourceFile.contentType || sourceFile.file.type || 'application/octet-stream',
+        customMetadata: { documentId: reference.id, sourceFileId: sourceFile.id },
+      })
+      uploadedSourceFiles.push({
+        id: sourceFile.id,
+        name: sourceFile.name,
+        compilerName: sourceFile.compilerName || safeName,
+        contentType: sourceFile.contentType || sourceFile.file.type || '',
+        size: Number(sourceFile.size) || sourceFile.file.size || 0,
+        path,
+        url: await getDownloadURL(storageRef(storage, path)),
+      })
+    }
+    if ([DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(documentContent.value.source.type)) {
+      documentContent.value = replaceDocumentContentSource(documentContent.value, {
+        type: documentContent.value.source.type,
+        revision: documentContent.value.source.revision,
+        options: sourceOptionsFor(documentContent.value.source.type, { files: uploadedSourceFiles }),
+      }, { touch: false })
+    }
     const uploadedPdfs = []
     for (const [index, entry] of previewDocuments.value.entries()) {
       if (!entry.blob) {
@@ -1838,7 +2603,6 @@ async function saveDocument() {
     const primaryPdf = uploadedPdfs[0]
     if (!primaryPdf) return
     const now = new Date().toISOString()
-    const previousDocument = documents.value.find((item) => item.id === reference.id) || null
     const assessmentItem = documentAssessmentItem(reference.id)
     const data = {
       plantilla: {
@@ -1859,6 +2623,7 @@ async function saveDocument() {
         conceptIds: [...new Set(documentCurriculum.value.conceptIds || [])],
         competencial: Boolean(documentCurriculum.value.competencial),
       },
+      content: serializeDocumentContent(documentContent.value),
       assessment: {
         evaluable: Boolean(documentAssessment.evaluable),
         groupId: documentAssessment.evaluable ? effectiveAssessmentGroupId.value : null,
@@ -1891,6 +2656,22 @@ async function saveDocument() {
       data.assessment.gradebookItemId = syncedItem.id
       await setDoc(reference, { assessment: data.assessment }, { merge: true })
     }
+    const retainedPaths = new Set([
+      ...uploadedSourceFiles.map((file) => file.path || storagePathFromUrl(file.url)),
+      ...uploadedPdfs.map((pdf) => pdf.path || storagePathFromUrl(pdf.url)),
+      ...uploadedMatrixPaths,
+      ...exerciseQueue.value.flatMap((block) => (block?.snapshot?.matrixFiles || [])
+        .map((file) => file?.path || storagePathFromUrl(file?.url))),
+    ].filter(Boolean))
+    const stalePaths = [...new Set([...previousSourcePaths, ...previousPdfPaths, ...previousMatrixPaths])]
+      .filter((path) => !retainedPaths.has(path))
+    await Promise.all(stalePaths.map(async (path) => {
+      try {
+        await deleteObject(storageRef(storage, path))
+      } catch (error) {
+        if (error?.code !== 'storage/object-not-found') throw error
+      }
+    }))
     emit('assessment-saved', {
       documentId: reference.id,
       previousGroupId: previousDocument?.assessment?.groupId || null,
@@ -1913,7 +2694,11 @@ async function saveDocument() {
 }
 
 onMounted(loadDocuments)
-onBeforeUnmount(revokePreview)
+onBeforeUnmount(() => {
+  revokePreview()
+  revokeSourceFiles()
+  revokeGeneratedSegmentArtifacts()
+})
 
 defineExpose({
   newDocument,
@@ -2192,18 +2977,99 @@ defineExpose({
           </aside>
         </div>
 
-        <ExerciseCurriculumPicker
-          v-else-if="currentStep === 2"
-          :key="curriculumPickerKey"
-          v-model="documentCurriculum"
-          class="document-curriculum-step"
-          :nodes="conceptNodes"
-          :subject-selections="subjectSelections"
-          :exercise-counts="exerciseCounts"
-          @update:model-value="invalidatePreview"
-        />
+        <div v-else-if="currentStep === 2" class="document-content-step">
+          <header class="document-content-toolbar">
+            <v-btn-toggle v-model="contentWorkspaceMode" mandatory density="compact" rounded="pill" class="document-content-modes" aria-label="Origen del contenido">
+              <v-btn value="exercise-bank" prepend-icon="mdi-view-grid-outline">Ejercicios</v-btn>
+              <v-btn value="latex" prepend-icon="mdi-code-tags">LaTeX o archivo</v-btn>
+              <v-btn value="curriculum" prepend-icon="mdi-chart-donut-variant">Conceptos</v-btn>
+            </v-btn-toggle>
+            <v-btn
+              v-if="contentWorkspaceMode === 'exercise-bank'"
+              prepend-icon="mdi-filter-variant"
+              size="small"
+              rounded="pill"
+              variant="text"
+              @click="curriculumDialog = true"
+            >Filtros</v-btn>
+            <v-spacer />
+            <v-select
+              v-model="documentAiModel"
+              :items="aiModelOptions"
+              item-title="title"
+              item-value="value"
+              prepend-inner-icon="mdi-brain"
+              aria-label="Modelo de inteligencia artificial"
+              variant="outlined"
+              density="compact"
+              rounded="pill"
+              single-line
+              hide-details
+              :disabled="isGeneratingContent || isCompiling"
+              class="document-ai-model"
+            />
+            <v-btn
+              prepend-icon="mdi-auto-fix"
+              size="small"
+              rounded="pill"
+              color="primary"
+              variant="tonal"
+              :loading="isGeneratingContent || isCompiling"
+              @click="generateOrRegenerateContent"
+            >{{ previewDocuments.length ? 'Regenerar' : 'Generar' }}</v-btn>
+          </header>
 
-        <div v-else-if="currentStep === 3" class="document-exercise-step">
+          <div class="document-content-body">
+            <ExerciseCurriculumPicker
+              v-if="contentWorkspaceMode === 'curriculum'"
+              :key="`curriculum-${curriculumPickerKey}`"
+              :model-value="documentCurriculum"
+              class="document-curriculum-step"
+              :nodes="conceptNodes"
+              :subject-selections="subjectSelections"
+              :exercise-counts="exerciseCounts"
+              @update:model-value="onDocumentCurriculumUpdate"
+            />
+
+            <div v-else-if="contentWorkspaceMode === 'latex'" class="document-latex-source-step">
+              <section class="document-latex-source-editor">
+                <DocumentCodeEditor
+                  :model-value="sourceLatexCode"
+                  :compiling="isCompiling"
+                  @update:model-value="updateSourceLatex"
+                  @compile="compileCurrentSourceLatex"
+                />
+                <footer class="document-source-files">
+                  <input ref="sourceFileInput" type="file" accept="image/png,image/jpeg,application/pdf,.png,.jpg,.jpeg,.pdf" multiple hidden @change="onSourceFilesSelected">
+                  <v-btn prepend-icon="mdi-paperclip-plus" size="small" rounded="pill" variant="text" @click="chooseSourceFiles">Añadir imagen o PDF</v-btn>
+                  <div v-if="sourceFiles.length" class="document-source-file-list">
+                    <article v-for="file in sourceFiles" :key="file.id">
+                      <img v-if="file.contentType.startsWith('image/')" :src="file.previewUrl" alt="">
+                      <v-icon v-else icon="mdi-file-pdf-box" size="22" />
+                      <span><strong>{{ file.name }}</strong><small>{{ file.compilerName }}</small></span>
+                      <v-btn icon="mdi-close" size="x-small" variant="text" rounded="circle" aria-label="Quitar archivo" @click="removeSourceFile(file.id)" />
+                    </article>
+                  </div>
+                </footer>
+              </section>
+              <section class="document-latex-source-preview">
+                <DocumentPdfPreview v-if="previewUrl" :src="previewUrl" title="Vista previa del contenido" />
+                <DocumentPdfPreview
+                  v-else-if="sourcePreviewIsPdf && sourcePreviewFile?.previewUrl"
+                  :src="sourcePreviewFile.previewUrl"
+                  :title="sourcePreviewFile.name"
+                />
+                <img
+                  v-else-if="sourcePreviewIsImage && sourcePreviewFile?.previewUrl"
+                  :src="sourcePreviewFile.previewUrl"
+                  :alt="sourcePreviewFile.name"
+                  class="document-source-image-preview"
+                >
+                <div v-else class="document-source-preview-empty"><v-icon icon="mdi-file-eye-outline" size="48" /><span>Genera el contenido para ver la vista previa.</span></div>
+              </section>
+            </div>
+
+            <div v-else class="document-exercise-step">
           <section class="document-matches-pane">
             <div class="document-exercise-toolbar">
               <v-text-field
@@ -2282,25 +3148,25 @@ defineExpose({
                 <div v-if="exerciseQueue.length" class="document-queue-grid">
                   <article
                     v-for="(item, index) in exerciseQueue"
-                    :key="item.type === 'tool' ? `tool-${item.toolId}-${index}` : item.exerciseId"
+                    :key="item.blockId"
                     class="document-queue-card"
                     :class="{ 'document-tool-queue-card': isTool(item), [`document-tool-${toolForQueue(item)?.id}`]: isTool(item), 'document-tool-disabled': isTool(item) && toolForQueue(item)?.id === 'optativos' && optionalToolChoiceOptions(index).length === 0 }"
                     draggable="true"
                     @dragstart="startQueueDrag($event, item)"
                     @dragover.prevent
-                    @drop.stop="dropOnQueueSection($event, 'required', isTool(item) ? `tool:${item.toolId}` : item.exerciseId)"
+                    @drop.stop="dropOnQueueSection($event, 'required', item.blockId)"
                   >
                     <header v-if="isTool(item)" class="document-tool-queue-header" :class="`document-tool-${toolForQueue(item)?.id}`">
                       <v-icon v-if="toolForQueue(item)?.icon" :icon="toolForQueue(item)?.icon" size="18" />
                       <strong>{{ toolForQueue(item)?.label || 'Herramienta' }}</strong>
                       <v-spacer />
-                      <v-btn class="document-tool-remove" icon="mdi-close" size="x-small" variant="text" aria-label="Quitar herramienta" @click="removeQueuedExercise(`tool:${item.toolId}`)" />
+                      <v-btn class="document-tool-remove" icon="mdi-close" size="x-small" variant="text" aria-label="Quitar herramienta" @click="removeQueuedBlock(item)" />
                     </header>
                     <header v-else>
                       <span class="document-queue-order">{{ exerciseOrder(index) }}</span>
                       <strong>{{ subjectLabel(exerciseForQueue(item)) }}</strong>
                       <v-spacer />
-                      <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Quitar ejercicio" @click="removeQueuedExercise(item.exerciseId)" />
+                      <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Quitar ejercicio" @click="removeQueuedBlock(item)" />
                     </header>
                     <div v-if="isTool(item) && toolForQueue(item)?.id === 'optativos'" class="document-tool-queue-body">
                       <div class="document-tool-choice" role="group" aria-label="Número de ejercicios optativos que deben elegirse">
@@ -2327,7 +3193,7 @@ defineExpose({
                         density="compact"
                         variant="outlined"
                         hide-details
-                        @update:model-value="invalidatePreview"
+                        @update:model-value="invalidateContentPreview"
                       />
                     </div>
                     <ExerciseVariantSelector
@@ -2386,8 +3252,10 @@ defineExpose({
             </aside>
           </section>
         </div>
+          </div>
+        </div>
 
-        <div v-else-if="currentStep === 4" class="document-preview-step" :class="{ 'document-preview-with-code': showDocumentCode }">
+        <div v-else-if="currentStep === 3" class="document-preview-step">
           <div class="document-preview-display-toolbar">
             <v-btn
               prepend-icon="mdi-refresh"
@@ -2398,16 +3266,6 @@ defineExpose({
               :disabled="isCompiling || !selectedTemplate"
               @click="compileDocument(true)"
             >Recompilar</v-btn>
-            <v-btn
-              v-if="!isAssessmentPreviewSelected"
-              :prepend-icon="showDocumentCode ? 'mdi-code-tags-check' : 'mdi-code-tags'"
-              size="small"
-              rounded="pill"
-              :color="showDocumentCode ? 'primary' : undefined"
-              :variant="showDocumentCode ? 'tonal' : 'text'"
-              :aria-pressed="showDocumentCode"
-              @click="showDocumentCode = !showDocumentCode"
-            >{{ showDocumentCode ? 'Ocultar código' : 'Mostrar código' }}</v-btn>
           </div>
           <div class="document-preview-layout">
             <aside class="document-preview-selector" aria-label="Documentos generados">
@@ -2481,16 +3339,7 @@ defineExpose({
                 subtitle="Resoluciones segmentadas y logros del documento"
                 :badge="documentAssessment.shortName"
               />
-              <template v-else>
-                <DocumentCodeEditor
-                  v-if="showDocumentCode"
-                  :model-value="documentCode"
-                  :compiling="isCompiling"
-                  @update:model-value="updateDocumentCode"
-                  @compile="compileDocument"
-                />
-                <DocumentPdfPreview :src="previewUrl" />
-              </template>
+              <DocumentPdfPreview v-else :src="previewUrl" />
             </div>
           </div>
         </div>
@@ -2511,6 +3360,26 @@ defineExpose({
       </v-snackbar>
     </section>
   </div>
+  <v-dialog v-model="curriculumDialog" max-width="1180" height="min(88dvh, 860px)">
+    <v-card class="document-curriculum-dialog">
+      <v-card-title>
+        <span>Filtrar ejercicios</span>
+        <v-spacer />
+        <v-btn icon="mdi-close" size="small" variant="text" rounded="circle" aria-label="Cerrar filtros" @click="curriculumDialog = false" />
+      </v-card-title>
+      <v-card-text>
+        <ExerciseCurriculumPicker
+          :key="`filters-${curriculumPickerKey}`"
+          :model-value="documentCurriculum"
+          class="document-curriculum-step"
+          :nodes="conceptNodes"
+          :subject-selections="subjectSelections"
+          :exercise-counts="exerciseCounts"
+          @update:model-value="onDocumentCurriculumUpdate"
+        />
+      </v-card-text>
+    </v-card>
+  </v-dialog>
   <v-dialog v-model="documentDeleteDialog" max-width="430" persistent>
     <v-card>
       <v-card-title>Eliminar documento</v-card-title>
@@ -2549,7 +3418,7 @@ defineExpose({
 .document-viewer-layout { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); overflow: hidden; }
 
 .document-workflow { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-rows: 76px minmax(0, 1fr); overflow: hidden; }
-.document-stepper { display: grid; grid-template-columns: repeat(var(--document-step-count, 4), minmax(0, 1fr)); margin: 0; padding: 0 8%; border-bottom: 1px solid #d7e1ed; background: #fff; list-style: none; }
+.document-stepper { display: grid; grid-template-columns: repeat(var(--document-step-count, 3), minmax(0, 1fr)); margin: 0; padding: 0 8%; border-bottom: 1px solid #d7e1ed; background: #fff; list-style: none; }
 .document-stepper li { position: relative; display: flex; align-items: center; justify-content: center; }
 .document-stepper li:not(:last-child)::after { position: absolute; z-index: 0; top: 31px; right: -50%; width: 100%; height: 2px; background: #dbe4ef; content: ''; }
 .document-stepper li.complete:not(:last-child)::after { background: #6b94c9; }
@@ -2597,7 +3466,32 @@ defineExpose({
 .document-evaluable-toggle.active { border-color: #3f72b7; background: #e9f1fb; color: #315f97; }
 .document-evaluable-toggle:focus-visible { box-shadow: 0 0 0 3px rgba(63,114,183,.18); }
 
+.document-content-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-rows: 52px minmax(0, 1fr); overflow: hidden; }
+.document-content-toolbar { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid #d7e1ed; background: #fff; }
+.document-ai-model { flex: 0 1 230px; max-width: 230px; min-width: 170px; }
+.document-ai-model :deep(.v-field) { height: 34px; }
+.document-ai-model :deep(.v-field__input) { min-height: 32px; padding-block: 0; font-size: .72rem; font-weight: 750; }
+.document-content-modes { flex: 0 0 auto; border: 1px solid #c9d7e7; background: #edf2f8; }
+.document-content-modes :deep(.v-btn) { min-width: 126px; color: #6f8198; font-size: .68rem; font-weight: 800; letter-spacing: .035em; }
+.document-content-modes :deep(.v-btn--active) { background: #3f72b7; color: #fff; }
+.document-content-body { min-width: 0; min-height: 0; overflow: hidden; }
 .document-curriculum-step { width: 100%; height: 100%; }
+.document-curriculum-dialog { height: 100%; min-height: 0; overflow: hidden; }
+.document-curriculum-dialog > .v-card-title { display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid #d8e2ed; color: #315981; font-size: .85rem; }
+.document-curriculum-dialog > .v-card-text { min-height: 0; padding: 0 !important; overflow: hidden; }
+.document-latex-source-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); overflow: hidden; }
+.document-latex-source-editor { display: grid; min-width: 0; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; border-right: 1px solid #d6e0ec; }
+.document-source-files { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 6px 8px; border-top: 1px solid #d7e1ed; background: #f6f9fc; }
+.document-source-file-list { display: flex; min-width: 0; align-items: center; gap: 6px; overflow-x: auto; }
+.document-source-file-list article { display: flex; min-width: 150px; max-width: 230px; align-items: center; gap: 6px; padding: 4px 5px; border: 1px solid #cdd9e7; border-radius: 8px; background: #fff; color: #456585; }
+.document-source-file-list img { width: 30px; height: 30px; flex: 0 0 auto; object-fit: cover; }
+.document-source-file-list article > span { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+.document-source-file-list strong, .document-source-file-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-source-file-list strong { font-size: .64rem; }
+.document-source-file-list small { color: #8190a3; font-size: .54rem; }
+.document-latex-source-preview { min-width: 0; min-height: 0; overflow: hidden; background: #eef2f7; }
+.document-source-image-preview { display: block; width: 100%; height: 100%; padding: 12px; object-fit: contain; }
+.document-source-preview-empty { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: #7a8da4; font-size: .72rem; }
 .document-exercise-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 142px; overflow: hidden; }
 .document-matches-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border-right: 1px solid #d8e2ed; }
 .document-exercise-toolbar { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-bottom: 1px solid #dbe4ef; background: #fff; }
@@ -2812,5 +3706,7 @@ defineExpose({
   .document-stepper { padding-inline: 2%; }
   .document-template-step { grid-template-columns: minmax(0, 1.15fr) minmax(190px, .8fr) minmax(250px, 1fr); }
   .document-exercise-step { grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr) 124px; }
+  .document-content-modes :deep(.v-btn) { min-width: 0; padding-inline: 10px; }
+  .document-latex-source-step { grid-template-columns: minmax(0, 1.45fr) minmax(260px, 1fr); }
 }
 </style>

@@ -43,6 +43,7 @@ let renderFrame = 0
 let renderVersion = 0
 let observedWidth = 0
 let pdfJsModulePromise = null
+let renderPipeline = Promise.resolve()
 
 async function loadPdfJs() {
   if (!pdfJsModulePromise) {
@@ -55,47 +56,66 @@ async function loadPdfJs() {
   return pdfJs
 }
 
+async function cancelRenderTasks() {
+  const tasks = renderTasks
+  renderTasks = []
+  tasks.forEach((task) => task?.cancel?.())
+  await Promise.allSettled(tasks.map((task) => task?.promise))
+}
+
 async function clearDocument() {
   renderVersion += 1
-  renderTasks.forEach((task) => task?.cancel?.())
-  renderTasks = []
-  if (loadingTask) {
-    try { await loadingTask.destroy() } catch { /* La carga puede haber terminado. */ }
-  }
+  await cancelRenderTasks()
+  const currentLoadingTask = loadingTask
   loadingTask = null
-  if (pdfDocument) {
-    try { await pdfDocument.destroy() } catch { /* El documento puede estar destruido. */ }
+  if (currentLoadingTask) {
+    try { await currentLoadingTask.destroy() } catch { /* La carga puede haber terminado. */ }
   }
+  const currentPdfDocument = pdfDocument
   pdfDocument = null
+  if (currentPdfDocument) {
+    try { await currentPdfDocument.destroy() } catch { /* El documento puede estar destruido. */ }
+  }
+  await renderPipeline.catch(() => {})
   pageNumbers.value = []
   canvases.value = []
 }
 
-async function renderDocument() {
+async function renderDocument(version) {
   if (!props.src || !container.value) return
-  const version = ++renderVersion
+  if (version !== renderVersion) return
   isLoading.value = true
   errorMessage.value = ''
   try {
     if (!pdfDocument) {
       const { getDocument } = await loadPdfJs()
+      if (version !== renderVersion) return
+      let currentLoadingTask
       if (useLegacyPdfJs || props.src.startsWith('blob:')) {
         const response = await fetch(pdfSource.value)
         if (!response.ok) throw new Error(`No se ha podido descargar el PDF (HTTP ${response.status}).`)
-        loadingTask = getDocument({ data: new Uint8Array(await response.arrayBuffer()) })
+        const bytes = await response.arrayBuffer()
+        if (version !== renderVersion) return
+        currentLoadingTask = getDocument({ data: new Uint8Array(bytes) })
       } else {
-        loadingTask = getDocument({ url: pdfSource.value })
+        currentLoadingTask = getDocument({ url: pdfSource.value })
       }
-      pdfDocument = await loadingTask.promise
-      loadingTask = null
+      loadingTask = currentLoadingTask
+      const loadedDocument = await currentLoadingTask.promise
+      if (loadingTask === currentLoadingTask) loadingTask = null
+      if (version !== renderVersion) {
+        try { await loadedDocument.destroy() } catch { /* La fuente ya ha cambiado. */ }
+        return
+      }
+      pdfDocument = loadedDocument
       pageNumbers.value = Array.from({ length: pdfDocument.numPages }, (_, index) => index + 1)
       await nextTick()
     }
 
     const availableWidth = Math.max(container.value.clientWidth - 22, 1)
     const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
-    renderTasks.forEach((task) => task?.cancel?.())
-    renderTasks = []
+    await cancelRenderTasks()
+    if (version !== renderVersion) return
 
     for (const pageNumber of pageNumbers.value) {
       if (version !== renderVersion) return
@@ -116,6 +136,7 @@ async function renderDocument() {
       })
       renderTasks.push(task)
       await task.promise
+      renderTasks = renderTasks.filter((candidate) => candidate !== task)
     }
     if (version === renderVersion) isLoading.value = false
   } catch (error) {
@@ -129,16 +150,31 @@ async function renderDocument() {
 
 function scheduleRender() {
   cancelAnimationFrame(renderFrame)
-  renderFrame = requestAnimationFrame(renderDocument)
+  renderFrame = requestAnimationFrame(queueRender)
+}
+
+function queueRender() {
+  const version = ++renderVersion
+  renderTasks.forEach((task) => task?.cancel?.())
+  renderPipeline = renderPipeline
+    .catch(() => {})
+    .then(() => renderDocument(version))
+  return renderPipeline
 }
 
 watch(() => props.src, async () => {
   await clearDocument()
-  if (props.src) await nextTick(renderDocument)
+  if (props.src) {
+    await nextTick()
+    queueRender()
+  }
 })
 
 onMounted(async () => {
-  if (props.src) await nextTick(renderDocument)
+  if (props.src) {
+    await nextTick()
+    queueRender()
+  }
 })
 
 onBeforeUnmount(async () => {

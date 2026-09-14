@@ -63,6 +63,7 @@ assert.match(rebuilt, /\\info\{Origen\}/)
 assert.match(rebuilt, /\\T\{12\}/)
 assert.match(rebuilt, /\\t\{5\}/)
 assert.match(rebuilt, /\\t\{7\}/)
+assert.doesNotMatch(rebuilt, /\\ej[^\n]*\\\\\n\s*\n/)
 assert.deepEqual(restored.apartados[0].achievements, structure.apartados[0].achievements)
 assert.doesNotMatch(rebuilt, /Plantea correctamente/)
 const achievementOnlyEdit = exerciseDocumentStructure({

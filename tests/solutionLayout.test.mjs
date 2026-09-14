@@ -1,12 +1,34 @@
 import assert from 'node:assert/strict'
 
 import {
+  ensureAlignedInDisplayMath,
   hasLegacyDisplayMathDelimiters,
   hasTrailingInfoCommand,
   normalizeDisplayMathDelimiters,
+  normalizeLatexTextAccents,
   splitAlignedRows,
   splitOverloadedCompactRows,
 } from '../functions/solutionLayout.js'
+
+const bareAligned = String.raw`Antes
+\begin{aligned}A&=B\\&=C\end{aligned}
+Después`
+assert.equal(
+  ensureAlignedInDisplayMath(bareAligned),
+  String.raw`Antes
+$$
+\begin{aligned}A&=B\\&=C\end{aligned}
+$$
+Después`,
+)
+const wrappedAligned = String.raw`$$\begin{aligned}A&=B\end{aligned}$$`
+assert.equal(ensureAlignedInDisplayMath(wrappedAligned), wrappedAligned)
+const equationAligned = String.raw`\begin{equation}\begin{aligned}A&=B\end{aligned}\end{equation}`
+assert.equal(ensureAlignedInDisplayMath(equationAligned), equationAligned)
+assert.equal(
+  normalizeLatexTextAccents(String.raw`Informaci\'on, Matem\'{a}ticas, ping\"uino y ni\~no.`),
+  'Información, Matemáticas, pingüino y niño.',
+)
 
 const matrix = (value) => `\\begin{matrizp}${value}&0\\\\0&${value}\\end{matrizp}`
 

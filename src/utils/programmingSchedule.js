@@ -25,6 +25,17 @@ function normalizedToken(value, fallback = 'segmento') {
     .replace(/^-+|-+$/g, '') || fallback
 }
 
+export function programmingStreamKey(session = {}, group = {}) {
+  const tutorType = session.tutorType || null
+  if (tutorType) return `tutoring:${normalizedToken(tutorType)}`
+  const subject = session.subjectId || group.subjectId || session.subject || group.asignatura || group.subject || 'clase'
+  return `teaching:${normalizedToken(subject)}`
+}
+
+function stableSessionId(streamKey, sequenceIndex) {
+  return `${normalizedToken(streamKey, 'sesion')}--${String(sequenceIndex + 1).padStart(4, '0')}`
+}
+
 function darkenColor(color, factor = 0.48) {
   const value = String(color || '').replace('#', '')
   if (!/^[0-9a-f]{6}$/iu.test(value)) return '#294568'
@@ -74,10 +85,13 @@ function sessionFor(date, segment, group, ordinaryColor) {
     tutorType || subjectId || normalizedToken(subject),
   ].join('-')
   const baseColor = segment.color || ordinaryColor || group.color || '#E8F0FB'
+  const streamKey = programmingStreamKey({ tutorType, subjectId, subject }, group)
   return {
-    id: `${date}--${normalizedToken(segmentKey)}`,
+    id: '',
     date,
     sessionKey: segmentKey,
+    streamKey,
+    sequenceIndex: null,
     sessionType: kind,
     title: tutorType ? (TUTOR_TITLES[tutorType] || 'Tutoría') : (subject || 'Clase'),
     color: tutorType ? (segment.color || darkenColor(ordinaryColor || group.color)) : baseColor,
@@ -88,6 +102,67 @@ function sessionFor(date, segment, group, ordinaryColor) {
     moduleIndex: Number(segment.tramo),
     primaryForDate: false,
   }
+}
+
+function compareProgrammingDays(left, right) {
+  return String(left.date || '').localeCompare(String(right.date || ''))
+    || Number(left.dayIndex ?? 99) - Number(right.dayIndex ?? 99)
+    || Number(left.moduleIndex ?? 99) - Number(right.moduleIndex ?? 99)
+    || String(left.id || '').localeCompare(String(right.id || ''))
+}
+
+/**
+ * Asocia las sesiones calculadas con registros persistidos sin utilizar la
+ * fecha como identidad. Los documentos antiguos conservan su ID para no
+ * romper referencias; su posición dentro del flujo lectivo pasa a ser la
+ * identidad lógica.
+ */
+export function reconcileProgrammingSessions(sessions = [], existingDays = [], group = {}) {
+  const targets = sessions.map((session) => ({
+    ...session,
+    streamKey: session.streamKey || programmingStreamKey(session, group),
+  }))
+  const existing = existingDays.map((day) => ({
+    ...day,
+    streamKey: day.streamKey || programmingStreamKey(day, group),
+  }))
+  const claimedIds = new Set()
+  const resolved = new Map()
+
+  const claim = (session, day) => {
+    if (!day || claimedIds.has(day.id)) return false
+    claimedIds.add(day.id)
+    resolved.set(session.id, { ...day, ...session, id: day.id })
+    return true
+  }
+
+  targets.forEach((session) => {
+    const exact = existing.find((day) => day.id === session.id && day.streamKey === session.streamKey)
+    claim(session, exact)
+  })
+
+  targets.filter((session) => !resolved.has(session.id)).forEach((session) => {
+    const indexed = existing.find((day) => (
+      !claimedIds.has(day.id)
+      && day.streamKey === session.streamKey
+      && Number.isInteger(day.sequenceIndex)
+      && day.sequenceIndex === session.sequenceIndex
+    ))
+    claim(session, indexed)
+  })
+
+  const streamKeys = [...new Set(targets.map((session) => session.streamKey))]
+  streamKeys.forEach((streamKey) => {
+    const pendingSessions = targets
+      .filter((session) => session.streamKey === streamKey && !resolved.has(session.id))
+      .sort((left, right) => left.sequenceIndex - right.sequenceIndex)
+    const candidates = existing
+      .filter((day) => day.streamKey === streamKey && !claimedIds.has(day.id))
+      .sort(compareProgrammingDays)
+    pendingSessions.forEach((session, index) => claim(session, candidates[index]))
+  })
+
+  return targets.map((session) => resolved.get(session.id) || session)
 }
 
 export function programmingSessionsForGroup(calendar = {}, group = {}) {
@@ -122,6 +197,13 @@ export function programmingSessionsForGroup(calendar = {}, group = {}) {
     primary.primaryForDate = true
     sessions.push(...sessionsForDate)
   }
+  const streamCounts = new Map()
+  sessions.forEach((session) => {
+    const sequenceIndex = streamCounts.get(session.streamKey) || 0
+    session.sequenceIndex = sequenceIndex
+    session.id = stableSessionId(session.streamKey, sequenceIndex)
+    streamCounts.set(session.streamKey, sequenceIndex + 1)
+  })
   return sessions
 }
 

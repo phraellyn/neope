@@ -2,7 +2,7 @@ import { defineSecret } from 'firebase-functions/params'
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https'
 import { onDocumentCreated } from 'firebase-functions/v2/firestore'
 import { getApps, initializeApp } from 'firebase-admin/app'
-import { getFirestore } from 'firebase-admin/firestore'
+import { FieldValue, getFirestore } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
 import { getAuth } from 'firebase-admin/auth'
 import { randomUUID } from 'node:crypto'
@@ -23,9 +23,11 @@ export {
 import { codeForCompiler, compilationArtifacts, sourceHash } from './exerciseCompilation.js'
 import { curriculumPromptContext } from './curriculumContext.js'
 import {
+  ensureAlignedInDisplayMath,
   hasLegacyDisplayMathDelimiters,
   hasTrailingInfoCommand,
   normalizeDisplayMathDelimiters,
+  normalizeLatexTextAccents,
   splitAlignedRows,
   splitOverloadedCompactRows,
 } from './solutionLayout.js'
@@ -45,9 +47,80 @@ function requireTeacherAccess(request) {
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
 const compilerOrigin = 'http://51.170.57.25:5000'
 
+async function deleteStudentAccounts(accessCodes) {
+  const auth = getAuth()
+  const userIds = [...new Set(accessCodes.docs.map((entry) => entry.data()?.authUid).filter(Boolean))]
+  for (const uid of userIds) {
+    try {
+      await auth.deleteUser(uid)
+    } catch (error) {
+      if (error?.code !== 'auth/user-not-found') throw error
+    }
+  }
+  return userIds.length
+}
+
+async function detachDocumentsFromGroup(groupId) {
+  const fields = ['assessment.groupId', 'programming.groupId', 'groupContext.id']
+  const snapshots = await Promise.all(fields.map((field) => (
+    adminDb.collection('documentos').where(field, '==', groupId).get()
+  )))
+  const documents = new Map()
+  snapshots.flatMap((snapshot) => snapshot.docs).forEach((entry) => documents.set(entry.id, entry))
+  const entries = [...documents.values()]
+  for (let offset = 0; offset < entries.length; offset += 400) {
+    const batch = adminDb.batch()
+    entries.slice(offset, offset + 400).forEach((entry) => {
+      const data = entry.data() || {}
+      const updates = { updatedAt: new Date().toISOString() }
+      if (data.assessment?.groupId === groupId) {
+        updates.assessment = {
+          ...data.assessment,
+          evaluable: false,
+          groupId: null,
+          gradebookItemId: null,
+        }
+      }
+      if (data.programming?.groupId === groupId) {
+        updates.programming = { ...data.programming, groupId: null, hidden: true }
+      }
+      if (data.groupContext?.id === groupId) updates.groupContext = FieldValue.delete()
+      batch.update(entry.ref, updates)
+    })
+    await batch.commit()
+  }
+  return entries.length
+}
+
+async function removeGroupFromTeacherCalendar(teacherId, groupId) {
+  const reference = adminDb.doc(`teachers/${teacherId}`)
+  const snapshot = await reference.get()
+  if (!snapshot.exists) return false
+  const calendars = structuredClone(snapshot.data()?.calendariosEscolares || {})
+  let changed = false
+  Object.values(calendars).forEach((calendar) => {
+    if (!Array.isArray(calendar?.types)) return
+    calendar.types = calendar.types.map((type) => {
+      if (!Array.isArray(type?.cursos) || !type.cursos.includes(groupId)) return type
+      changed = true
+      return { ...type, cursos: type.cursos.filter((id) => id !== groupId) }
+    })
+  })
+  if (changed) await reference.set({ calendariosEscolares: calendars }, { merge: true })
+  return changed
+}
+
+async function deleteGroupStorage(teacherId, groupId) {
+  const bucket = adminStorage.bucket()
+  const prefix = `teachers/${teacherId}/programacion/${groupId}/`
+  const [files] = await bucket.getFiles({ prefix })
+  await Promise.all(files.map((file) => file.delete({ ignoreNotFound: true })))
+  return files.length
+}
+
 export const deleteTeacherGroup = onCall({
   region: 'europe-west1',
-  timeoutSeconds: 60,
+  timeoutSeconds: 120,
   memory: '256MiB',
   enforceAppCheck: true,
 }, async (request) => {
@@ -65,13 +138,32 @@ export const deleteTeacherGroup = onCall({
     groupReference.collection('alumnos').get(),
     adminDb.collection('studentAccessCodes').where('groupId', '==', groupId).get(),
   ])
+
+  // Todo lo que vive fuera del árbol del grupo se limpia antes del borrado
+  // recursivo. Cada paso es repetible: si una ejecución se interrumpe, el
+  // usuario puede volver a confirmar sin dejar referencias huérfanas.
+  const [deletedAccounts, detachedDocuments, calendarUpdated, deletedFiles] = await Promise.all([
+    deleteStudentAccounts(accessCodes),
+    detachDocumentsFromGroup(groupId),
+    removeGroupFromTeacherCalendar(request.auth.uid, groupId),
+    deleteGroupStorage(request.auth.uid, groupId),
+  ])
   if (!accessCodes.empty) {
     const batch = adminDb.batch()
     accessCodes.docs.forEach((entry) => batch.delete(entry.ref))
     await batch.commit()
   }
   await adminDb.recursiveDelete(groupReference)
-  return { studentIds: students.docs.map((student) => student.id) }
+  return {
+    studentIds: students.docs.map((student) => student.id),
+    cleanup: {
+      deletedAccounts,
+      deletedAccessCodes: accessCodes.size,
+      detachedDocuments,
+      deletedFiles,
+      calendarUpdated,
+    },
+  }
 })
 
 const proxyResponseHeaders = Object.freeze([
@@ -729,6 +821,96 @@ const exerciseCompetenciesResponseFormat = {
   },
 }
 
+const documentAchievementSchema = {
+  type: 'object',
+  properties: {
+    description: { type: 'string' },
+    points: { type: 'number', minimum: 0 },
+    criterionIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+    descriptorEvidence: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          descriptorId: { type: 'string' },
+          strength: { type: 'string', enum: ['weak', 'medium', 'strong'] },
+        },
+        required: ['descriptorId', 'strength'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['description', 'points', 'criterionIds', 'descriptorEvidence'],
+  additionalProperties: false,
+}
+
+const documentGeneratedPartSchema = {
+  type: 'object',
+  properties: {
+    statement: { type: 'string' },
+    answer: { type: 'string' },
+    workedSolution: { type: 'string' },
+    points: { type: 'number', minimum: 0 },
+    durationMinutes: { type: 'number', minimum: 0 },
+    contentIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+    achievements: { type: 'array', items: documentAchievementSchema },
+  },
+  required: ['statement', 'answer', 'workedSolution', 'points', 'durationMinutes', 'contentIds', 'achievements'],
+  additionalProperties: false,
+}
+
+const documentContentResponseFormat = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'neope_document_content',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        beforeExercisesLatex: { type: 'string' },
+        generatedExercises: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              statement: { type: 'string' },
+              answer: { type: 'string' },
+              workedSolution: { type: 'string' },
+              points: { type: 'number', minimum: 0 },
+              durationMinutes: { type: 'number', minimum: 0 },
+              sourcePage: { type: 'integer', minimum: 1 },
+              partsEnvironment: { type: 'string', enum: ['none', 'apartados', 'apartadosc'] },
+              parts: { type: 'array', items: documentGeneratedPartSchema },
+              info: { type: 'string' },
+              contentIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+              achievements: { type: 'array', items: documentAchievementSchema },
+            },
+            required: ['statement', 'answer', 'workedSolution', 'points', 'durationMinutes', 'sourcePage', 'partsEnvironment', 'parts', 'info', 'contentIds', 'achievements'],
+            additionalProperties: false,
+          },
+        },
+        alignments: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              sourceBlockId: { type: 'string' },
+              segmentIndex: { type: 'integer', minimum: -1 },
+              contentIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+              achievements: { type: 'array', items: documentAchievementSchema },
+            },
+            required: ['sourceBlockId', 'segmentIndex', 'contentIds', 'achievements'],
+            additionalProperties: false,
+          },
+        },
+        afterExercisesLatex: { type: 'string' },
+      },
+      required: ['beforeExercisesLatex', 'generatedExercises', 'alignments', 'afterExercisesLatex'],
+      additionalProperties: false,
+    },
+  },
+}
+
 const analysisSystemPrompt = String.raw`Analiza un ejercicio de Matemáticas de Secundaria o Bachillerato diseñado por un profesor. No redactes una variación ni LaTeX: extrae una estrategia de diseño para crear después una variante pedagógicamente sustancial.
 
 Identifica la estructura matemática esencial, las destrezas evaluadas, la dificultad, el esquema de solución y los elementos que deben preservarse. Propón un plan de transformación que cambie de manera estructural el objeto, la restricción, la magnitud, la representación o la pregunta, sin reducir la dificultad ni convertirlo en un simple cambio de datos. El nuevo ejercicio deberá poder resolverse con un esquema de razonamiento comparable, pero no ser clónico del original.
@@ -794,6 +976,92 @@ function choiceContent(choice) {
     : Array.isArray(rawContent)
       ? rawContent.map((part) => typeof part === 'string' ? part : part?.text || '').join('')
       : ''
+}
+
+const transientOpenRouterStatuses = new Set([408, 409, 425, 429, 500, 502, 503, 504])
+
+function openRouterErrorText(payload, status) {
+  const message = String(payload?.error?.message || '').trim()
+  if (message && !/^provider returned error\.?$/i.test(message)) return message.slice(0, 600)
+  if (status === 429) return 'El proveedor está limitando temporalmente las solicitudes.'
+  if ([502, 503, 504].includes(status)) return 'El proveedor del modelo no está disponible temporalmente.'
+  return message || `OpenRouter ha respondido con HTTP ${status}.`
+}
+
+function isTransientOpenRouterError(status, payload) {
+  if (transientOpenRouterStatuses.has(status)) return true
+  return /provider returned error|deadline|timed?\s*out|temporar|overload|rate.?limit|unavailable/i
+    .test(String(payload?.error?.message || ''))
+}
+
+async function waitForRetry(milliseconds) {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+async function requestOpenRouterWithRetry({ body, model, deadlineAt, maximumAttempts = 3 }) {
+  let lastFailure = null
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    const remainingMs = deadlineAt - Date.now()
+    if (remainingMs < 5_000) break
+    let response
+    try {
+      response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${openRouterApiKey.value()}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://neope.web.app',
+          'X-Title': 'Neope',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(remainingMs),
+      })
+    } catch (error) {
+      if (error?.name === 'TimeoutError') throw error
+      lastFailure = {
+        status: null,
+        message: 'Se ha interrumpido temporalmente la conexión con OpenRouter.',
+        provider: null,
+        requestId: null,
+      }
+      console.warn('OpenRouter network request failed', { model, attempt, error: error?.message || error })
+      if (attempt === maximumAttempts) break
+      const delayMs = attempt === 1 ? 1_500 : 4_000
+      if (deadlineAt - Date.now() <= delayMs + 5_000) break
+      await waitForRetry(delayMs)
+      continue
+    }
+    const payload = await response.json().catch(() => ({}))
+    if (response.ok) return { payload, attempt }
+
+    const transient = isTransientOpenRouterError(response.status, payload)
+    lastFailure = {
+      status: response.status,
+      message: openRouterErrorText(payload, response.status),
+      provider: payload?.error?.metadata?.provider_name || payload?.provider || null,
+      requestId: response.headers.get('x-request-id') || null,
+    }
+    console.warn('OpenRouter request rejected', {
+      model,
+      attempt,
+      transient,
+      ...lastFailure,
+    })
+    if (!transient || attempt === maximumAttempts) break
+    const delayMs = attempt === 1 ? 1_500 : 4_000
+    if (deadlineAt - Date.now() <= delayMs + 5_000) break
+    await waitForRetry(delayMs)
+  }
+
+  throw new HttpsError(
+    'unavailable',
+    `Fallo temporal de ${aiModels[model]?.label || model} en OpenRouter tras varios intentos. ${lastFailure?.message || 'Vuelve a intentarlo dentro de unos instantes.'}`,
+    {
+      provider: lastFailure?.provider,
+      status: lastFailure?.status,
+      requestId: lastFailure?.requestId,
+    },
+  )
 }
 
 function stripLegacySolutionCommands(text) {
@@ -1675,6 +1943,299 @@ export const suggestExerciseCompetencies = onCall({
     if (error?.name === 'TimeoutError') throw new HttpsError('deadline-exceeded', 'La IA ha tardado demasiado en desglosar las competencias.')
     console.error('Exercise competency suggestion failed', { model, subjectId, error })
     throw new HttpsError('internal', 'No se ha podido generar el desglose competencial con IA.')
+  }
+})
+
+function normalizeGeneratedAchievements(achievements, points, law, model) {
+  const criterionById = new Map((law.criteria || []).map((item) => [item.id, item]))
+  const competencyById = new Map((law.competencies || []).map((item) => [item.id, item]))
+  const descriptorIds = new Set((law.descriptors || []).map((item) => item.id))
+  let result = (Array.isArray(achievements) ? achievements : []).slice(0, 12).map((achievement) => {
+    const criterionIds = [...new Set((achievement?.criterionIds || []).filter((id) => criterionById.has(id)))]
+    const allowedDescriptors = new Set(criterionIds.flatMap((criterionId) => {
+      const criterion = criterionById.get(criterionId)
+      return [...(criterion?.descriptorIds || []), ...(competencyById.get(criterion?.competenceId)?.descriptorIds || [])]
+    }))
+    return {
+      id: `achievement-${randomUUID()}`,
+      description: String(achievement?.description || '').trim().slice(0, 1_200),
+      points: Math.max(0, Number(achievement?.points) || 0),
+      alignment: {
+        criterionIds,
+        descriptorEvidence: (Array.isArray(achievement?.descriptorEvidence) ? achievement.descriptorEvidence : [])
+          .filter((item) => descriptorIds.has(item?.descriptorId)
+            && allowedDescriptors.has(item.descriptorId)
+            && ['weak', 'medium', 'strong'].includes(item?.strength))
+          .filter((item, index, values) => values.findIndex((candidate) => candidate.descriptorId === item.descriptorId) === index),
+        source: 'ai',
+        model,
+      },
+    }
+  }).filter((item) => item.description)
+  const targetCents = Math.max(0, Math.round((Number(points) || 0) * 100))
+  if (!targetCents || !result.length) return []
+  const rawTotal = result.reduce((sum, item) => sum + item.points, 0)
+  if (rawTotal <= 0) result = result.map((item) => ({ ...item, points: 1 }))
+  const weight = result.reduce((sum, item) => sum + item.points, 0)
+  let assigned = 0
+  return result.map((item, index) => {
+    const cents = index === result.length - 1
+      ? targetCents - assigned
+      : Math.max(0, Math.round((item.points / weight) * targetCents))
+    assigned += cents
+    return { ...item, points: cents / 100 }
+  }).filter((item) => item.points > 0)
+}
+
+export const generateDocumentContent = onCall({
+  region: 'europe-west1',
+  timeoutSeconds: 300,
+  memory: '1GiB',
+  secrets: [openRouterApiKey],
+  enforceAppCheck: true,
+}, async (request) => {
+  requireTeacherAccess(request)
+  const startedAt = Date.now()
+  const clean = (value, maximum = 20_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
+  const model = clean(request.data?.model, 120) || 'google/gemini-3-flash-preview'
+  if (!Object.hasOwn(aiModels, model)) throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
+  const mode = request.data?.mode === 'align' ? 'align' : 'generate'
+  const sourceType = clean(request.data?.sourceType, 40)
+  const course = clean(request.data?.course, 80)
+  const subjectId = clean(request.data?.subjectId, 160)
+  const catalog = lomloeMathLaw.subjects?.[subjectId]
+  if (!catalog) throw new HttpsError('failed-precondition', 'Selecciona un curso y una asignatura con datos LOMLOE antes de generar.')
+
+  const stage = catalog.stage || (course.includes('BTO') ? 'Bachillerato' : 'ESO')
+  const law = {
+    competencies: (catalog.specificCompetencies || []).map((item) => ({ id: item.id, code: item.code, description: item.description, descriptorIds: item.descriptorIds || [] })),
+    criteria: (catalog.evaluationCriteria || []).map((item) => ({ id: item.id, code: item.code, competenceId: item.competenceId, description: item.description, descriptorIds: item.descriptorIds || [] })),
+    descriptors: (lomloeMathLaw.global?.operationalDescriptors || [])
+      .filter((item) => !item.stage || item.stage === stage)
+      .map((item) => ({ id: item.id, code: item.code, keyCompetencyId: item.keyCompetencyId, description: item.description })),
+  }
+  const concepts = (Array.isArray(request.data?.concepts) ? request.data.concepts : []).slice(0, 240).map((item) => ({
+    id: clean(item?.id, 180),
+    title: clean(item?.title, 300),
+    path: clean(item?.path, 1_000),
+    selected: Boolean(item?.selected),
+  })).filter((item) => item.id)
+  const allowedConceptIds = new Set(concepts.map((item) => item.id))
+  const sourceExercises = (Array.isArray(request.data?.exercises) ? request.data.exercises : []).slice(0, 24).map((item) => ({
+    sourceBlockId: clean(item?.sourceBlockId, 180),
+    latex: clean(item?.latex, 60_000),
+    segments: (Array.isArray(item?.segments) ? item.segments : []).slice(0, 24).map((segment) => ({
+      segmentIndex: Math.max(-1, Math.floor(Number(segment?.segmentIndex) || 0)),
+      points: Math.max(0, Number(segment?.points) || 0),
+      statement: clean(segment?.statement, 18_000),
+      answer: clean(segment?.answer, 5_000),
+      workedSolution: clean(segment?.workedSolution, 24_000),
+      contentIds: (Array.isArray(segment?.contentIds) ? segment.contentIds : []).filter((id) => allowedConceptIds.has(id)),
+    })),
+  })).filter((item) => item.sourceBlockId && item.latex)
+  if (mode === 'align' && !sourceExercises.length) throw new HttpsError('invalid-argument', 'No hay ejercicios que analizar.')
+
+  const files = (Array.isArray(request.data?.files) ? request.data.files : []).slice(0, 6).map((file) => ({
+    name: clean(file?.name, 240),
+    mimeType: clean(file?.mimeType, 120),
+    dataUrl: clean(file?.dataUrl, 7_500_000),
+  })).filter((file) => /^data:(?:image\/(?:png|jpeg)|application\/pdf);base64,/i.test(file.dataUrl))
+  if (files.reduce((sum, file) => sum + file.dataUrl.length, 0) > 7_500_000) {
+    throw new HttpsError('invalid-argument', 'Los archivos seleccionados superan el tamaño máximo para analizarlos con IA.')
+  }
+
+  const rawLatexCapabilities = request.data?.latexCapabilities && typeof request.data.latexCapabilities === 'object'
+    ? request.data.latexCapabilities
+    : {}
+  const cleanStringList = (values, limit, itemLimit = 120) => [...new Set(
+    (Array.isArray(values) ? values : []).slice(0, limit).map((value) => clean(value, itemLimit)).filter(Boolean),
+  )]
+  const latexCapabilities = {
+    packages: cleanStringList(rawLatexCapabilities.packages, 80),
+    customCommands: cleanStringList(rawLatexCapabilities.customCommands, 120),
+    environments: cleanStringList(rawLatexCapabilities.environments, 80),
+    standardConstructs: cleanStringList(rawLatexCapabilities.standardConstructs, 40),
+    headerFields: (Array.isArray(rawLatexCapabilities.headerFields) ? rawLatexCapabilities.headerFields : []).slice(0, 30).map((field) => ({
+      key: clean(field?.key, 100),
+      label: clean(field?.label, 200),
+      value: clean(field?.value, 1_000),
+    })).filter((field) => field.key || field.label),
+    headerInvocations: (Array.isArray(rawLatexCapabilities.headerInvocations) ? rawLatexCapabilities.headerInvocations : []).slice(0, 8).map((header) => ({
+      template: clean(header?.template, 200),
+      latex: clean(header?.latex, 4_000),
+    })).filter((header) => header.latex),
+  }
+  const imageSourceCount = files.filter((file) => /^image\//i.test(file.mimeType)).length
+  const expectedPageCount = files.length > 0 && imageSourceCount === files.length ? imageSourceCount : null
+
+  const task = mode === 'align'
+    ? 'No reescribas ni alteres los ejercicios. Devuelve únicamente alignments para todos sus segmentos evaluables, conservando sourceBlockId y segmentIndex.'
+    : sourceType === 'curriculum'
+      ? 'Diseña un conjunto breve y coherente de ejercicios nuevos que evalúe los conceptos seleccionados, con dificultad adecuada al curso, solución completa, respuestas breves, segmentación y desglose competencial.'
+      : 'Reconstruye fielmente el documento aportado como LaTeX editable y ejercicios Neope estructurados. Conserva no solo las preguntas, sino también su estructura visual, instrucciones, tablas de recogida de datos, espacios de respuesta, recuadros, líneas, rejillas, diagramas y dibujos; completa después respuestas, resoluciones, segmentación, contenidos y logros evaluables.'
+  const promptPayload = {
+    task,
+    context: {
+      course,
+      subjectId,
+      subjectTitle: clean(request.data?.subjectTitle, 200) || catalog.subjectTitle,
+      sourceType,
+      sourceFiles: files.map((file, index) => ({ page: index + 1, name: file.name, mimeType: file.mimeType })),
+      expectedPageCount,
+      requestedConceptIds: (Array.isArray(request.data?.selectedConceptIds) ? request.data.selectedConceptIds : []).filter((id) => allowedConceptIds.has(id)),
+      sourceLatex: clean(request.data?.latex, 100_000),
+    },
+    sourceExercises,
+    concepts,
+    latexCapabilities,
+    evaluationCriteria: law.criteria,
+    operationalDescriptors: law.descriptors,
+  }
+  const userContent = [{ type: 'text', text: JSON.stringify(promptPayload) }]
+  files.forEach((file) => {
+    if (file.mimeType === 'application/pdf') {
+      userContent.push({ type: 'file', file: { filename: file.name || 'documento.pdf', file_data: file.dataUrl } })
+    } else {
+      userContent.push({ type: 'image_url', image_url: { url: file.dataUrl } })
+    }
+  })
+
+  try {
+    console.info('Document content generation started', {
+      model,
+      mode,
+      sourceType,
+      sourceExerciseCount: sourceExercises.length,
+      fileCount: files.length,
+      fileCharacters: files.reduce((sum, file) => sum + file.dataUrl.length, 0),
+      promptCharacters: JSON.stringify(promptPayload).length,
+    })
+    const { payload, attempt } = await requestOpenRouterWithRetry({
+      model,
+      deadlineAt: startedAt + 270_000,
+      body: {
+        model,
+        reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+        messages: [{
+          role: 'system',
+          content: `Eres un profesor experto en diseño editorial de documentos, ejercicios de Matemáticas y evaluación competencial LOMLOE. Devuelve exclusivamente el JSON solicitado. Cada ejercicio generado debe ser correcto, autosuficiente y apropiado para ${course}.
+
+RECONSTRUCCIÓN VISUAL OBLIGATORIA:
+- Antes de redactar, haz internamente un inventario completo y ordenado de todo lo visible en todas las páginas. No omitas elementos porque no sean preguntas matemáticas.
+- Reproduce las instrucciones, cuestionarios previos, tablas de recogida de datos, líneas para responder, cajas de trabajo, divisiones internas, rejillas, rectas numéricas, esquemas y dibujos. En una transcripción desde imagen o PDF prima la fidelidad: no conviertas una ficha de trabajo en una simple lista de enunciados.
+- latexCapabilities.headerInvocations muestra exactamente las cabeceras que Neope insertará antes de tu contenido. No repitas en beforeExercisesLatex ni en los ejercicios ningún dato ya visible allí: nombre del instituto, asignatura, nivel/curso/grupo, título y fecha. Del documento fotografiado elimina también su antiguo membrete institucional cuando la plantilla ya aporta uno. Esto no autoriza a eliminar instrucciones ni preguntas.
+- Puedes omitir un campo para datos personales ya cubierto inequívocamente por la cabecera (por ejemplo, «Nombre y apellidos»). Conserva todas las demás preguntas del cuestionario inicial, aunque sean datos académicos previos.
+- Usa cualquier construcción LaTeX declarada en latexCapabilities y también construcciones estándar compatibles: tabular, array, minipage, parbox, makebox, fbox, framebox, rule, hspace, vspace y TikZ. Cuando una figura sea relevante, recréala con TikZ; no la describas con palabras ni insertes la fotografía original como sustituto.
+- Reserva en el documento una superficie de respuesta comparable a la del original. Las líneas, cajas y dibujos forman parte del contenido y no deben desaparecer de la versión enunciado.
+
+PAGINACIÓN Y MAQUETACIÓN:
+- sourcePage indica la página de origen en la que empieza cada ejercicio. Asígnalo con precisión y en orden no decreciente; Neope introducirá el salto cuando cambie de página. Si un mismo ejercicio atraviesa una página, coloca \\newpage en el punto exacto dentro de su statement o del statement del apartado correspondiente.
+- ${expectedPageCount ? `Se han recibido ${expectedPageCount} imágenes de página: el resultado debe ocupar exactamente ${expectedPageCount} páginas y conservar la frontera entre ellas.` : 'Conserva el número y las fronteras de página que puedas identificar en la fuente.'}
+- Maqueta de forma conservadora dentro de \\linewidth. La suma de anchuras de columnas, separaciones y márgenes nunca debe excederla. No uses desplazamientos negativos ni superposiciones para forzar el parecido.
+- Antes de devolver el JSON, revisa mentalmente cada página para detectar desbordamientos, solapamientos y grandes espacios muertos. Si dos cajas, textos o dibujos no caben holgadamente en horizontal, apílalos verticalmente. Prefiere tabular con columnas p{...}, minipage y TikZ con bounding box explícito antes que coordenadas absolutas frágiles.
+- Reparte la altura disponible de manera coherente con el original: conserva espacio suficiente para responder, pero compacta separaciones decorativas si fueran a provocar una página adicional.
+
+CONTRATO DE SEGMENTACIÓN:
+- beforeExercisesLatex contiene solo el material situado entre la cabecera de la plantilla y el primer ejercicio: instrucciones, cuestionarios o tablas globales. afterExercisesLatex contiene únicamente material posterior al último ejercicio. En modo align ambos deben ser cadenas vacías.
+- beforeExercisesLatex y afterExercisesLatex no pueden contener begin/end document, begin/end ejercicios, ej, ap ni info.
+- No incluyas \\ej, \\ap, \\info, \\begin{document} ni entornos estructurales en statement, answer o workedSolution: Neope los añadirá.
+- Si hay contenido común a varios apartados, inclúyelo en statement. Incluye en cada parts[i].statement todas las líneas, cajas, diagramas y espacios que pertenecen solo a ese apartado. Esto conserva la segmentación sin perder la maquetación.
+- Si hay apartados, usa partsEnvironment apartados o apartadosc. Si no los hay, usa none y parts vacío. La suma de puntos de los apartados debe coincidir con la del ejercicio.
+
+REGLAS MATEMÁTICAS Y DE EVALUACIÓN:
+- Usa LaTeX puro, sin Markdown. En matemáticas destacadas usa $$...$$, nunca \\[...\\].
+- Escribe directamente todos los caracteres españoles en UTF-8 (á, é, í, ó, ú, ü, ñ, ¿, ¡). No uses formas heredadas como \\'o, \\~n o \\c{c}; hacen el código innecesariamente ilegible.
+- aligned no activa el modo matemático: todo bloque \\begin{aligned}...\\end{aligned} debe estar completamente envuelto en $$...$$. Nunca escribas aligned directamente en modo texto ni dentro de center sin esos delimitadores.
+- Los logros deben ser observables, atómicos y sumar exactamente los puntos de su segmento. contentIds, criterionIds y descriptorId solo pueden proceder de los catálogos recibidos; no inventes identificadores.
+- Mantén las soluciones en un ancho editorial de 8 cm, sin líneas vacías dentro de aligned y usando matrizp, detp y sistemap para matrices, determinantes y sistemas.`,
+        }, { role: 'user', content: userContent }],
+        response_format: documentContentResponseFormat,
+        provider: { require_parameters: true, data_collection: 'deny', allow_fallbacks: true, sort: 'throughput' },
+        max_tokens: 20_000,
+      },
+    })
+    const raw = choiceContent(payload.choices?.[0])
+    const generated = raw ? JSON.parse(raw) : null
+    if (!generated) throw new HttpsError('internal', 'La IA no ha devuelto contenido utilizable.')
+
+    const normalizeGeneratedLatex = (value, maximum) => normalizeLatexTextAccents(
+      ensureAlignedInDisplayMath(normalizeDisplayMathDelimiters(
+        clean(value, maximum)
+          .replace(/^```(?:latex|tex)?\s*/i, '')
+          .replace(/\s*```$/i, ''),
+      )),
+    )
+    const normalizeContentIds = (ids) => [...new Set((Array.isArray(ids) ? ids : []).filter((id) => allowedConceptIds.has(id)))]
+    const normalizeSegment = (segment) => ({
+      statement: normalizeGeneratedLatex(segment?.statement, 30_000),
+      answer: normalizeGeneratedLatex(segment?.answer, 8_000),
+      workedSolution: normalizeGeneratedLatex(segment?.workedSolution, 40_000),
+      points: Math.max(0, Math.round((Number(segment?.points) || 0) * 100) / 100),
+      durationMinutes: Math.max(0, Math.round(Number(segment?.durationMinutes) || 0)),
+      contentIds: normalizeContentIds(segment?.contentIds),
+    })
+    const generatedExercises = (generated.generatedExercises || []).slice(0, 16).map((exercise) => {
+      const normalized = normalizeSegment(exercise)
+      const parts = (Array.isArray(exercise?.parts) ? exercise.parts : []).slice(0, 20).map((part) => {
+        const item = normalizeSegment(part)
+        return { ...item, achievements: normalizeGeneratedAchievements(part?.achievements, item.points, law, model) }
+      }).filter((part) => part.statement)
+      const points = parts.length ? parts.reduce((sum, part) => sum + part.points, 0) : normalized.points
+      return {
+        ...normalized,
+        points,
+        sourcePage: Math.max(1, Math.floor(Number(exercise?.sourcePage) || 1)),
+        achievements: parts.length ? [] : normalizeGeneratedAchievements(exercise?.achievements, points, law, model),
+        partsEnvironment: parts.length && exercise?.partsEnvironment === 'apartadosc' ? 'apartadosc' : (parts.length ? 'apartados' : 'none'),
+        parts,
+        info: clean(exercise?.info, 1_000) || `Generado por ${aiModels[model].label}`,
+      }
+    }).filter((exercise) => exercise.statement)
+    const beforeExercisesLatex = mode === 'align'
+      ? ''
+      : normalizeGeneratedLatex(generated.beforeExercisesLatex, 60_000)
+    const afterExercisesLatex = mode === 'align'
+      ? ''
+      : normalizeGeneratedLatex(generated.afterExercisesLatex, 60_000)
+    const alignments = (generated.alignments || []).slice(0, 400).map((alignment) => {
+      const source = sourceExercises.find((exercise) => exercise.sourceBlockId === alignment?.sourceBlockId)
+      const segment = source?.segments.find((item) => item.segmentIndex === Number(alignment?.segmentIndex))
+      if (!source || !segment) return null
+      return {
+        sourceBlockId: source.sourceBlockId,
+        segmentIndex: segment.segmentIndex,
+        contentIds: normalizeContentIds(alignment?.contentIds),
+        achievements: normalizeGeneratedAchievements(alignment?.achievements, segment.points, law, model),
+      }
+    }).filter(Boolean)
+    if (mode === 'align' && !alignments.length) throw new HttpsError('internal', 'La IA no ha generado el análisis de los ejercicios.')
+    if (mode === 'generate' && !generatedExercises.length) throw new HttpsError('internal', 'La IA no ha generado ningún ejercicio.')
+    console.info('Document content generation completed', {
+      model,
+      resolvedModel: payload.model || model,
+      provider: payload.provider || null,
+      attempt,
+      elapsedMs: Date.now() - startedAt,
+      generatedExerciseCount: generatedExercises.length,
+      alignmentCount: alignments.length,
+      beforeExercisesCharacters: beforeExercisesLatex.length,
+      afterExercisesCharacters: afterExercisesLatex.length,
+    })
+    return {
+      beforeExercisesLatex,
+      generatedExercises,
+      alignments,
+      afterExercisesLatex,
+      model: payload.model || model,
+    }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    if (error?.name === 'TimeoutError') {
+      console.error('Document content generation timed out', { model, sourceType, elapsedMs: Date.now() - startedAt })
+      throw new HttpsError('deadline-exceeded', `La generación con ${aiModels[model].label} ha superado 4 minutos y medio.`)
+    }
+    console.error('Document content generation failed', { model, sourceType, elapsedMs: Date.now() - startedAt, error })
+    throw new HttpsError('internal', 'No se ha podido generar el contenido del documento con IA.')
   }
 })
 
