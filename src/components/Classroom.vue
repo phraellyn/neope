@@ -104,7 +104,12 @@ function pendingDocumentItem(documentData, date) {
       maxPoints: Number(assessment.maxPoints) || 0,
       exercises: (documentData.ejercicios || [])
         .filter((entry) => entry?.exerciseId)
-        .map((entry, order) => ({ exerciseId: entry.exerciseId, version: Number(entry.version) || 0, order })),
+        .map((entry, order) => ({
+          exerciseId: entry.exerciseId,
+          version: Number(entry.version) || 0,
+          order,
+          ...(entry.blockId ? { blockId: entry.blockId } : {}),
+        })),
     },
   }
 }

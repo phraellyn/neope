@@ -2492,7 +2492,7 @@ function documentAssessmentItem(documentId) {
           exerciseId: item.exerciseId,
           version: Number(item.version) || 0,
           order,
-          ...(item.snapshot ? { snapshot: item.snapshot } : {}),
+          ...(item.blockId ? { blockId: item.blockId } : {}),
         })),
     },
   }

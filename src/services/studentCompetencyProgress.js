@@ -8,6 +8,7 @@ import {
   mergeExerciseStructure,
   parseExerciseLatex,
 } from '../utils/exerciseStructure'
+import { resolveDocumentAssessmentReferences } from '../utils/documentAssessmentReferences'
 import { calculateCompetencyProgress } from '../utils/studentCompetencyProgress'
 
 function clone(value, fallback = null) {
@@ -43,13 +44,13 @@ function achievementsForExercise(exerciseId, version, source) {
 }
 
 async function documentReferences(item) {
-  if (Array.isArray(item.documentAssessment?.exercises) && item.documentAssessment.exercises.length) {
-    return item.documentAssessment.exercises
-  }
   const documentId = item.documentAssessment?.documentId
-  if (!documentId) return []
-  const snapshot = await getDoc(doc(db, 'documentos', documentId))
-  return snapshot.exists() ? (snapshot.data()?.ejercicios || []) : []
+  let storedReferences = []
+  if (documentId) {
+    const snapshot = await getDoc(doc(db, 'documentos', documentId))
+    if (snapshot.exists()) storedReferences = snapshot.data()?.ejercicios || []
+  }
+  return resolveDocumentAssessmentReferences(item.documentAssessment?.exercises, storedReferences)
 }
 
 async function loadDocumentAchievements(group) {
@@ -69,7 +70,7 @@ async function loadDocumentAchievements(group) {
     const references = await documentReferences(item)
     const lists = await Promise.all(references.map(async (reference) => {
       if (!reference.exerciseId) return []
-      const exercise = await loadExercise(reference.exerciseId)
+      const exercise = reference.snapshot || await loadExercise(reference.exerciseId)
       if (!exercise) return []
       const version = Number(reference.version) || 0
       const source = version === 0 ? exercise : exercise.variaciones?.[version - 1] || exercise
@@ -89,4 +90,3 @@ export async function loadStudentCompetencyProgress(group, studentId) {
   ])
   return calculateCompetencyProgress({ group, studentId, globalLaw, subjectLaw, documentAchievements })
 }
-

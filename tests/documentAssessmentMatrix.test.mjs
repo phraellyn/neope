@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { assessmentExerciseModel } from '../src/utils/documentAssessmentMatrix.js'
+import { resolveDocumentAssessmentReferences } from '../src/utils/documentAssessmentReferences.js'
 
 const simple = assessmentExerciseModel({
   exerciseId: 'simple',
@@ -39,5 +40,23 @@ assert.deepEqual(segmented.rows.map((row) => row.pdf), ['root-statement.pdf', 'a
 assert.equal(segmented.rows[0].achievements.length, 0)
 assert.deepEqual(segmented.rows[1].achievements.map((item) => item.key), ['segmented:2:part-a:a'])
 assert.deepEqual(segmented.achievements.map((item) => item.id), ['a', 'b'])
+
+const embeddedSnapshot = { id: 'generated', structure: { achievements: [{ id: 'achievement' }] } }
+const resolvedReferences = resolveDocumentAssessmentReferences(
+  [{ exerciseId: 'generated', version: 0, order: 0 }],
+  [{ exerciseId: 'generated', version: 0, order: 0, blockId: 'block-1', snapshot: embeddedSnapshot }],
+)
+assert.equal(resolvedReferences.length, 1)
+assert.equal(resolvedReferences[0].blockId, 'block-1')
+assert.deepEqual(resolvedReferences[0].snapshot, embeddedSnapshot)
+
+const directSnapshot = { id: 'newer' }
+assert.deepEqual(
+  resolveDocumentAssessmentReferences(
+    [{ exerciseId: 'generated', version: 0, order: 0, snapshot: directSnapshot }],
+    [{ exerciseId: 'generated', version: 0, order: 0, snapshot: embeddedSnapshot }],
+  )[0].snapshot,
+  directSnapshot,
+)
 
 console.log('documentAssessmentMatrix: ok')

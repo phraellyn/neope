@@ -7,6 +7,7 @@ import {
   parseExerciseLatex,
 } from '../utils/exerciseStructure'
 import { assessmentExerciseModel as createAssessmentExerciseModel } from '../utils/documentAssessmentMatrix'
+import { resolveDocumentAssessmentReferences } from '../utils/documentAssessmentReferences'
 
 const clone = (value) => JSON.parse(JSON.stringify(value))
 
@@ -29,16 +30,20 @@ export async function loadDocumentAssessmentExercises(item) {
   const documentSnapshot = await getDoc(doc(db, 'documentos', documentId))
   if (!documentSnapshot.exists()) throw new Error('El documento evaluable ya no existe.')
   const documentData = documentSnapshot.data() || {}
-  const references = Array.isArray(item.documentAssessment.exercises) && item.documentAssessment.exercises.length
-    ? item.documentAssessment.exercises
-    : (documentData.ejercicios || []).map((entry, order) => ({ ...entry, order }))
+  const references = resolveDocumentAssessmentReferences(
+    item.documentAssessment.exercises,
+    documentData.ejercicios,
+  )
   return Promise.all(references
     .slice()
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
     .map(async (reference, order) => {
-      const snapshot = await getDoc(doc(db, 'ejercicios', reference.exerciseId))
-      if (!snapshot.exists()) return null
-      const exercise = snapshot.data() || {}
+      let exercise = reference.snapshot || null
+      if (!exercise) {
+        const snapshot = await getDoc(doc(db, 'ejercicios', reference.exerciseId))
+        if (!snapshot.exists()) return null
+        exercise = snapshot.data() || {}
+      }
       const version = Number(reference.version) || 0
       const source = version === 0 ? exercise : exercise.variaciones?.[version - 1] || exercise
       return assessmentExerciseModel(reference.exerciseId, version, source, order)

@@ -22,6 +22,7 @@ export {
 } from './auth.js'
 import { codeForCompiler, compilationArtifacts, sourceHash } from './exerciseCompilation.js'
 import { curriculumPromptContext } from './curriculumContext.js'
+import { achievementGranularityInstructions } from './achievementGranularity.js'
 import {
   ensureAlignedInDisplayMath,
   hasLegacyDisplayMathDelimiters,
@@ -1786,6 +1787,7 @@ export const suggestExerciseCompetencies = onCall({
   }
 
   const cleanText = (value, maximum = 8_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
+  const course = cleanText(request.data?.course, 80)
   const subjectId = cleanText(request.data?.subjectId, 120)
   const catalog = lomloeMathLaw.subjects?.[subjectId]
   if (!catalog) throw new HttpsError('failed-precondition', 'No hay datos LOMLOE para la asignatura seleccionada.')
@@ -1844,13 +1846,17 @@ export const suggestExerciseCompetencies = onCall({
         messages: [
           {
             role: 'system',
-            content: `Eres especialista en evaluación competencial LOMLOE y diseño de ejercicios de Matemáticas. Descompón la puntuación de cada segmento en logros atómicos: acciones pequeñas, observables, independientes y corregibles. No redactes niveles de desempeño ni criterios genéricos; describe exactamente qué debe demostrar el alumno en ese ejercicio. La suma de los puntos de los logros de cada segmento debe coincidir exactamente con la puntuación del segmento. Usa el enunciado, la respuesta breve, la resolución, el curso y los contenidos como contexto, pero no premies dos veces la misma acción. Vincula cada logro solo con los identificadores legales proporcionados que realmente permita observar. Para cada descriptor operativo relacionado que produzca evidencia, asigna weak, medium o strong según su calidad y directitud. No inventes identificadores. Devuelve todos los segmentos solicitados y únicamente el JSON del esquema.`,
+            content: `Eres especialista en evaluación competencial LOMLOE y diseño de ejercicios de Matemáticas. Descompón la puntuación de cada segmento en logros observables, independientes y corregibles. No redactes niveles de desempeño ni criterios genéricos; describe exactamente qué debe demostrar el alumno en ese ejercicio. Usa el enunciado, la respuesta breve, la resolución, el curso y los contenidos como contexto, pero no premies dos veces la misma acción.
+
+${achievementGranularityInstructions(course)}
+
+Vincula cada logro solo con los identificadores legales proporcionados que realmente permita observar. Para cada descriptor operativo relacionado que produzca evidencia, asigna weak, medium o strong según su calidad y directitud. No inventes identificadores. Antes de devolver la respuesta, revisa que ninguna descripción contenga varias acciones evaluables que deban tener puntuación independiente y que la suma de cada segmento sea exacta. Devuelve todos los segmentos solicitados y únicamente el JSON del esquema.`,
           },
           {
             role: 'user',
             content: JSON.stringify({
               context: {
-                course: cleanText(request.data?.course, 80),
+                course,
                 subjectId,
                 subjectTitle: cleanText(request.data?.subjectTitle, 200) || catalog.subjectTitle,
                 curriculum: curriculumPromptContext(request.data?.curriculum),
@@ -2146,7 +2152,9 @@ REGLAS MATEMÁTICAS Y DE EVALUACIÓN:
 - Usa LaTeX puro, sin Markdown. En matemáticas destacadas usa $$...$$, nunca \\[...\\].
 - Escribe directamente todos los caracteres españoles en UTF-8 (á, é, í, ó, ú, ü, ñ, ¿, ¡). No uses formas heredadas como \\'o, \\~n o \\c{c}; hacen el código innecesariamente ilegible.
 - aligned no activa el modo matemático: todo bloque \\begin{aligned}...\\end{aligned} debe estar completamente envuelto en $$...$$. Nunca escribas aligned directamente en modo texto ni dentro de center sin esos delimitadores.
-- Los logros deben ser observables, atómicos y sumar exactamente los puntos de su segmento. contentIds, criterionIds y descriptorId solo pueden proceder de los catálogos recibidos; no inventes identificadores.
+- Los logros deben ser observables, independientes y corregibles. contentIds, criterionIds y descriptorId solo pueden proceder de los catálogos recibidos; no inventes identificadores.
+${achievementGranularityInstructions(course)}
+- Antes de devolver la respuesta, revisa que ninguna descripción contenga varias acciones evaluables que deban tener puntuación independiente y que la suma de los logros de cada segmento sea exacta.
 - Mantén las soluciones en un ancho editorial de 8 cm, sin líneas vacías dentro de aligned y usando matrizp, detp y sistemap para matrices, determinantes y sistemas.`,
         }, { role: 'user', content: userContent }],
         response_format: documentContentResponseFormat,
