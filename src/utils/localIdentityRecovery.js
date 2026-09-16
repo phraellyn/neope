@@ -70,3 +70,31 @@ export function identitiesForExactStudentIds(identities, studentIds = []) {
 export function canonicalStudentIdentityKey(studentId) {
   return `student:${String(studentId || '')}`
 }
+
+/**
+ * Obtiene el código pseudónimo incluso de registros creados por versiones
+ * antiguas que no guardaban el campo studentId de forma indexable. El código
+ * siempre fue el último componente de la clave, tanto en las claves antiguas
+ * grupo:código como en las actuales student:código.
+ */
+export function studentIdFromIdentityRecord(record) {
+  if (record?.studentId !== undefined && record?.studentId !== null && record.studentId !== '') {
+    return String(record.studentId)
+  }
+  const key = String(record?.key || '')
+  const separator = key.lastIndexOf(':')
+  return separator >= 0 ? key.slice(separator + 1) : ''
+}
+
+/**
+ * Filtra registros mediante comparación exacta de códigos. Se usa sobre una
+ * lectura completa deliberadamente pequeña para no depender de índices de
+ * IndexedDB que Safari puede conservar incompletos tras varias versiones.
+ */
+export function identityRecordsForExactStudentIds(records, studentIds = []) {
+  const allowed = new Set(studentIds.filter(Boolean).map(String))
+  return (records || []).flatMap((record) => {
+    const studentId = studentIdFromIdentityRecord(record)
+    return allowed.has(studentId) ? [{ ...record, studentId }] : []
+  })
+}

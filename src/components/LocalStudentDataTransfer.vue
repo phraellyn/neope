@@ -261,6 +261,8 @@ onMounted(refreshLinkedFileStatus)
         {{ diagnostic.readable }} fichas legibles · {{ diagnostic.unreadable }} pendientes de recuperación
         <template v-if="!diagnostic.keyAvailable"> · falta la clave local</template>
         <br>
+        Alumnos distintos: {{ diagnostic.students ?? diagnostic.readable }} · con nombre: {{ diagnostic.named ?? 0 }} · con fotografía: {{ diagnostic.photographed ?? 0 }} · vacíos: {{ diagnostic.empty ?? 0 }}
+        <br>
         Réplica local cifrada: {{ diagnostic.mirrorRecords }} de {{ diagnostic.total }} fichas
         <template v-if="diagnostic.primaryAvailable === false"> · funcionando desde la réplica</template>
         <br>

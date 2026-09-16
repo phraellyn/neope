@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import {
   canonicalStudentIdentityKey,
   decodeIdentityRecords,
+  identityRecordsForExactStudentIds,
   identitiesForExactStudentIds,
   identityRecoveryMessage,
   newestIdentityRecords,
+  studentIdFromIdentityRecord,
 } from '../src/utils/localIdentityRecovery.js'
 
 const records = [
@@ -47,5 +49,22 @@ assert.equal(exact.get('zK7pQ2').nombre, 'BETA, Bruno')
 assert.equal(exact.has('aB3xY9'), false)
 assert.equal(canonicalStudentIdentityKey('aB3xY9'), 'student:aB3xY9')
 assert.equal(canonicalStudentIdentityKey('aB3xY9'), canonicalStudentIdentityKey('aB3xY9', 'otro-grupo'))
+
+assert.equal(studentIdFromIdentityRecord({ studentId: 'aB3xY9', key: 'student:otro' }), 'aB3xY9')
+assert.equal(studentIdFromIdentityRecord({ key: 'grupo-antiguo:aB3xY9' }), 'aB3xY9')
+assert.deepEqual(identityRecordsForExactStudentIds([
+  { key: 'student:aB3xY9', payload: 1 },
+  { key: 'grupo-antiguo:Z7mP2q', payload: 2 },
+  { key: 'student:fuera', studentId: 'fuera', payload: 3 },
+], ['aB3xY9', 'Z7mP2q']), [
+  { key: 'student:aB3xY9', studentId: 'aB3xY9', payload: 1 },
+  { key: 'grupo-antiguo:Z7mP2q', studentId: 'Z7mP2q', payload: 2 },
+])
+
+assert.deepEqual(identityRecordsForExactStudentIds([
+  { key: 'student:aB3xY9', studentId: 123456, payload: 1 },
+], ['123456']), [
+  { key: 'student:aB3xY9', studentId: '123456', payload: 1 },
+])
 
 console.log('localIdentityRecovery: ok')

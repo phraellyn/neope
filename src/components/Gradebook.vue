@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   deleteStudentIdentitiesForGroup,
   identityRecoveryMessage,
+  inspectLocalStudentIdentityCodeMatch,
   loadStudentIdentitiesForGroup,
   saveStudentIdentities,
   studentIdentityDiagnostics,
@@ -1123,6 +1124,19 @@ async function hydrateStudentIdentities() {
   sortStudentsByName()
   if (diagnostics.failed) {
     showAppErrorToast(identityRecoveryMessage(diagnostics), { color: 'warning', copy: false })
+  }
+  if (students.value.length && storedIdentities.size < students.value.length) {
+    const audit = await inspectLocalStudentIdentityCodeMatch(students.value.map((student) => student.id))
+    const summarizeCodes = (codes) => `${codes.slice(0, 12).join(', ')}${codes.length > 12 ? ` … (+${codes.length - 12})` : ''}`
+    const details = [
+      `${audit.matchedStudentIds.length} de ${audit.requestedStudentIds.length} códigos del grupo coinciden con el almacén local.`,
+      `El almacén contiene ${audit.recordCount} registros y ${audit.localStudentIds.length} códigos distintos.`,
+      audit.missingStudentIds.length ? `Códigos del grupo sin ficha: ${summarizeCodes(audit.missingStudentIds)}` : '',
+      audit.orphanStudentIds.length ? `Muestra de códigos locales ajenos al grupo: ${summarizeCodes(audit.orphanStudentIds)}` : '',
+      audit.recordKeySamples.length ? `Claves técnicas: ${audit.recordKeySamples.map((entry) => `${entry.key} [id=${entry.studentId || '∅'}; grupo=${entry.groupId || '∅'}]`).join(' · ')}` : '',
+    ].filter(Boolean).join('\n')
+    console.warn('Auditoría de códigos pseudónimos:', details)
+    showAppErrorToast(details, { color: 'warning' })
   }
 }
 

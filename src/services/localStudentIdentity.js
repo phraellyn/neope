@@ -2,8 +2,10 @@ import {
   canonicalStudentIdentityKey,
   decodeIdentityRecords,
   identitiesForExactStudentIds,
+  identityRecordsForExactStudentIds,
   identityRecoveryMessage,
   newestIdentityRecords,
+  studentIdFromIdentityRecord,
 } from '../utils/localIdentityRecovery'
 import {
   CURRENT_STUDENT_IDENTITY_SCHEMA_VERSION,
@@ -243,13 +245,12 @@ async function readIdentityRecordsByStudentIds(database, studentIds) {
   const transaction = database.transaction(IDENTITY_STORE, 'readonly')
   const done = transactionDone(transaction)
   const store = transaction.objectStore(IDENTITY_STORE)
-  let records
-  if (store.indexNames.contains('studentId')) {
-    records = (await Promise.all(ids.map((id) => requestResult(store.index('studentId').getAll(id))))).flat()
-  } else {
-    const allowed = new Set(ids)
-    records = (await requestResult(store.getAll())).filter((record) => allowed.has(record.studentId))
-  }
+  // No confiamos en el índice studentId para recuperar datos críticos. Una
+  // base creada por una versión antigua puede tener el índice incompleto y
+  // Safari no ejecuta onupgradeneeded si se abre sin cambiar la versión. El
+  // volumen es pequeño, por lo que leer y filtrar por código exacto es más
+  // robusto y su coste es irrelevante.
+  const records = identityRecordsForExactStudentIds(await requestResult(store.getAll()), ids)
   await done
   return records
 }
@@ -671,7 +672,12 @@ export async function loadStudentIdentitiesForGroup(group) {
   await syncStudentIdentitiesFromLinkedFile().catch(() => false)
   const groupIds = studentIdentityGroupIds(group)
   if (!groupIds.length) return new Map()
-  const studentIds = Array.isArray(group?.alumnos) ? group.alumnos.map((student) => student.id) : []
+  const studentIds = Array.isArray(group?.alumnos)
+    ? group.alumnos
+      .map((student) => (typeof student === 'string' ? student : student?.id))
+      .filter(Boolean)
+      .map(String)
+    : []
   const storedIdentities = await loadStudentIdentities(groupIds, studentIds)
   const diagnostics = studentIdentityDiagnostics(storedIdentities)
   // Nunca se reasigna una ficha a otro código: solo se aceptan coincidencias
@@ -707,6 +713,14 @@ async function saveStudentIdentitiesNow(groupId, identities, { preserveEmpty = t
         ? mergeIdentity(identity, previous)
         : { ...(previous || {}), ...identity }
     })
+    // Si una lectura selectiva falla, la interfaz contiene temporalmente solo
+    // el código. Nunca convertir ese estado de carga en una ficha vacía nueva:
+    // podría eclipsar los datos cifrados sanos de otra copia o versión.
+    .filter((identity) => !(
+      preserveEmpty
+      && !recovered.has(identity.id)
+      && !identityHasValue(identity)
+    ))
   if (!safeIdentities.length) return
   let database
   let usingMirrorAsPrimary = false
@@ -1233,10 +1247,19 @@ export async function inspectLocalStudentIdentityStorage() {
     } catch (error) {
       throw new Error(`No se pueden comprobar los datos cifrados (${error?.name || 'error desconocido'}: ${error?.message || 'sin detalle'}).`)
     }
+    const identities = identityMapFromDecodedRecords(decoded.records)
+    const identityValues = [...identities.values()]
+    const named = identityValues.filter((identity) => Boolean(String(identity?.nombre || '').trim())).length
+    const photographed = identityValues.filter((identity) => Boolean(identity?.foto)).length
+    const populated = identityValues.filter(identityHasValue).length
     return {
       total: decoded.total,
       readable: decoded.identities.length,
       unreadable: decoded.failures.length,
+      students: identities.size,
+      named,
+      photographed,
+      empty: Math.max(0, identities.size - populated),
       keyAvailable: true,
       primaryRecords: primaryOpenError ? 0 : records.length,
       mirrorRecords: mirrorRecords.length,
@@ -1246,6 +1269,66 @@ export async function inspectLocalStudentIdentityStorage() {
     }
   } finally {
     database?.close()
+  }
+}
+
+/**
+ * Compara exclusivamente códigos pseudónimos remotos y locales. No descifra,
+ * modifica ni reasigna fichas; sirve para distinguir un fallo de lectura de
+ * una ruptura real de la relación código-alumno.
+ */
+export async function inspectLocalStudentIdentityCodeMatch(studentIds = []) {
+  await localIdentityMutation
+  const requestedStudentIds = [...new Set(studentIds.filter(Boolean).map((id) => String(id).trim()))]
+  let primaryRecords = []
+  let mirrorRecords = []
+  let primaryError = null
+
+  try {
+    const database = await openDatabase()
+    try {
+      primaryRecords = await readIdentityRecords(database)
+    } finally {
+      database.close()
+    }
+  } catch (error) {
+    primaryError = error
+  }
+
+  try {
+    const mirror = await openMirrorDatabase()
+    try {
+      mirrorRecords = await readIdentityRecords(mirror)
+    } finally {
+      mirror.close()
+    }
+  } catch (error) {
+    if (primaryError) throw error
+  }
+
+  const records = [...newestIdentityRecords([...mirrorRecords, ...primaryRecords]).values()]
+  const localStudentIds = [...new Set(records.map(studentIdFromIdentityRecord).filter(Boolean))].sort()
+  const localSet = new Set(localStudentIds)
+  const matchedStudentIds = requestedStudentIds.filter((id) => localSet.has(id))
+  const missingStudentIds = requestedStudentIds.filter((id) => !localSet.has(id))
+  const requestedSet = new Set(requestedStudentIds)
+  const orphanStudentIds = localStudentIds.filter((id) => !requestedSet.has(id))
+  const recordKeySamples = records.slice(0, 12).map((record) => ({
+    key: String(record?.key || ''),
+    studentId: record?.studentId === undefined || record?.studentId === null
+      ? ''
+      : String(record.studentId),
+    groupId: String(record?.groupId || ''),
+  }))
+
+  return {
+    recordCount: records.length,
+    recordKeySamples,
+    requestedStudentIds,
+    localStudentIds,
+    matchedStudentIds,
+    missingStudentIds,
+    orphanStudentIds,
   }
 }
 

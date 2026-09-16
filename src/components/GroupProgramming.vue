@@ -737,6 +737,7 @@ defineExpose({ flush })
 .group-programming { height: 100%; overflow: auto; background: #f4f7fb; }
 .programming-days { width: min(1080px, 100%); margin: 0 auto; padding: 12px; display: grid; gap: 10px; }
 .programming-day { background: #fff; border: 1px solid #d6e0ed; border-radius: 7px; overflow: hidden; box-shadow: 0 2px 7px rgb(28 66 111 / 5%); content-visibility: auto; contain-intrinsic-size: 72px; }
+.programming-day-expanded { content-visibility: visible; contain-intrinsic-size: auto; }
 .programming-day-header { min-height: 42px; padding: 4px 8px 4px 14px; display: flex; align-items: center; justify-content: space-between; color: #294f7d; background: #e8f0fa; border-bottom: 1px solid rgb(23 52 82 / 18%); cursor: pointer; user-select: none; }
 .programming-day-header:focus-visible { outline: 3px solid rgb(49 95 150 / 35%); outline-offset: -3px; }
 .programming-day-heading { min-width: 0; display: flex; align-items: baseline; gap: 10px; }

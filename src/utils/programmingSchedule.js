@@ -111,6 +111,43 @@ function compareProgrammingDays(left, right) {
     || String(left.id || '').localeCompare(String(right.id || ''))
 }
 
+function programmingDayContentScore(day = {}) {
+  return (String(day.notes || '').trim() ? 1 : 0)
+    + (Array.isArray(day.rubricInstruments) ? day.rubricInstruments.length : 0)
+    + (Array.isArray(day.resources) ? day.resources.length : 0)
+    + (Array.isArray(day.contents) ? day.contents.length : 0)
+}
+
+function uniqueProgrammingItems(days = [], field) {
+  const result = new Map()
+  days.flatMap((day) => Array.isArray(day?.[field]) ? day[field] : []).forEach((item, index) => {
+    if (!item) return
+    const key = item.id || `${field}-${index}-${JSON.stringify(item)}`
+    if (!result.has(key)) result.set(key, item)
+  })
+  return [...result.values()]
+}
+
+function mergeProgrammingDayCandidates(session, candidates = []) {
+  if (!candidates.length) return session
+  const ranked = [...candidates].sort((left, right) => (
+    programmingDayContentScore(right) - programmingDayContentScore(left)
+      || Number(right.id === session.id) - Number(left.id === session.id)
+      || compareProgrammingDays(left, right)
+  ))
+  const primary = ranked[0]
+  const noteSource = ranked.find((day) => String(day.notes || '').trim())
+  return {
+    ...primary,
+    ...session,
+    id: primary.id,
+    notes: String(noteSource?.notes || ''),
+    rubricInstruments: uniqueProgrammingItems(ranked, 'rubricInstruments'),
+    resources: uniqueProgrammingItems(ranked, 'resources'),
+    contents: uniqueProgrammingItems(ranked, 'contents'),
+  }
+}
+
 /**
  * Asocia las sesiones calculadas con registros persistidos sin utilizar la
  * fecha como identidad. Los documentos antiguos conservan su ID para no
@@ -126,40 +163,40 @@ export function reconcileProgrammingSessions(sessions = [], existingDays = [], g
     ...day,
     streamKey: day.streamKey || programmingStreamKey(day, group),
   }))
-  const claimedIds = new Set()
   const resolved = new Map()
-
-  const claim = (session, day) => {
-    if (!day || claimedIds.has(day.id)) return false
-    claimedIds.add(day.id)
-    resolved.set(session.id, { ...day, ...session, id: day.id })
-    return true
-  }
-
-  targets.forEach((session) => {
-    const exact = existing.find((day) => day.id === session.id && day.streamKey === session.streamKey)
-    claim(session, exact)
-  })
-
-  targets.filter((session) => !resolved.has(session.id)).forEach((session) => {
-    const indexed = existing.find((day) => (
-      !claimedIds.has(day.id)
-      && day.streamKey === session.streamKey
-      && Number.isInteger(day.sequenceIndex)
-      && day.sequenceIndex === session.sequenceIndex
-    ))
-    claim(session, indexed)
-  })
-
   const streamKeys = [...new Set(targets.map((session) => session.streamKey))]
+
   streamKeys.forEach((streamKey) => {
-    const pendingSessions = targets
-      .filter((session) => session.streamKey === streamKey && !resolved.has(session.id))
+    const streamTargets = targets
+      .filter((session) => session.streamKey === streamKey)
       .sort((left, right) => left.sequenceIndex - right.sequenceIndex)
-    const candidates = existing
-      .filter((day) => day.streamKey === streamKey && !claimedIds.has(day.id))
+    const streamExisting = existing
+      .filter((day) => day.streamKey === streamKey)
       .sort(compareProgrammingDays)
-    pendingSessions.forEach((session, index) => claim(session, candidates[index]))
+    const targetById = new Map(streamTargets.map((session) => [session.id, session]))
+    const targetByIndex = new Map(streamTargets.map((session) => [session.sequenceIndex, session]))
+    const assigned = new Map(streamTargets.map((session) => [session.id, []]))
+    const unindexed = []
+
+    streamExisting.forEach((day) => {
+      const exactTarget = targetById.get(day.id)
+      const indexedTarget = Number.isInteger(day.sequenceIndex) ? targetByIndex.get(day.sequenceIndex) : null
+      const target = exactTarget || indexedTarget
+      if (target) assigned.get(target.id).push(day)
+      else unindexed.push(day)
+    })
+
+    // Los documentos anteriores al esquema estable no tenían sequenceIndex.
+    // Su orden cronológico identifica la sesión y permite fusionarlos con un
+    // registro estable vacío creado durante una sincronización posterior.
+    unindexed.forEach((day, index) => {
+      const target = streamTargets[index]
+      if (target) assigned.get(target.id).push(day)
+    })
+
+    streamTargets.forEach((session) => {
+      resolved.set(session.id, mergeProgrammingDayCandidates(session, assigned.get(session.id)))
+    })
   })
 
   return targets.map((session) => resolved.get(session.id) || session)

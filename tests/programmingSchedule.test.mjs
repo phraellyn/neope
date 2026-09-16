@@ -83,4 +83,28 @@ assert.equal(shiftedAfterHoliday[1].notes, 'Sesión 2')
 assert.equal(shiftedAfterHoliday[1].date, '2026-09-11', 'La segunda sesión se desplaza al siguiente día lectivo disponible.')
 assert.equal(shiftedAfterHoliday[1].id, beforeHoliday[1].id, 'La referencia estable sobrevive al desplazamiento de fecha.')
 
+const duplicateTarget = beforeHoliday[0]
+const stableEmptyDay = {
+  ...duplicateTarget,
+  notes: '',
+  rubricInstruments: [],
+  resources: [],
+  contents: [],
+}
+const legacyDayWithContent = {
+  ...duplicateTarget,
+  id: duplicateTarget.date,
+  sequenceIndex: null,
+  notes: 'Contenido recuperado',
+  contents: [{ id: 'contenido-antiguo', type: 'latex', code: 'Contenido' }],
+}
+const recoveredDuplicate = reconcileProgrammingSessions(
+  [duplicateTarget],
+  [stableEmptyDay, legacyDayWithContent],
+  shiftGroup,
+)[0]
+assert.equal(recoveredDuplicate.id, legacyDayWithContent.id, 'Un registro antiguo con contenido prevalece sobre su duplicado estable vacío.')
+assert.equal(recoveredDuplicate.notes, 'Contenido recuperado')
+assert.deepEqual(recoveredDuplicate.contents, legacyDayWithContent.contents)
+
 console.log('Programming schedule tests passed')
