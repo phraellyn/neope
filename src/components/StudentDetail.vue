@@ -25,6 +25,7 @@ const isSaving = ref(false)
 const competencyLoading = ref(false)
 const competencyValues = ref([])
 const error = ref('')
+const activeTab = ref('personal')
 watch(error, (message) => {
   if (message) showAppErrorToast(message)
 })
@@ -44,6 +45,33 @@ function emptyGuardian() {
     trabajo: '',
     parentesco: '',
   }
+}
+
+function emptyInterview() {
+  return {
+    id: globalThis.crypto?.randomUUID?.() || `entrevista-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    date: new Date().toISOString().slice(0, 10),
+    type: 'presencial',
+    attendees: {
+      mother: false,
+      father: false,
+      student: false,
+      others: false,
+      othersDetail: '',
+    },
+    summary: '',
+  }
+}
+
+function normalizedInterviews(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((interview) => ({
+      ...emptyInterview(),
+      ...(interview || {}),
+      attendees: { ...emptyInterview().attendees, ...(interview?.attendees || {}) },
+    }))
+    .sort((left, right) => String(right.date || '').localeCompare(String(left.date || '')))
 }
 
 function normalizedGuardians(value) {
@@ -67,6 +95,7 @@ function emptyIdentity() {
     telefono: '',
     asignaturasPendientes: [],
     tutores: normalizedGuardians([]),
+    entrevistas: [],
     repetidor: false,
     pendiente: false,
     nuevo: false,
@@ -86,6 +115,10 @@ const age = computed(() => {
   return years >= 0 ? years : null
 })
 
+const sortedInterviews = computed(() => identity.value.entrevistas
+  .map((interview, index) => ({ interview, index }))
+  .sort((left, right) => String(right.interview.date || '').localeCompare(String(left.interview.date || ''))))
+
 function applyStudent(value) {
   const pendingSubjects = Array.isArray(value?.asignaturasPendientes)
     ? value.asignaturasPendientes.filter((subject) => String(subject || '').trim())
@@ -102,6 +135,7 @@ function applyStudent(value) {
     telefono: value?.telefono || '',
     asignaturasPendientes: pendingSubjects,
     tutores: normalizedGuardians(value?.tutores),
+    entrevistas: normalizedInterviews(value?.entrevistas),
     repetidor: Boolean(value?.repetidor),
     pendiente: Boolean(value?.pendiente || pendingSubjects.length),
     nuevo: Boolean(value?.nuevo),
@@ -125,6 +159,14 @@ function removeGuardian(index) {
     return
   }
   identity.value.tutores.splice(index, 1)
+}
+
+function addInterview() {
+  identity.value.entrevistas.unshift(emptyInterview())
+}
+
+function removeInterview(index) {
+  identity.value.entrevistas.splice(index, 1)
 }
 
 function toggleFlag(field) {
@@ -230,66 +272,121 @@ defineExpose({ persist })
 
 <template>
   <div class="student-detail-view">
+    <header class="student-detail-header">
+      <div>
+        <span>Ficha del alumno</span>
+        <h1>{{ identity.nombre || identity.nombreCorto || 'Alumno sin identificar' }}</h1>
+      </div>
+      <code>{{ identity.id }}</code>
+    </header>
     <div class="student-detail-grid">
-      <v-card class="student-detail-card student-detail-data-card" variant="flat">
-        <v-card-item>
-          <v-card-title>Datos del alumno</v-card-title>
-          <v-card-subtitle>La información se guarda únicamente en este dispositivo.</v-card-subtitle>
-        </v-card-item>
-        <v-card-text class="student-detail-form">
-          <v-text-field v-model="identity.nombre" class="student-field-name" label="Nombre completo" placeholder="APELLIDO 1 APELLIDO 2, Nombre" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="compact" hide-details />
-          <v-text-field v-model="identity.nombreCorto" class="student-field-short-name" label="Nombre corto" placeholder="Nombre para el aula" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="compact" hide-details />
-          <div class="student-detail-code student-field-code"><span>Código pseudónimo</span><code>{{ identity.id }}</code></div>
+      <v-card class="student-detail-card student-detail-main-card" variant="flat">
+        <v-tabs v-model="activeTab" class="student-detail-tabs" density="compact" color="primary" grow>
+          <v-tab value="personal">Datos personales y familiares</v-tab>
+          <v-tab value="results">Resultados académicos</v-tab>
+          <v-tab value="interviews">Entrevistas</v-tab>
+        </v-tabs>
+        <v-window v-model="activeTab" class="student-detail-tab-content">
+          <v-window-item value="personal">
+            <v-card-item>
+              <v-card-title>Datos personales</v-card-title>
+              <v-card-subtitle>La información se guarda únicamente en este dispositivo.</v-card-subtitle>
+            </v-card-item>
+            <v-card-text class="student-detail-form">
+              <v-text-field v-model="identity.nombre" class="student-field-name" label="Nombre completo" placeholder="APELLIDO 1 APELLIDO 2, Nombre" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="compact" hide-details />
+              <v-text-field v-model="identity.nombreCorto" class="student-field-short-name" label="Nombre corto" placeholder="Nombre para el aula" :readonly="!configurationMode" :loading="isLoading" variant="outlined" density="compact" hide-details />
+              <div class="student-detail-code student-field-code"><span>Código pseudónimo</span><code>{{ identity.id }}</code></div>
 
-          <v-text-field v-model="identity.fechaNacimiento" class="student-field-birth-date" label="Fecha de nacimiento" type="date" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
-          <div class="student-detail-age"><span>Edad</span><strong>{{ age === null ? '—' : `${age} años` }}</strong></div>
-          <v-text-field v-model="identity.lugarNacimiento" class="student-field-birth-place" label="Lugar de nacimiento" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+              <v-text-field v-model="identity.fechaNacimiento" class="student-field-birth-date" label="Fecha de nacimiento" type="date" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+              <div class="student-detail-age"><span>Edad</span><strong>{{ age === null ? '—' : `${age} años` }}</strong></div>
+              <v-text-field v-model="identity.lugarNacimiento" class="student-field-birth-place" label="Lugar de nacimiento" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
 
-          <v-text-field v-model="identity.domicilio" class="student-field-address" label="Domicilio" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
-          <v-text-field v-model="identity.correo" class="student-field-email" label="Correo electrónico" type="email" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
-          <v-text-field v-model="identity.telefono" class="student-field-phone" label="Teléfono" type="tel" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+              <v-text-field v-model="identity.domicilio" class="student-field-address" label="Domicilio" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+              <v-text-field v-model="identity.correo" class="student-field-email" label="Correo electrónico" type="email" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+              <v-text-field v-model="identity.telefono" class="student-field-phone" label="Teléfono" type="tel" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
 
-          <div class="student-detail-flags">
-            <button type="button" :class="{ active: identity.nuevo }" :aria-pressed="identity.nuevo" :disabled="!configurationMode" @click="toggleFlag('nuevo')"><v-icon icon="mdi-account-star-outline" size="17" />Nuevo</button>
-            <button type="button" :class="{ active: identity.repetidor }" :aria-pressed="identity.repetidor" :disabled="!configurationMode" @click="toggleFlag('repetidor')"><v-icon icon="mdi-backup-restore" size="17" />Repite curso</button>
-          </div>
-          <v-combobox
-            :model-value="identity.asignaturasPendientes"
-            class="student-field-pending"
-            label="Asignaturas pendientes de cursos anteriores"
-            multiple
-            chips
-            closable-chips
-            :readonly="!configurationMode"
-            variant="outlined"
-            density="compact"
-            hide-details
-            @update:model-value="updatePendingSubjects"
-          />
-          <v-btn v-if="configurationMode" class="student-reset-access" size="small" variant="text" color="primary" prepend-icon="mdi-lock-reset" @click="resetAccessDialog = true">Restablecer contraseña</v-btn>
-        </v-card-text>
-      </v-card>
+              <div class="student-detail-flags">
+                <button type="button" :class="{ active: identity.nuevo }" :aria-pressed="identity.nuevo" :disabled="!configurationMode" @click="toggleFlag('nuevo')"><v-icon icon="mdi-account-star-outline" size="17" />Nuevo</button>
+                <button type="button" :class="{ active: identity.repetidor }" :aria-pressed="identity.repetidor" :disabled="!configurationMode" @click="toggleFlag('repetidor')"><v-icon icon="mdi-backup-restore" size="17" />Repite curso</button>
+              </div>
+              <v-combobox
+                :model-value="identity.asignaturasPendientes"
+                class="student-field-pending"
+                label="Asignaturas pendientes de cursos anteriores"
+                multiple
+                chips
+                closable-chips
+                :readonly="!configurationMode"
+                variant="outlined"
+                density="compact"
+                hide-details
+                @update:model-value="updatePendingSubjects"
+              />
+              <v-btn v-if="configurationMode" class="student-reset-access" size="small" variant="text" color="primary" prepend-icon="mdi-lock-reset" @click="resetAccessDialog = true">Restablecer contraseña</v-btn>
+            </v-card-text>
 
-      <v-card class="student-detail-card student-detail-guardians-card" variant="flat">
-        <v-card-item class="student-guardians-heading">
-          <v-card-title>Tutores legales</v-card-title>
-          <template #append>
-            <v-btn v-if="configurationMode" size="small" variant="text" prepend-icon="mdi-plus" @click="addGuardian">Añadir tutor</v-btn>
-          </template>
-        </v-card-item>
-        <v-card-text class="student-guardians-table">
-          <div class="student-guardian-labels" aria-hidden="true">
-            <span>Nombre</span><span>Correo</span><span>Teléfono</span><span>Trabajo</span><span>Parentesco</span><span />
-          </div>
-          <div v-for="(guardian, index) in identity.tutores" :key="guardian.id" class="student-guardian-row">
-            <v-text-field v-model="guardian.nombre" :label="`Tutor ${index + 1} · Nombre`" :aria-label="`Nombre del tutor ${index + 1}`" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
-            <v-text-field v-model="guardian.correo" :label="`Tutor ${index + 1} · Correo`" :aria-label="`Correo del tutor ${index + 1}`" type="email" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
-            <v-text-field v-model="guardian.telefono" :label="`Tutor ${index + 1} · Teléfono`" :aria-label="`Teléfono del tutor ${index + 1}`" type="tel" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
-            <v-text-field v-model="guardian.trabajo" :label="`Tutor ${index + 1} · Trabajo`" :aria-label="`Trabajo del tutor ${index + 1}`" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
-            <v-text-field v-model="guardian.parentesco" :label="`Tutor ${index + 1} · Parentesco`" :aria-label="`Parentesco del tutor ${index + 1}`" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
-            <v-btn v-if="configurationMode" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" :aria-label="`Eliminar tutor ${index + 1}`" @click="removeGuardian(index)" />
-          </div>
-        </v-card-text>
+            <v-divider />
+            <v-card-item class="student-guardians-heading">
+              <v-card-title>Tutores legales</v-card-title>
+              <template #append>
+                <v-btn v-if="configurationMode" size="small" variant="text" prepend-icon="mdi-plus" @click="addGuardian">Añadir tutor</v-btn>
+              </template>
+            </v-card-item>
+            <v-card-text class="student-guardians-table">
+              <div class="student-guardian-labels" aria-hidden="true">
+                <span>Nombre</span><span>Correo</span><span>Teléfono</span><span>Trabajo</span><span>Parentesco</span><span />
+              </div>
+              <div v-for="(guardian, index) in identity.tutores" :key="guardian.id" class="student-guardian-row">
+                <v-text-field v-model="guardian.nombre" :label="`Tutor ${index + 1} · Nombre`" :aria-label="`Nombre del tutor ${index + 1}`" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+                <v-text-field v-model="guardian.correo" :label="`Tutor ${index + 1} · Correo`" :aria-label="`Correo del tutor ${index + 1}`" type="email" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+                <v-text-field v-model="guardian.telefono" :label="`Tutor ${index + 1} · Teléfono`" :aria-label="`Teléfono del tutor ${index + 1}`" type="tel" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+                <v-text-field v-model="guardian.trabajo" :label="`Tutor ${index + 1} · Trabajo`" :aria-label="`Trabajo del tutor ${index + 1}`" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+                <v-text-field v-model="guardian.parentesco" :label="`Tutor ${index + 1} · Parentesco`" :aria-label="`Parentesco del tutor ${index + 1}`" :readonly="!configurationMode" variant="outlined" density="compact" hide-details />
+                <v-btn v-if="configurationMode" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" :aria-label="`Eliminar tutor ${index + 1}`" @click="removeGuardian(index)" />
+              </div>
+            </v-card-text>
+          </v-window-item>
+
+          <v-window-item value="results">
+            <div class="student-detail-empty-tab">
+              <v-icon icon="mdi-chart-line" size="42" color="primary" />
+              <h2>Resultados académicos</h2>
+              <p>Aquí reuniremos la información académica del alumno cuando definamos esta parte de la ficha.</p>
+            </div>
+          </v-window-item>
+
+          <v-window-item value="interviews">
+            <v-card-item class="student-interviews-heading">
+              <v-card-title>Entrevistas</v-card-title>
+              <v-card-subtitle>Ordenadas desde la más reciente.</v-card-subtitle>
+              <template #append>
+                <v-btn size="small" variant="text" prepend-icon="mdi-plus" @click="addInterview">Añadir entrevista</v-btn>
+              </template>
+            </v-card-item>
+            <v-card-text class="student-interviews-list">
+              <div v-if="!identity.entrevistas.length" class="student-detail-empty-list">Aún no hay entrevistas registradas.</div>
+              <v-card v-for="{ interview, index } in sortedInterviews" :key="interview.id" class="student-interview-card" variant="outlined">
+                <div class="student-interview-card-header">
+                  <v-text-field v-model="interview.date" type="date" label="Fecha" variant="outlined" density="compact" hide-details />
+                  <v-btn-toggle v-model="interview.type" mandatory color="primary" density="compact" class="student-interview-type">
+                    <v-btn value="presencial">Presencial</v-btn>
+                    <v-btn value="telefonica">Telefónica</v-btn>
+                  </v-btn-toggle>
+                  <v-btn icon="mdi-delete-outline" size="x-small" rounded="circle" variant="text" color="error" :aria-label="`Eliminar entrevista ${index + 1}`" @click="removeInterview(index)" />
+                </div>
+                <div class="student-interview-attendees">
+                  <span>Asisten</span>
+                  <v-checkbox v-model="interview.attendees.mother" label="Madre" density="compact" hide-details />
+                  <v-checkbox v-model="interview.attendees.father" label="Padre" density="compact" hide-details />
+                  <v-checkbox v-model="interview.attendees.student" label="Alumno" density="compact" hide-details />
+                  <v-checkbox v-model="interview.attendees.others" label="Otros" density="compact" hide-details />
+                  <v-text-field v-if="interview.attendees.others" v-model="interview.attendees.othersDetail" label="Especificar" variant="outlined" density="compact" hide-details />
+                </div>
+                <v-textarea v-model="interview.summary" label="Impresiones, acuerdos y seguimiento" rows="3" auto-grow variant="outlined" density="compact" hide-details />
+              </v-card>
+            </v-card-text>
+          </v-window-item>
+        </v-window>
       </v-card>
 
       <v-card class="student-detail-photo-card" variant="flat">

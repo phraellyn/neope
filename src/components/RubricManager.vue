@@ -83,7 +83,7 @@ const isValid = computed(() => Boolean(
         && Number(category.range.default) <= Number(category.range.max)
     }
     return category.levels.length
-      && category.levels.every((level) => level.description.trim() && Number.isInteger(Number(level.points)))
+      && category.levels.every((level) => level.description.trim() && (level.points === '-' || Number.isInteger(Number(level.points))))
       && category.levels.some((level) => level.id === category.defaultLevelId)
   })
 ))
@@ -160,6 +160,11 @@ function newRubric() {
 
 function editRubric(rubric) {
   editor.value = clone(rubric)
+  editor.value.categories.forEach((category) => {
+    category.levels?.forEach((level) => {
+      if (level.points === null) level.points = '-'
+    })
+  })
   mode.value = 'editor'
   emitState()
 }
@@ -351,7 +356,7 @@ async function suggestAlignment() {
       categoryTitle: category.title,
       levelDescription: category.type === 'range'
         ? `${category.range.description}\nCategoría cuantitativa con puntuación entera entre ${category.range.min} y ${category.range.max}, con valor inicial ${category.range.default}.`
-        : category.levels.map((level) => `${level.points} puntos: ${level.description}`).join('\n'),
+        : category.levels.map((level) => `${level.points === '-' ? 'Neutro (no computa)' : `${level.points} puntos`}: ${level.description}`).join('\n'),
       score: category.type === 'range' ? category.range : null,
       criteria: evaluationCriteria.value,
       competencies: specificCompetencies.value,
@@ -462,7 +467,7 @@ defineExpose({ newRubric, closeEditor, save, duplicateActive: () => duplicateRub
                     <small>Inicial</small>
                   </div>
                   <v-textarea v-model="level.description" :label="`Nivel ${levelIndex + 1}`" placeholder="Descripción del desempeño" variant="outlined" density="compact" rows="2" auto-grow hide-details />
-                  <v-text-field v-model.number="level.points" type="number" min="0" step="1" label="Puntos" variant="outlined" density="compact" hide-details />
+                  <v-text-field v-model="level.points" type="text" inputmode="numeric" label="Puntos" placeholder="-" variant="outlined" density="compact" hide-details />
                   <v-btn icon="mdi-delete-outline" size="x-small" rounded="circle" variant="text" color="error" :aria-label="`Eliminar nivel ${levelIndex + 1}`" @click="removeLevel(category, levelIndex)" />
                 </div>
               </v-radio-group>

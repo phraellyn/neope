@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
+import RubricAlignmentBadges from './RubricAlignmentBadges.vue'
 import { loadDocumentAssessmentExercises } from '../services/documentAssessmentLoader'
 import {
   createRubricAssessment,
@@ -30,6 +31,7 @@ const dialog = computed({
   set: (value) => emit('update:modelValue', value),
 })
 const isRubric = computed(() => Boolean(props.item?.rubric))
+const isMerits = computed(() => Boolean(props.item?.merits))
 const isDocument = computed(() => Boolean(props.item?.documentAssessment))
 const selectedAchievementIds = computed(() => new Set(localResult.value?.selectedAchievementIds || []))
 const total = computed(() => Number(localResult.value?.total) || 0)
@@ -43,6 +45,17 @@ function documentMatrixKey(item) {
 
 async function initialize() {
   changed.value = false
+  if (isMerits.value) {
+    exercises.value = []
+    const transactions = Array.isArray(props.result?.transactions) ? clone(props.result.transactions) : []
+    localResult.value = {
+      type: 'merits',
+      schemaVersion: 1,
+      transactions,
+      total: transactions.reduce((sum, entry) => sum + (Number(entry?.points) || 0), 0),
+    }
+    return
+  }
   if (isRubric.value) {
     exercises.value = []
     localResult.value = createRubricAssessment(
@@ -75,6 +88,26 @@ async function initialize() {
       loading.value = false
     }
   }
+}
+
+function appendMeritsTransaction(points, label, kind = 'conduct') {
+  if (!localResult.value) return
+  localResult.value.transactions ||= []
+  localResult.value.transactions.push({
+    id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    points,
+    label,
+    kind,
+    createdAt: new Date().toISOString(),
+  })
+  localResult.value.total = localResult.value.transactions.reduce((sum, entry) => sum + (Number(entry?.points) || 0), 0)
+  localResult.value.updatedAt = new Date().toISOString()
+  changed.value = true
+}
+
+function spendMerits(cost) {
+  if ((Number(localResult.value?.total) || 0) < cost || !globalThis.confirm(`¿Canjear ${cost} méritos por Premio ${cost}?`)) return
+  appendMeritsTransaction(-cost, `Premio ${cost}`, 'reward')
 }
 
 function categoryScore(category) {
@@ -119,8 +152,8 @@ watch(() => props.modelValue, (open) => {
       <v-card-title class="student-assessment-title">
         <div>
           <small>{{ item?.nombre }}</small>
-          <strong>{{ isRubric ? item?.rubric?.title : student?.nombre || student?.nombreCorto || student?.id }}</strong>
-          <span v-if="isRubric">{{ student?.nombre || student?.nombreCorto || student?.id }}</span>
+          <strong>{{ isMerits ? 'Méritos' : isRubric ? item?.rubric?.title : student?.nombre || student?.nombreCorto || student?.id }}</strong>
+          <span v-if="isRubric || isMerits">{{ student?.nombre || student?.nombreCorto || student?.id }}</span>
         </div>
         <div class="student-assessment-total">
           <span>{{ isDocument ? 'Nota' : 'Total' }}</span>
@@ -137,7 +170,7 @@ watch(() => props.modelValue, (open) => {
 
       <v-card-text v-else-if="isRubric && localResult" class="student-rubric-categories">
         <article v-for="(category, categoryIndex) in item.rubric.categories" :key="category.id" class="student-rubric-category">
-          <header><span>{{ categoryIndex + 1 }}</span><div><strong>{{ category.title }}</strong><small>{{ categoryScore(category)?.points ?? 0 }} puntos</small></div></header>
+          <header><span>{{ categoryIndex + 1 }}</span><div><strong>{{ category.title }}</strong><small>{{ categoryScore(category)?.points === null ? 'Neutro' : `${categoryScore(category)?.points ?? 0} puntos` }}</small></div></header>
           <div v-if="category.type === 'range'" class="student-rubric-range">
             <p>{{ category.range.description }}</p>
             <div class="student-rubric-buttons">
@@ -146,8 +179,31 @@ watch(() => props.modelValue, (open) => {
           </div>
           <div v-else class="student-rubric-levels">
             <button v-for="level in category.levels" :key="level.id" type="button" :class="{ selected: categoryScore(category)?.levelId === level.id }" @click="chooseCategoryScore(category, level.id)">
-              <span>{{ level.points }} pt</span><strong>{{ level.description }}</strong>
+              <span>{{ level.points === null ? 'Neutro' : `${level.points} pt` }}</span><strong>{{ level.description }}</strong>
             </button>
+          </div>
+          <RubricAlignmentBadges :alignment="category.alignment" />
+        </article>
+      </v-card-text>
+
+      <v-card-text v-else-if="isMerits && localResult" class="student-rubric-categories">
+        <article class="student-rubric-category merits-category">
+          <header><span>−</span><div><strong>Convivencia y respeto</strong><small>Registra la conducta observada.</small></div></header>
+          <div class="student-rubric-levels merits-options">
+            <button type="button" @click="appendMeritsTransaction(-5, 'Actitud gravemente perjudicial')"><span>−5 pt</span><strong>Actitud perjudicial para la convivencia, el aula o falta grave de respeto.</strong></button>
+            <button v-for="points in [-5, -3, -1]" :key="points" type="button" @click="appendMeritsTransaction(points, 'Actitud molesta o falta de respeto')"><span>{{ points }} pt</span><strong>Actitud molesta para el aula o falta de respeto.</strong></button>
+          </div>
+        </article>
+        <article class="student-rubric-category merits-category merits-positive">
+          <header><span>+</span><div><strong>Iniciativa y colaboración</strong><small>Reconoce contribuciones positivas a la comunidad.</small></div></header>
+          <div class="student-rubric-levels merits-options">
+            <button v-for="points in [1, 2, 3]" :key="points" type="button" @click="appendMeritsTransaction(points, 'Iniciativa de ayuda')"><span>+{{ points }} pt</span><strong>Iniciativa que ayuda a compañeros, profesor o comunidad educativa.</strong></button>
+          </div>
+        </article>
+        <article class="student-rubric-category merits-rewards">
+          <header><span>★</span><div><strong>Canjear méritos</strong><small>El premio se registra como un descuento en el acumulado.</small></div></header>
+          <div class="student-rubric-buttons">
+            <button v-for="cost in [5, 10, 15, 20]" :key="cost" type="button" :disabled="Number(localResult.total) < cost" @click="spendMerits(cost)">Premio {{ cost }}</button>
           </div>
         </article>
       </v-card-text>
@@ -189,6 +245,9 @@ watch(() => props.modelValue, (open) => {
 .student-rubric-levels button { flex: 1 1 180px; min-height: 62px; display: grid; gap: 4px; padding: 9px; border: 1px solid #cbd8e6; border-radius: 7px; color: #466688; background: #f7f9fc; text-align: left; }
 .student-rubric-buttons button.selected, .student-rubric-levels button.selected { border-color: #315f94; color: #fff; background: #315f94; }
 .student-rubric-levels button span { font-size: .7rem; font-weight: 800; }
+.merits-category > header > span { background: #8c3d4d; }.merits-positive > header > span { background: #357a55; }.merits-rewards > header > span { background: #9d7731; }
+.merits-options { grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); }
+.merits-rewards .student-rubric-buttons { padding: 0; }.merits-rewards .student-rubric-buttons button { padding-inline: 11px; font-weight: 800; }.merits-rewards .student-rubric-buttons button:disabled { opacity: .42; cursor: default; }
 .student-document-matrix { min-height: 0; flex: 1; padding: 0; overflow: hidden; }
 @media (max-width: 700px) { .student-assessment-title { gap: 7px; padding-inline: 10px; } .student-rubric-range { grid-template-columns: 1fr; } }
 </style>

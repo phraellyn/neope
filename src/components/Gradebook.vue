@@ -11,6 +11,7 @@ import {
 import { loadRubrics } from '../services/rubricRepository'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
+import RubricAlignmentBadges from './RubricAlignmentBadges.vue'
 import { loadDocumentAssessmentExercises } from '../services/documentAssessmentLoader'
 import {
   createRubricAssessment,
@@ -71,6 +72,7 @@ function normalizeNode(node) {
     nombre: node.nombre || node.title || 'Resultado',
     nombreCorto: node.nombreCorto || node.nombre || node.title || 'Resultado',
     rubric: node.rubric ? rubricSnapshot(node.rubric) : null,
+    merits: Boolean(node.merits),
     documentAssessment: node.documentAssessment ? clone(node.documentAssessment) : null,
     programming: node.programming ? clone(node.programming) : null,
   }
@@ -109,7 +111,7 @@ const dirty = ref(false)
 const bulkStudentDialog = ref(false)
 const bulkStudentText = ref('')
 const itemDialog = ref(false)
-const itemForm = ref({ nombre: '', nombreCorto: '', rubricId: null })
+const itemForm = ref({ nombre: '', nombreCorto: '', rubricId: null, type: 'standard' })
 const rubrics = ref([])
 const rubricsLoading = ref(false)
 const rubricsLoadedForTeacher = ref('')
@@ -169,6 +171,9 @@ function itemHasEnteredEvaluation(itemId) {
 // diferida: si siguen en la raíz y nadie los ha evaluado, no ocupan columna.
 const visibleStructure = computed(() => structure.value.filter((node) => (
   node?.type !== 'item'
+  // Méritos es un acumulador permanente; su fecha solo sirve de referencia,
+  // no debe activar la ocultación diferida de instrumentos programados.
+  || node.merits
   || !node.programming?.date
   || itemHasEnteredEvaluation(node.id)
 )))
@@ -184,6 +189,7 @@ const eligibleRubrics = computed(() => {
 })
 const selectedItemRubric = computed(() => rubrics.value.find((rubric) => rubric.id === itemForm.value.rubricId) || null)
 const activeRubric = computed(() => rubricAssessmentItem.value?.rubric || null)
+const activeMerits = computed(() => Boolean(rubricAssessmentItem.value?.merits))
 const activeRubricResult = computed(() => {
   const studentId = rubricAssessmentStudent.value?.id
   const itemId = rubricAssessmentItem.value?.id
@@ -331,9 +337,13 @@ function addStudent() {
   automaticShortNameStudentIds.add(student.id)
   students.value.push(student)
   const rubricItems = descendantItems(structure.value).filter((item) => item.rubric)
-  if (rubricItems.length) {
+  const meritsItems = descendantItems(structure.value).filter((item) => item.merits)
+  if (rubricItems.length || meritsItems.length) {
     localGroup.value.evaluaciones.resultados[student.id] = Object.fromEntries(
-      rubricItems.map((item) => [item.id, createRubricAssessment(item.rubric)]),
+      [
+        ...rubricItems.map((item) => [item.id, createRubricAssessment(item.rubric)]),
+        ...meritsItems.map((item) => [item.id, createMeritsAssessment()]),
+      ],
     )
   }
   markDirty()
@@ -356,6 +366,7 @@ async function importBulkStudents() {
   if (!entries.length) return
   const existingIds = new Set(students.value.map((student) => student.id))
   const rubricItems = descendantItems(structure.value).filter((item) => item.rubric)
+  const meritsItems = descendantItems(structure.value).filter((item) => item.merits)
   const addedStudents = []
   entries.forEach((entry) => {
     const reusedCode = isStudentCode(entry) ? entry : null
@@ -370,9 +381,12 @@ async function importBulkStudents() {
     }
     students.value.push(student)
     addedStudents.push(student)
-    if (rubricItems.length) {
+    if (rubricItems.length || meritsItems.length) {
       localGroup.value.evaluaciones.resultados[student.id] = Object.fromEntries(
-        rubricItems.map((item) => [item.id, createRubricAssessment(item.rubric)]),
+        [
+          ...rubricItems.map((item) => [item.id, createRubricAssessment(item.rubric)]),
+          ...meritsItems.map((item) => [item.id, createMeritsAssessment()]),
+        ],
       )
     }
   })
@@ -411,7 +425,7 @@ function removeStudent(studentId) {
 
 async function openItemDialog() {
   if (props.disabled || !props.configurationMode) return
-  itemForm.value = { nombre: '', nombreCorto: '', rubricId: null }
+  itemForm.value = { nombre: '', nombreCorto: '', rubricId: null, type: 'standard' }
   itemDialog.value = true
   if (!props.teacherId || rubricsLoadedForTeacher.value === props.teacherId) return
   rubricsLoading.value = true
@@ -433,6 +447,21 @@ function chooseItemRubric(rubric) {
   if (!itemForm.value.nombreCorto.trim()) itemForm.value.nombreCorto = rubric.shortName || rubric.title
 }
 
+function chooseItemType(type) {
+  itemForm.value.type = type
+  if (type === 'merits') {
+    itemForm.value.rubricId = null
+    itemForm.value.nombre = 'Méritos'
+    itemForm.value.nombreCorto = 'Méritos'
+  }
+}
+
+function createMeritsAssessment(previous = null) {
+  const transactions = Array.isArray(previous?.transactions) ? clone(previous.transactions) : []
+  const total = transactions.reduce((sum, entry) => sum + (Number(entry?.points) || 0), 0)
+  return { type: 'merits', schemaVersion: 1, transactions, total }
+}
+
 function addItem() {
   const nombre = itemForm.value.nombre.trim()
   const nombreCorto = itemForm.value.nombreCorto.trim()
@@ -443,13 +472,20 @@ function addItem() {
     id: createNodeId('item'),
     nombre,
     nombreCorto,
-    rubric: selectedRubric ? rubricSnapshot(selectedRubric) : null,
+    rubric: itemForm.value.type === 'merits' ? null : selectedRubric ? rubricSnapshot(selectedRubric) : null,
+    merits: itemForm.value.type === 'merits',
   }
   structure.value.push(item)
   if (item.rubric) {
     students.value.forEach((student) => {
       localGroup.value.evaluaciones.resultados[student.id] ||= {}
       localGroup.value.evaluaciones.resultados[student.id][item.id] = createRubricAssessment(item.rubric)
+    })
+  }
+  if (item.merits) {
+    students.value.forEach((student) => {
+      localGroup.value.evaluaciones.resultados[student.id] ||= {}
+      localGroup.value.evaluaciones.resultados[student.id][item.id] = createMeritsAssessment()
     })
   }
   itemDialog.value = false
@@ -713,6 +749,19 @@ function formattedRubricResult(studentId, item) {
   return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(value)
 }
 
+function formattedMeritsResult(studentId, item) {
+  const value = Number(resultFor(studentId, item.id)?.total) || 0
+  return `${value > 0 ? '+' : ''}${new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 }).format(value)}`
+}
+
+function ensureMeritsAssessment(studentId, item) {
+  if (!studentId || !item?.merits) return null
+  localGroup.value.evaluaciones.resultados[studentId] ||= {}
+  const assessment = createMeritsAssessment(localGroup.value.evaluaciones.resultados[studentId][item.id])
+  localGroup.value.evaluaciones.resultados[studentId][item.id] = assessment
+  return assessment
+}
+
 function ensureRubricAssessment(studentId, item) {
   if (!studentId || !item?.rubric) return null
   localGroup.value.evaluaciones.resultados[studentId] ||= {}
@@ -723,14 +772,32 @@ function ensureRubricAssessment(studentId, item) {
 }
 
 function openRubricAssessment(student, item) {
-  if (props.disabled || props.configurationMode || !student?.id || !item?.rubric) return
+  if (props.disabled || props.configurationMode || !student?.id || (!item?.rubric && !item?.merits)) return
   const previous = resultFor(student.id, item.id)
-  ensureRubricAssessment(student.id, item)
+  if (item.merits) ensureMeritsAssessment(student.id, item)
+  else ensureRubricAssessment(student.id, item)
   rubricAssessmentStudent.value = student
   rubricAssessmentItem.value = item
   rubricAssessmentChanged.value = !previous || typeof previous !== 'object'
   if (rubricAssessmentChanged.value) markDirty()
   rubricAssessmentDialog.value = true
+}
+
+function appendMeritsTransaction(points, label, kind = 'conduct') {
+  const assessment = activeRubricResult.value
+  if (!assessment || !activeMerits.value) return
+  assessment.transactions ||= []
+  assessment.transactions.push({ id: createNodeId('merit'), points, label, kind, createdAt: new Date().toISOString() })
+  assessment.total = assessment.transactions.reduce((sum, entry) => sum + (Number(entry?.points) || 0), 0)
+  assessment.updatedAt = new Date().toISOString()
+  rubricAssessmentChanged.value = true
+  markDirty()
+}
+
+function spendMerits(cost) {
+  const total = Number(activeRubricResult.value?.total) || 0
+  if (total < cost || !globalThis.confirm(`¿Canjear ${cost} méritos por Premio ${cost}?`)) return
+  appendMeritsTransaction(-cost, `Premio ${cost}`, 'reward')
 }
 
 function categoryScore(category) {
@@ -832,7 +899,9 @@ function groupMean(studentId, group) {
 
 function weightedNodeMean(studentId, node) {
   if (!node) return null
-  if (node.type === 'item') return numericResult(studentId, node.id)
+  // Los méritos son un saldo de convivencia, no una calificación: deben
+  // mostrarse como columna independiente sin contaminar las medias.
+  if (node.type === 'item') return node.merits ? null : numericResult(studentId, node.id)
   const weights = localGroup.value.evaluaciones.pesos?.[node.id] || {}
   const values = node.children.map((child) => ({
     value: weightedNodeMean(studentId, child),
@@ -1327,7 +1396,7 @@ defineExpose({
                 </button>
               </div>
             </th>
-            <td v-for="column in resultColumns" :key="column.key" :class="{ 'gradebook-mean-cell': column.kind === 'mean', 'gradebook-rubric-cell': column.kind === 'item' && column.node.rubric, 'gradebook-document-cell': column.kind === 'item' && column.node.documentAssessment }">
+            <td v-for="column in resultColumns" :key="column.key" :class="{ 'gradebook-mean-cell': column.kind === 'mean', 'gradebook-rubric-cell': column.kind === 'item' && (column.node.rubric || column.node.merits), 'gradebook-document-cell': column.kind === 'item' && column.node.documentAssessment }">
               <button
                 v-if="column.kind === 'item' && column.node.documentAssessment"
                 type="button"
@@ -1337,13 +1406,13 @@ defineExpose({
                 @click="openDocumentAssessment(student, column.node)"
               >{{ formattedDocumentResult(student.id, column.node) }}</button>
               <button
-                v-else-if="column.kind === 'item' && column.node.rubric"
+                v-else-if="column.kind === 'item' && (column.node.rubric || column.node.merits)"
                 type="button"
                 class="gradebook-rubric-score"
                 :disabled="disabled || configurationMode"
-                :aria-label="`${column.title}: evaluar a ${student.nombre || student.id} con la rúbrica ${column.node.rubric.title}`"
+                :aria-label="`${column.title}: evaluar a ${student.nombre || student.id}${column.node.merits ? ' mediante méritos' : ` con la rúbrica ${column.node.rubric.title}`}`"
                 @click="openRubricAssessment(student, column.node)"
-              >{{ formattedRubricResult(student.id, column.node) }}</button>
+              >{{ column.node.merits ? formattedMeritsResult(student.id, column.node) : formattedRubricResult(student.id, column.node) }}</button>
               <input
                 v-else-if="column.kind === 'item'"
                 :value="resultFor(student.id, column.node.id)"
@@ -1380,7 +1449,11 @@ defineExpose({
         <v-card-text class="gradebook-column-form px-6 pb-2">
           <v-text-field v-model="itemForm.nombre" label="Nombre completo" placeholder="Examen de sistemas de ecuaciones" variant="outlined" density="compact" hide-details autofocus />
           <v-text-field v-model="itemForm.nombreCorto" label="Nombre corto" placeholder="Examen 1" variant="outlined" density="compact" hide-details @keyup.enter="addItem" />
-          <section class="gradebook-rubric-picker">
+          <v-btn-toggle :model-value="itemForm.type" color="primary" mandatory variant="outlined" density="compact" @update:model-value="chooseItemType">
+            <v-btn value="standard">Calificación</v-btn>
+            <v-btn value="merits">Méritos</v-btn>
+          </v-btn-toggle>
+          <section v-if="itemForm.type !== 'merits'" class="gradebook-rubric-picker">
             <header>
               <div><strong>Rúbrica</strong><span>Selecciona una rúbrica para evaluar este ítem por categorías.</span></div>
               <v-btn v-if="selectedItemRubric" size="small" variant="text" @click="chooseItemRubric(null)">Sin rúbrica</v-btn>
@@ -1489,11 +1562,11 @@ defineExpose({
     </v-dialog>
 
     <v-dialog v-model="rubricAssessmentDialog" max-width="1120" width="calc(100% - 32px)" height="min(860px, calc(100dvh - 40px))">
-      <v-card v-if="activeRubric && activeRubricResult" class="gradebook-rubric-assessment">
+      <v-card v-if="(activeRubric || activeMerits) && activeRubricResult" class="gradebook-rubric-assessment">
         <v-card-title class="gradebook-rubric-assessment-title">
           <div>
             <small>{{ rubricAssessmentItem?.nombre }}</small>
-            <strong>{{ activeRubric.title }}</strong>
+            <strong>{{ activeMerits ? 'Méritos' : activeRubric.title }}</strong>
             <span>{{ rubricAssessmentStudent?.nombre || rubricAssessmentStudent?.id }}</span>
           </div>
           <div class="gradebook-rubric-total"><span>Total</span><strong>{{ new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(activeRubricResult.total) }}</strong></div>
@@ -1501,8 +1574,30 @@ defineExpose({
         </v-card-title>
         <v-divider />
         <v-card-text class="gradebook-rubric-categories">
-          <article v-for="(category, categoryIndex) in activeRubric.categories" :key="category.id" class="gradebook-rubric-category">
-            <header><span>{{ categoryIndex + 1 }}</span><div><strong>{{ category.title }}</strong><small>{{ categoryScore(category)?.points ?? 0 }} puntos</small></div></header>
+          <template v-if="activeMerits">
+            <article class="gradebook-rubric-category merits-category">
+              <header><span>−</span><div><strong>Convivencia y respeto</strong><small>Registra la conducta observada.</small></div></header>
+              <div class="gradebook-level-scores merits-options">
+                <button type="button" @click="appendMeritsTransaction(-5, 'Actitud gravemente perjudicial')"><span>−5 pt</span><strong>Actitud perjudicial para la convivencia, el aula o falta grave de respeto.</strong></button>
+                <button v-for="points in [-5, -3, -1]" :key="points" type="button" @click="appendMeritsTransaction(points, 'Actitud molesta o falta de respeto')"><span>{{ points }} pt</span><strong>Actitud molesta para el aula o falta de respeto.</strong></button>
+              </div>
+            </article>
+            <article class="gradebook-rubric-category merits-category">
+              <header><span>+</span><div><strong>Iniciativa y colaboración</strong><small>Reconoce contribuciones positivas a la comunidad.</small></div></header>
+              <div class="gradebook-level-scores merits-options">
+                <button v-for="points in [1, 2, 3]" :key="points" type="button" @click="appendMeritsTransaction(points, 'Iniciativa de ayuda')"><span>+{{ points }} pt</span><strong>Iniciativa que ayuda a compañeros, profesor o comunidad educativa.</strong></button>
+              </div>
+            </article>
+            <article class="gradebook-rubric-category merits-rewards">
+              <header><span>★</span><div><strong>Canjear méritos</strong><small>El premio se registra como un descuento en el acumulado.</small></div></header>
+              <div class="gradebook-range-scores">
+                <button v-for="cost in [5, 10, 15, 20]" :key="cost" type="button" :disabled="Number(activeRubricResult.total) < cost" @click="spendMerits(cost)">Premio {{ cost }}</button>
+              </div>
+              <small v-if="activeRubricResult.transactions?.length" class="merits-history">Último movimiento: {{ activeRubricResult.transactions.at(-1)?.label }}</small>
+            </article>
+          </template>
+          <article v-for="(category, categoryIndex) in activeRubric?.categories || []" v-else :key="category.id" class="gradebook-rubric-category">
+            <header><span>{{ categoryIndex + 1 }}</span><div><strong>{{ category.title }}</strong><small>{{ categoryScore(category)?.points === null ? 'Neutro' : `${categoryScore(category)?.points ?? 0} puntos` }}</small></div></header>
             <template v-if="category.type === 'range'">
               <div class="gradebook-range-assessment">
                 <p>{{ category.range.description }}</p>
@@ -1527,10 +1622,11 @@ defineExpose({
                 :aria-pressed="categoryScore(category)?.levelId === level.id"
                 @click="chooseCategoryScore(category, level.id)"
               >
-                <span>{{ level.points }} pt</span>
+                <span>{{ level.points === null ? 'Neutro' : `${level.points} pt` }}</span>
                 <strong>{{ level.description }}</strong>
               </button>
             </div>
+            <RubricAlignmentBadges :alignment="category.alignment" />
           </article>
         </v-card-text>
         <v-divider />

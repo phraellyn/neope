@@ -70,10 +70,14 @@ function studentTotals(studentId, items, documentAchievements, context) {
 
     if (item.rubric && result.type === 'rubric') {
       ;(item.rubric.categories || []).forEach((category) => {
+        const categoryResult = result.categories?.[category.id]
+        // Un nivel neutro equivale a «no observado / no aplicable»: conserva
+        // la elección en la rúbrica, pero no crea evidencia ni puntos máximos.
+        if (categoryResult?.points === null || categoryResult?.points === undefined) return
         addAlignedScore(
           totals,
           category.alignment,
-          finiteNonNegative(result.categories?.[category.id]?.points),
+          finiteNonNegative(categoryResult.points),
           categoryMaximum(category),
           context,
         )
@@ -136,4 +140,3 @@ export function calculateCompetencyProgress({
     }
   })
 }
-

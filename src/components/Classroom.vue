@@ -38,6 +38,7 @@ const assessmentStudent = ref(null)
 let roomObserver
 let assessmentLoadRequest = 0
 let revision = 0
+let persistedRevision = 0
 
 const ATTENDANCE_MODE_ID = '__attendance__'
 
@@ -52,7 +53,9 @@ const gridColumnsStyle = computed(() => Array.from({ length: Math.max(1, Number(
   const extra = layout.value.aisles.includes(col) ? aisleWidth : 0
   return `${seatSize.value + extra}px`
 }).join(' '))
-const selectedAssessment = computed(() => todayAssessments.value.find((item) => item.id === selectedAssessmentId.value) || null)
+const selectedAssessment = computed(() => todayAssessments.value.find((item) => item.id === selectedAssessmentId.value)
+  || (meritsItem.value?.id === selectedAssessmentId.value ? meritsItem.value : null))
+const meritsItem = computed(() => evaluationItems(localGroup.value.evaluaciones?.estructura || []).find((item) => item.merits) || null)
 const attendanceMode = computed(() => selectedAssessmentId.value === ATTENDANCE_MODE_ID)
 const hasAttendanceForSelectedDate = computed(() => Boolean(attendanceRecordForDate()))
 const activeAssessmentResult = computed(() => {
@@ -158,7 +161,9 @@ async function loadTodayAssessments() {
       (item.rubric || item.documentAssessment)
       && candidates.findIndex((candidate) => candidate.id === item.id) === index
     ))
-    if (selectedAssessmentId.value !== ATTENDANCE_MODE_ID && !todayAssessments.value.some((item) => item.id === selectedAssessmentId.value)) selectedAssessmentId.value = null
+    if (selectedAssessmentId.value !== ATTENDANCE_MODE_ID
+      && selectedAssessmentId.value !== meritsItem.value?.id
+      && !todayAssessments.value.some((item) => item.id === selectedAssessmentId.value)) selectedAssessmentId.value = null
   } catch (error) {
     if (request !== assessmentLoadRequest) return
     console.error('No se han podido cargar las tareas del día:', error)
@@ -370,8 +375,16 @@ function onDropWell() {
 }
 function getGroup() { return JSON.parse(JSON.stringify(localGroup.value)) }
 function getRevision() { return revision }
-function markSaved(savedRevision = revision) { if (savedRevision === revision) emit('dirty-change', false) }
+function markSaved(savedRevision = revision) {
+  persistedRevision = Math.max(persistedRevision, Number(savedRevision) || 0)
+  if (savedRevision === revision) emit('dirty-change', false)
+}
 watch(() => props.group, async (value) => {
+  // El padre actualiza `group` cuando termina cada guardado. Si entretanto el
+  // usuario ha pasado lista otra vez, esa respuesta pertenece a una revisión
+  // anterior y no debe sustituir el estado optimista que todavía está
+  // pendiente de guardar. El siguiente guardado recogerá la revisión actual.
+  if (revision > persistedRevision) return
   localGroup.value = JSON.parse(JSON.stringify(value))
   await loadLocalIdentities()
   await loadTodayAssessments()
@@ -415,6 +428,19 @@ defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
             :aria-pressed="selectedAssessmentId === item.id"
             @click="toggleAssessment(item)"
           >{{ item.nombreCorto || item.nombre }}</button>
+        </template>
+      </v-tooltip>
+      <v-tooltip v-if="meritsItem" text="Registrar méritos" location="bottom">
+        <template #activator="{ props: tooltipProps }">
+          <button
+            v-bind="tooltipProps"
+            type="button"
+            class="classroom-assessment-button classroom-merits-button"
+            :class="{ selected: selectedAssessmentId === meritsItem.id }"
+            :aria-pressed="selectedAssessmentId === meritsItem.id"
+            aria-label="Registrar méritos"
+            @click="toggleAssessment(meritsItem)"
+          ><v-icon icon="mdi-star-outline" size="21" /></button>
         </template>
       </v-tooltip>
     </div>

@@ -15,6 +15,13 @@ import lomloeMathLaw from '../data/lomloeMathLaw.json'
 
 export const rubricSchemaVersion = 3
 
+function normalizedLevelPoints(value) {
+  // Un guion representa una participación neutra: se registra el nivel, pero
+  // no penaliza ni amplía la puntuación máxima alcanzable del alumno.
+  if (value === '-' || value === null || value === undefined || value === '') return null
+  return Number.isInteger(Number(value)) ? Number(value) : 0
+}
+
 function rubricShortName(value, title = '') {
   return Array.from(String(value || title || '').trim()).slice(0, 2).join('')
 }
@@ -45,9 +52,11 @@ function normalizeCategory(category = {}) {
   const normalizedLevels = levels.map((level, index) => ({
     id: level.id || `legacy-level-${index}`,
     description: String(level.description || ''),
-    points: Number.isInteger(Number(level.points))
-      ? Number(level.points)
-      : Number.isInteger(Number(level.score?.max)) ? Number(level.score.max) : 0,
+    points: level.points === '-' || level.points === null
+      ? null
+      : Number.isInteger(Number(level.points))
+        ? Number(level.points)
+        : Number.isInteger(Number(level.score?.max)) ? Number(level.score.max) : 0,
   }))
   const alignment = category.alignment?.criterionIds || category.alignment?.descriptorEvidence
     ? category.alignment
@@ -118,7 +127,7 @@ function payloadForRubric(rubric, ownerId) {
     levels: category.levels.map((level) => ({
       id: level.id,
       description: level.description.trim(),
-      points: Number(level.points),
+      points: normalizedLevelPoints(level.points),
     })),
     range: {
       description: category.range.description.trim(),

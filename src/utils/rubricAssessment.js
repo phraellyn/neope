@@ -8,6 +8,12 @@ function integer(value, fallback = 0) {
   return Number.isInteger(numeric) ? numeric : fallback
 }
 
+function nullableInteger(value, fallback = null) {
+  if (value === '-' || value === null || value === undefined || value === '') return null
+  const numeric = Number(value)
+  return Number.isInteger(numeric) ? numeric : fallback
+}
+
 export function rubricSnapshot(rubric) {
   if (!rubric?.id) return null
   return {
@@ -26,7 +32,7 @@ export function rubricSnapshot(rubric) {
       levels: clone(category.levels, []).map((level) => ({
         id: level.id,
         description: String(level.description || ''),
-        points: integer(level.points),
+        points: nullableInteger(level.points),
       })),
       range: {
         description: String(category.range?.description || ''),
@@ -51,7 +57,7 @@ function defaultCategoryScore(category) {
   return {
     type: 'level',
     levelId: selected?.id || null,
-    points: integer(selected?.points),
+    points: nullableInteger(selected?.points),
   }
 }
 
@@ -71,7 +77,7 @@ function normalizeCategoryScore(category, score) {
   return {
     type: 'level',
     levelId: selected?.id || null,
-    points: integer(selected?.points),
+    points: nullableInteger(selected?.points),
   }
 }
 
