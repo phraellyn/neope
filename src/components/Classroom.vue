@@ -461,9 +461,9 @@ defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
               :class="{
                 'classroom-student-with-photo': studentPhoto(studentId),
                 'classroom-student-assessable': studentIsInteractive(studentId),
-                'classroom-student-attendance': !configurationMode && hasAttendanceForSelectedDate,
+                'classroom-student-attendance': !configurationMode,
               }"
-              :style="!configurationMode && hasAttendanceForSelectedDate ? attendanceStyle(studentId) : undefined"
+              :style="!configurationMode ? attendanceStyle(studentId) : undefined"
               :draggable="configurationMode"
               @dragstart="dragSource = studentId"
               @dragend="dragSource = null"
@@ -486,8 +486,8 @@ defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
             v-for="student in wellStudents"
             :key="student.id"
             class="classroom-student classroom-student-well"
-            :class="{ 'classroom-student-assessable': studentIsInteractive(student.id), 'classroom-student-attendance': !configurationMode && hasAttendanceForSelectedDate }"
-            :style="!configurationMode && hasAttendanceForSelectedDate ? attendanceStyle(student.id) : undefined"
+            :class="{ 'classroom-student-assessable': studentIsInteractive(student.id), 'classroom-student-attendance': !configurationMode }"
+            :style="!configurationMode ? attendanceStyle(student.id) : undefined"
             :draggable="configurationMode"
             @dragstart="dragSource = student.id"
             @dragend="dragSource = null"

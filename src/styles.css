@@ -73,7 +73,8 @@ body { margin: 0; background: #f8f9fe; }
 .classroom-student-well.classroom-student-attendance { border-color: var(--attendance-color); }
 .classroom-student span { position: relative; z-index: 1; max-width: 100%; padding: 3px 6px; border-radius: 6px; background: rgba(25, 55, 95, .72); text-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
 .classroom-assessment-complete { position: absolute; left: 6px; top: 50%; width: 8px; height: 8px; border: 1px solid rgba(255, 255, 255, .82); border-radius: 50%; background: #45c474; transform: translateY(-50%); box-shadow: 0 1px 2px rgba(16, 72, 39, .35); }
-.classroom-student:not(.classroom-student-well) span { position: absolute; left: 0; bottom: 0; width: 100%; max-width: none; box-sizing: border-box; padding: 4px 6px 5px; border-radius: 0; border-bottom: 4px solid transparent; border-image: var(--student-flag-gradient) 1; background: rgba(25, 55, 95, .88); }
+.classroom-student:not(.classroom-student-well) span { position: absolute; left: 0; bottom: 0; width: 100%; max-width: none; box-sizing: border-box; padding: 4px 6px 5px; border-radius: 0; background: var(--student-flag-gradient, linear-gradient(#b4bdc9, #b4bdc9)) bottom / 100% 4px no-repeat, rgba(25, 55, 95, .88); }
+.classroom-student:not(.classroom-student-well).classroom-student-attendance span { left: -4px; bottom: -4px; width: calc(100% + 8px); }
 .classroom-student:active { cursor: grabbing; }
 .classroom-seat-empty { color: #9aabc0; font-size: .68rem; }
 .classroom-well { width: 235px; min-width: 235px; padding: 14px; border: 1px solid #dce4ef; border-radius: 18px; background: #fff; overflow: auto; }
