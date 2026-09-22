@@ -28,7 +28,7 @@ const props = defineProps({
   compilerBaseUrl: { type: String, default: '/compiler-api/v1' },
 })
 
-const emit = defineEmits(['new-document', 'assessment-removed'])
+const emit = defineEmits(['new-document', 'assessment-added', 'assessment-removed'])
 const days = ref([])
 const documents = ref([])
 const rubrics = ref([])
@@ -266,6 +266,7 @@ async function addRubric(rubric) {
       teacherId: props.teacherId,
     })
     day.rubricInstruments.push(result.instrument)
+    emit('assessment-added', { groupId: props.group.id, item: result.item, initialResults: result.initialResults })
     rubricDialog.value = false
   } catch (error) {
     showAppErrorToast(error.message || 'No se ha podido añadir la rúbrica.')

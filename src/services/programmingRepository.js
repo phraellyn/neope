@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore'
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { db, storage } from './firebase'
-import { rubricSnapshot } from '../utils/rubricAssessment'
+import { createRubricAssessment, rubricSnapshot } from '../utils/rubricAssessment'
 import { programmingSessionsForGroup, reconcileProgrammingSessions } from '../utils/programmingSchedule'
 
 export { programmingDatesForGroup, programmingSessionsForGroup } from '../utils/programmingSchedule'
@@ -183,6 +183,7 @@ export async function saveProgrammingDay(groupId, day, teacherId) {
 export async function addRubricToProgrammingDay({ groupId, date, programmingDayId = date, session = {}, rubric, teacherId }) {
   const snapshot = rubricSnapshot(rubric)
   if (!snapshot) throw new Error('La rúbrica seleccionada no es válida.')
+  const now = new Date().toISOString()
   const instrumentId = globalThis.crypto?.randomUUID?.() || `rubrica-${Date.now()}`
   const itemId = globalThis.crypto?.randomUUID?.() || `item-${Date.now()}`
   const instrument = {
@@ -195,7 +196,7 @@ export async function addRubricToProgrammingDay({ groupId, date, programmingDayI
     date,
     sessionKey: session.sessionKey || null,
     rubric: snapshot,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
   }
   const item = {
     type: 'item',
@@ -205,16 +206,26 @@ export async function addRubricToProgrammingDay({ groupId, date, programmingDayI
     rubric: snapshot,
     programming: { date, programmingDayId, sessionKey: session.sessionKey || null, instrumentId },
   }
+  const initialResults = {}
 
   await runTransaction(db, async (transaction) => {
     const groupReference = doc(db, 'grupos', groupId)
     const dayReference = doc(db, 'grupos', groupId, 'programmingDays', programmingDayId)
-    const [groupDocument, dayDocument] = await Promise.all([
+    const studentsReference = query(collection(db, 'grupos', groupId, 'alumnos'))
+    const [groupDocument, dayDocument, studentsDocument] = await Promise.all([
       transaction.get(groupReference),
       transaction.get(dayReference),
+      transaction.get(studentsReference),
     ])
     if (!groupDocument.exists()) throw new Error('El grupo ya no está disponible.')
     const dayData = dayDocument.exists() ? dayDocument.data() : {}
+    const evaluation = groupDocument.data()?.evaluation || {}
+    const structure = Array.isArray(evaluation.structure) ? clone(evaluation.structure, []) : []
+    if (!structure.some((node) => node?.id === itemId)) structure.push(item)
+    transaction.update(groupReference, {
+      'evaluation.structure': structure,
+      updatedAt: now,
+    })
     transaction.set(dayReference, {
       date,
       groupId,
@@ -235,10 +246,19 @@ export async function addRubricToProgrammingDay({ groupId, date, programmingDayI
       resources: dayData.resources || [],
       notes: dayData.notes || '',
       schemaVersion: 4,
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
     }, { merge: true })
+    studentsDocument.docs.forEach((studentDocument) => {
+      const code = String(studentDocument.data()?.code || studentDocument.id || '')
+      const assessment = createRubricAssessment(snapshot)
+      if (code) initialResults[code] = assessment
+      transaction.update(studentDocument.ref, {
+        [`results.${itemId}`]: assessment,
+        updatedAt: now,
+      })
+    })
   })
-  return { instrument, item }
+  return { instrument, item, initialResults }
 }
 
 export async function removeRubricFromProgrammingDay({

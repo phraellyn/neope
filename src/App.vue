@@ -4219,6 +4219,23 @@ function removeProgrammingAssessmentFromLoadedGroup({ groupId, itemIds = [] }) {
   })
 }
 
+function addProgrammingAssessmentToLoadedGroup({ groupId, item, initialResults = {} }) {
+  if (!groupId || !item?.id) return
+  teacherGroups.value = teacherGroups.value.map((group) => {
+    if (group.id !== groupId) return group
+    const structure = JSON.parse(JSON.stringify(group.evaluaciones?.estructura || []))
+    if (!structure.some((node) => node?.id === item.id)) structure.push(JSON.parse(JSON.stringify(item)))
+    const resultados = JSON.parse(JSON.stringify(group.evaluaciones?.resultados || {}))
+    Object.entries(initialResults || {}).forEach(([studentId, assessment]) => {
+      resultados[studentId] = { ...(resultados[studentId] || {}), [item.id]: assessment }
+    })
+    return {
+      ...group,
+      evaluaciones: { ...(group.evaluaciones || {}), estructura: structure, resultados },
+    }
+  })
+}
+
 async function createProgrammingDocument({ date, ...session }) {
   const group = selectedCareerGroup.value
   if (!group) return
@@ -5427,6 +5444,7 @@ onBeforeUnmount(() => {
             :templates="preambleOptions"
             :compiler-base-url="compilerBaseUrl"
             @new-document="createProgrammingDocument"
+            @assessment-added="addProgrammingAssessmentToLoadedGroup"
             @assessment-removed="removeProgrammingAssessmentFromLoadedGroup"
           />
           <Gradebook
