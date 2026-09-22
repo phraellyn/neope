@@ -120,6 +120,7 @@ const chatNotifications = ref(0)
 const calendarMode = ref('week')
 const shownMonth = ref(new Date())
 const currentTime = ref(new Date())
+const currentTimeLabel = computed(() => `${String(currentTime.value.getHours()).padStart(2, '0')}:${String(currentTime.value.getMinutes()).padStart(2, '0')}`)
 const scheduleConfigMode = ref(false)
 const courseCalendarConfigMode = ref(false)
 const scheduleDialog = ref(false)
@@ -5596,7 +5597,7 @@ onBeforeUnmount(() => {
                     @click.stop="clearScheduleCell(dayIndex, moduleIndex)"
                   ><v-icon icon="mdi-close" size="14" /></button>
                 </span>
-                <span v-if="currentTimePosition(date, module)" class="current-time-line" :style="{ top: currentTimePosition(date, module) }" aria-hidden="true" />
+                <span v-if="currentTimePosition(date, module)" class="current-time-line" :style="{ top: currentTimePosition(date, module) }" aria-hidden="true"><span class="current-time-label">{{ currentTimeLabel }}</span></span>
               </div>
             </div>
           </div>
