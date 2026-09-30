@@ -53,11 +53,19 @@ function defaultEvaluation() {
   }
 }
 
-const students = computed(() => (Array.isArray(props.group?.alumnos) ? props.group.alumnos : [])
-  .map((student) => (typeof student === 'string' ? { id: student } : student))
-  .filter((student) => student?.id)
-)
 const studentIdentities = ref(new Map())
+const students = computed(() => {
+  const list = (Array.isArray(props.group?.alumnos) ? props.group.alumnos : [])
+    .map((student) => (typeof student === 'string' ? { id: student } : student))
+    .filter((student) => student?.id)
+  return list.sort((left, right) => {
+    const leftName = String(studentIdentities.value.get(left.id)?.nombre || left.nombre || '').trim()
+    const rightName = String(studentIdentities.value.get(right.id)?.nombre || right.nombre || '').trim()
+    if (!leftName && rightName) return 1
+    if (leftName && !rightName) return -1
+    return (leftName || left.id).localeCompare(rightName || right.id, 'es', { sensitivity: 'base' })
+  })
+})
 const evaluationRecords = ref({})
 const selectedPeriod = ref('inicial')
 const selectedStudentIndex = ref(0)
