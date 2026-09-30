@@ -38,6 +38,7 @@ import MathConceptMap from './components/MathConceptMap.vue'
 import DocumentCreator from './components/DocumentCreator.vue'
 import Gradebook from './components/Gradebook.vue'
 import Classroom from './components/Classroom.vue'
+import StudentEvaluations from './components/StudentEvaluations.vue'
 import GroupProgramming from './components/GroupProgramming.vue'
 import StudentDetail from './components/StudentDetail.vue'
 import AppErrorToast from './components/AppErrorToast.vue'
@@ -4839,7 +4840,7 @@ onBeforeUnmount(() => {
           </v-tooltip>
         </template>
         <template v-else>
-        <v-tooltip v-if="groupView !== 'programming'" :text="gradebookConfigurationMode ? 'Finalizar y guardar configuración' : 'Configurar cuaderno'" location="bottom">
+        <v-tooltip v-if="groupView === 'evaluation' || groupView === 'classroom'" :text="gradebookConfigurationMode ? 'Finalizar y guardar configuración' : 'Configurar cuaderno'" location="bottom">
           <template #activator="{ props }">
             <v-btn
               v-bind="props"
@@ -4888,6 +4889,7 @@ onBeforeUnmount(() => {
         <v-btn-toggle :model-value="groupView" mandatory density="compact" class="calendar-toolbar-modes" aria-label="Vista del grupo" @update:model-value="setGroupView">
           <v-btn value="evaluation">Evaluación</v-btn>
           <v-btn value="classroom">Aula</v-btn>
+          <v-btn value="evaluations">Evaluaciones</v-btn>
           <v-btn value="programming">Programación</v-btn>
         </v-btn-toggle>
         <v-spacer />
@@ -5458,6 +5460,12 @@ onBeforeUnmount(() => {
             @validity-change="gradebookValid = $event"
             @autosave-request="autosaveGradebook"
             @student-selected="openStudentDetail"
+          />
+          <StudentEvaluations
+            v-else-if="selectedCareerGroup && groupView === 'evaluations'"
+            :key="selectedCareerGroup.id"
+            :group="selectedCareerGroup"
+            :teacher-profile="teacherProfile"
           />
           <Classroom
             v-else-if="selectedCareerGroup"
