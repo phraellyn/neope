@@ -101,6 +101,38 @@ function documentTitle(documentData) {
   return documentData.campos?.title || documentData.campos?.titulo || documentData.assessment?.shortName || documentData.plantilla?.nombre || 'Documento'
 }
 
+function evaluationItems(nodes = []) {
+  return (Array.isArray(nodes) ? nodes : []).flatMap((node) => (
+    node?.type === 'group' ? evaluationItems(node.children) : (node?.type === 'item' ? [node] : [])
+  ))
+}
+
+function rubricsForDay(day) {
+  const stored = Array.isArray(day?.rubricInstruments) ? day.rubricInstruments : []
+  const linked = day?.primaryForDate
+    ? evaluationItems(props.group?.evaluaciones?.estructura).filter((item) => (
+      item?.rubric && item?.programming?.date === day.date && !stored.some((instrument) => instrument.gradebookItemId === item.id)
+    )).map((item) => ({
+      id: `gradebook-rubric-${item.id}`,
+      type: 'rubric',
+      gradebookItemId: item.id,
+      title: item.nombre,
+      shortName: item.nombreCorto || item.nombre,
+      date: item.programming.date,
+      rubric: item.rubric,
+      derivedFromGradebook: true,
+    }))
+    : []
+  return [...stored, ...linked]
+}
+
+function rubricTooltip(instrument) {
+  const title = instrument?.title || instrument?.shortName || 'Rúbrica'
+  const rawDate = String(instrument?.date || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) return title
+  return `${title} · ${new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(`${rawDate}T12:00:00`))}`
+}
+
 function registerDayElement(dayId, element) {
   if (element) dayElements.set(dayId, element)
   else dayElements.delete(dayId)
@@ -143,7 +175,7 @@ function countLabel(count, singular, plural = `${singular}s`) {
 function daySummary(day) {
   const documentsCount = documentsByDay.value.get(day.id)?.length || 0
   const notesCount = String(day.notes || '').trim() ? 1 : 0
-  const rubricCount = day.rubricInstruments?.length || 0
+  const rubricCount = rubricsForDay(day).length
   const contentCount = day.contents?.length || 0
   const fileCount = (day.resources || []).filter((resource) => resource.type === 'file').length
   const linkCount = (day.resources || []).filter((resource) => resource.type === 'link').length
@@ -645,7 +677,7 @@ defineExpose({ flush })
             />
           </section>
 
-          <section v-if="documentsByDay.get(day.id)?.length || day.rubricInstruments.length" class="programming-instruments">
+          <section v-if="documentsByDay.get(day.id)?.length || rubricsForDay(day).length" class="programming-instruments">
             <div
               v-for="documentData in documentsByDay.get(day.id) || []"
               :key="documentData.id"
@@ -658,11 +690,15 @@ defineExpose({ flush })
               </a>
               <v-btn v-if="isEditing(day.id)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Retirar documento" @click="requestInstrumentRemoval(day, 'document', documentData)" />
             </div>
-            <div v-for="instrument in day.rubricInstruments" :key="instrument.id" class="programming-chip programming-rubric">
-              <v-icon icon="mdi-table-star" size="18" />
-              <span>{{ instrument.title }}</span>
-              <v-btn v-if="isEditing(day.id)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar rúbrica" @click="requestInstrumentRemoval(day, 'rubric', instrument)" />
-            </div>
+            <v-tooltip v-for="instrument in rubricsForDay(day)" :key="instrument.id" :text="rubricTooltip(instrument)" location="top">
+              <template #activator="{ props: tooltipProps }">
+                <div v-bind="tooltipProps" class="programming-chip programming-rubric">
+                  <v-icon icon="mdi-table-star" size="18" />
+                  <span>{{ instrument.title }}</span>
+                  <v-btn v-if="isEditing(day.id)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar rúbrica" @click="requestInstrumentRemoval(day, 'rubric', instrument)" />
+                </div>
+              </template>
+            </v-tooltip>
           </section>
 
           <section v-if="day.resources.length" class="programming-resources">

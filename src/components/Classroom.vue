@@ -81,6 +81,13 @@ function documentTitle(documentData) {
     || 'Documento evaluable'
 }
 
+function assessmentTooltip(item) {
+  const title = item?.nombre || item?.nombreCorto || 'Instrumento de evaluación'
+  const rawDate = String(item?.programming?.date || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) return title
+  return `${title} · ${new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(`${rawDate}T12:00:00`))}`
+}
+
 function pendingRubricItem(instrument, date) {
   if (!instrument?.gradebookItemId || !instrument?.rubric) return null
   return {
@@ -418,7 +425,7 @@ defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
           ><v-icon icon="mdi-account-check-outline" size="21" /></button>
         </template>
       </v-tooltip>
-      <v-tooltip v-for="item in todayAssessments" :key="item.id" :text="item.nombre" location="bottom">
+      <v-tooltip v-for="item in todayAssessments" :key="item.id" :text="assessmentTooltip(item)" location="bottom">
         <template #activator="{ props: tooltipProps }">
           <button
             v-bind="tooltipProps"

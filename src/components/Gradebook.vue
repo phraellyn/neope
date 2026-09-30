@@ -46,6 +46,11 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+function todayIso() {
+  const date = new Date()
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 function attendanceItemIds(nodes = []) {
   return nodes.flatMap((node) => {
     if (node?.type === 'group') return attendanceItemIds(node.children || [])
@@ -111,7 +116,7 @@ const dirty = ref(false)
 const bulkStudentDialog = ref(false)
 const bulkStudentText = ref('')
 const itemDialog = ref(false)
-const itemForm = ref({ nombre: '', nombreCorto: '', rubricId: null, type: 'standard' })
+const itemForm = ref({ nombre: '', nombreCorto: '', rubricId: null, type: 'standard', programmingDate: '' })
 const rubrics = ref([])
 const rubricsLoading = ref(false)
 const rubricsLoadedForTeacher = ref('')
@@ -142,7 +147,7 @@ const automaticShortNameStudentIds = new Set()
 const deleteGroupDialog = ref(false)
 const pendingDeleteGroup = ref(null)
 const editNodeDialog = ref(false)
-const editNodeForm = ref({ id: null, nombre: '', nombreCorto: '' })
+const editNodeForm = ref({ id: null, nombre: '', nombreCorto: '', programmingDate: '' })
 const weightDialog = ref(false)
 const weightDialogTitle = ref('')
 const weightDialogParentId = ref(null)
@@ -425,7 +430,7 @@ function removeStudent(studentId) {
 
 async function openItemDialog() {
   if (props.disabled || !props.configurationMode) return
-  itemForm.value = { nombre: '', nombreCorto: '', rubricId: null, type: 'standard' }
+  itemForm.value = { nombre: '', nombreCorto: '', rubricId: null, type: 'standard', programmingDate: todayIso() }
   itemDialog.value = true
   if (!props.teacherId || rubricsLoadedForTeacher.value === props.teacherId) return
   rubricsLoading.value = true
@@ -474,6 +479,7 @@ function addItem() {
     nombreCorto,
     rubric: itemForm.value.type === 'merits' ? null : selectedRubric ? rubricSnapshot(selectedRubric) : null,
     merits: itemForm.value.type === 'merits',
+    ...(selectedRubric && itemForm.value.programmingDate ? { programming: { date: itemForm.value.programmingDate } } : {}),
   }
   structure.value.push(item)
   if (item.rubric) {
@@ -1095,6 +1101,7 @@ function openNodeEditDialog(node) {
     id: node.id,
     nombre: node.nombre || '',
     nombreCorto: node.nombreCorto || '',
+    programmingDate: node.programming?.date || todayIso(),
   }
   editNodeDialog.value = true
 }
@@ -1106,6 +1113,9 @@ function saveNodeEdit() {
   if (!location || !nombre || !nombreCorto) return
   location.node.nombre = nombre
   location.node.nombreCorto = nombreCorto
+  if (location.node.rubric && editNodeForm.value.programmingDate) {
+    location.node.programming = { ...(location.node.programming || {}), date: editNodeForm.value.programmingDate }
+  }
   editNodeDialog.value = false
   markDirty()
 }
@@ -1475,6 +1485,7 @@ defineExpose({
             </div>
             <div v-else class="gradebook-rubric-empty">No hay rúbricas disponibles para {{ localGroup.curso }} · {{ localGroup.asignatura }}.</div>
           </section>
+          <v-text-field v-if="selectedItemRubric" v-model="itemForm.programmingDate" type="date" label="Fecha de programación" variant="outlined" density="compact" hide-details />
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
           <v-spacer />
@@ -1535,6 +1546,7 @@ defineExpose({
         <v-card-text class="gradebook-column-form px-6 pb-2">
           <v-text-field v-model="editNodeForm.nombre" label="Nombre completo" variant="outlined" density="compact" hide-details autofocus />
           <v-text-field v-model="editNodeForm.nombreCorto" label="Nombre corto" variant="outlined" density="compact" hide-details @keyup.enter="saveNodeEdit" />
+          <v-text-field v-if="findNode(editNodeForm.id)?.node?.rubric" v-model="editNodeForm.programmingDate" type="date" label="Fecha de programación" variant="outlined" density="compact" hide-details />
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
           <v-spacer />

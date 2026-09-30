@@ -10,6 +10,34 @@ export const curriculumSources = Object.freeze({
 })
 
 const profiles = {
+  '1eso-refuerzo-matematicas': {
+    course: '1ºESO',
+    subject: 'Refuerzo de Matemáticas',
+    age: '12-13 años',
+    source: `${curriculumSources.eso}; Orden 1736/2023, de 19 de mayo, y Orden 114/2025, de 23 de enero`,
+    scope: [
+      'refuerzo de números naturales, enteros, fracciones y decimales; representación, orden y operaciones',
+      'divisibilidad, potencias sencillas, medidas, proporcionalidad y porcentajes cotidianos',
+      'iniciación al lenguaje algebraico, patrones, ecuaciones lineales elementales y problemas de una o varias operaciones',
+      'perímetros, áreas, figuras planas, tablas, gráficas y probabilidad intuitiva',
+    ],
+    pedagogy: 'Materia de refuerzo flexible: parte de los errores y necesidades del alumno, usa tareas graduadas y contextos próximos, y consolida aprendizajes instrumentales de 1ºESO sin convertirla en una repetición mecánica.',
+    avoid: 'No adelantes contenidos de cursos posteriores ni exijas formalismo que no sea necesario para recuperar las competencias matemáticas básicas.',
+  },
+  '2eso-refuerzo-matematicas': {
+    course: '2ºESO',
+    subject: 'Refuerzo de Matemáticas',
+    age: '13-14 años',
+    source: `${curriculumSources.eso}; Orden 1736/2023, de 19 de mayo, y Orden 114/2025, de 23 de enero`,
+    scope: [
+      'consolidación de enteros, fracciones, decimales, raíces y jerarquía de operaciones',
+      'proporcionalidad directa e inversa, porcentajes, escalas y problemas financieros sencillos',
+      'expresiones algebraicas, ecuaciones elementales y sistemas lineales sencillos',
+      'semejanza, Pitágoras, áreas y volúmenes; tablas, gráficas, estadística y probabilidad básica',
+    ],
+    pedagogy: 'Materia de refuerzo flexible: adapta el punto de partida, trabaja estrategias y comprensión, y recupera aprendizajes de 1º/2ºESO antes de aumentar la abstracción.',
+    avoid: 'No adelantes contenidos de cursos posteriores ni uses técnicas avanzadas como cálculo diferencial, integrales, matrices o trigonometría formal.',
+  },
   '1eso-matematicas': {
     course: '1ºESO',
     subject: 'Matemáticas',

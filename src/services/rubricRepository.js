@@ -192,9 +192,18 @@ export async function loadGlobalLaw() {
 export async function loadSubjectLaw(subjectId) {
   if (!subjectId) return { schemaVersion: 1, specificCompetencies: [], evaluationCriteria: [], sources: [] }
   const snapshot = await getDoc(doc(db, 'especialidades', 'Matemáticas', 'asignaturas', subjectId, 'law', 'lomloe'))
+  const baseSubjectId = {
+    '1eso-refuerzo-matematicas': '1eso-matematicas',
+    '2eso-refuerzo-matematicas': '2eso-matematicas',
+  }[subjectId] || subjectId
   return snapshot.exists()
     ? { id: snapshot.id, ...snapshot.data() }
-    : lomloeMathLaw.subjects[subjectId]
-      ? { ...structuredClone(lomloeMathLaw.subjects[subjectId]), catalogOrigin: 'bundled' }
+    : lomloeMathLaw.subjects[baseSubjectId]
+      ? {
+          ...structuredClone(lomloeMathLaw.subjects[baseSubjectId]),
+          subjectId,
+          subjectTitle: subjectId.endsWith('-refuerzo-matematicas') ? 'Refuerzo de Matemáticas' : lomloeMathLaw.subjects[baseSubjectId].subjectTitle,
+          catalogOrigin: 'bundled-alias',
+        }
       : { schemaVersion: 1, subjectId, specificCompetencies: [], evaluationCriteria: [], sources: [] }
 }

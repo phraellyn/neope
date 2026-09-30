@@ -39,6 +39,20 @@ const adminDb = getFirestore()
 const adminStorage = getStorage()
 const lomloeMathLaw = JSON.parse(readFileSync(new URL('./lomloeMathLaw.json', import.meta.url), 'utf8'))
 
+const lomloeSubjectAliases = Object.freeze({
+  '1eso-refuerzo-matematicas': '1eso-matematicas',
+  '2eso-refuerzo-matematicas': '2eso-matematicas',
+})
+
+function lomloeCatalogForSubject(subjectId) {
+  const baseSubjectId = lomloeSubjectAliases[subjectId] || subjectId
+  const catalog = lomloeMathLaw.subjects?.[baseSubjectId]
+  if (!catalog) return null
+  return subjectId === baseSubjectId
+    ? catalog
+    : { ...catalog, subjectId, subjectTitle: 'Refuerzo de Matemáticas' }
+}
+
 function requireTeacherAccess(request) {
   if (!request.auth || request.auth.token.role !== 'teacher') {
     throw new HttpsError('permission-denied', 'Esta operación requiere una cuenta de profesor.')
@@ -1789,7 +1803,7 @@ export const suggestExerciseCompetencies = onCall({
   const cleanText = (value, maximum = 8_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
   const course = cleanText(request.data?.course, 80)
   const subjectId = cleanText(request.data?.subjectId, 120)
-  const catalog = lomloeMathLaw.subjects?.[subjectId]
+  const catalog = lomloeCatalogForSubject(subjectId)
   if (!catalog) throw new HttpsError('failed-precondition', 'No hay datos LOMLOE para la asignatura seleccionada.')
 
   const segments = (Array.isArray(request.data?.segments) ? request.data.segments : [])
@@ -2009,7 +2023,7 @@ export const generateDocumentContent = onCall({
   const sourceType = clean(request.data?.sourceType, 40)
   const course = clean(request.data?.course, 80)
   const subjectId = clean(request.data?.subjectId, 160)
-  const catalog = lomloeMathLaw.subjects?.[subjectId]
+  const catalog = lomloeCatalogForSubject(subjectId)
   if (!catalog) throw new HttpsError('failed-precondition', 'Selecciona un curso y una asignatura con datos LOMLOE antes de generar.')
 
   const stage = catalog.stage || (course.includes('BTO') ? 'Bachillerato' : 'ESO')

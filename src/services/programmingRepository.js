@@ -207,15 +207,17 @@ export async function addRubricToProgrammingDay({ groupId, date, programmingDayI
     programming: { date, programmingDayId, sessionKey: session.sessionKey || null, instrumentId },
   }
   const initialResults = {}
+  // Las transacciones de Firestore solo pueden leer documentos concretos. Se
+  // obtiene primero la colección de alumnos y se inicializan sus resultados
+  // al crear el instrumento y su ítem de evaluación.
+  const studentsDocument = await getDocs(collection(db, 'grupos', groupId, 'alumnos'))
 
   await runTransaction(db, async (transaction) => {
     const groupReference = doc(db, 'grupos', groupId)
     const dayReference = doc(db, 'grupos', groupId, 'programmingDays', programmingDayId)
-    const studentsReference = query(collection(db, 'grupos', groupId, 'alumnos'))
-    const [groupDocument, dayDocument, studentsDocument] = await Promise.all([
+    const [groupDocument, dayDocument] = await Promise.all([
       transaction.get(groupReference),
       transaction.get(dayReference),
-      transaction.get(studentsReference),
     ])
     if (!groupDocument.exists()) throw new Error('El grupo ya no está disponible.')
     const dayData = dayDocument.exists() ? dayDocument.data() : {}

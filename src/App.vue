@@ -292,8 +292,6 @@ const mathSubjectsById = new Map(mathSubjects.map((subject) => [subject.id, subj
 // Materias que pueden aparecer en el horario, aunque no se clasifiquen todavía
 // en el mapa curricular de ejercicios.
 const scheduleOnlyMathSubjects = Object.freeze([
-  { id: '1eso-refuerzo-matematicas', course: '1ºESO', title: 'Refuerzo de Matemáticas' },
-  { id: '2eso-refuerzo-matematicas', course: '2ºESO', title: 'Refuerzo de Matemáticas' },
   { id: '2eso-matematicas-pendientes', course: '2ºESO', title: 'Matemáticas pendientes' },
   { id: '3eso-refuerzo-matematicas', course: '3ºESO', title: 'Refuerzo de Matemáticas' },
   { id: '3eso-matematicas-pendientes', course: '3ºESO', title: 'Matemáticas pendientes' },

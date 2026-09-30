@@ -1,6 +1,18 @@
 export const mathCurriculum = Object.freeze([
-  { course: '1ºESO', subjects: [{ id: '1eso-matematicas', title: 'Matemáticas' }] },
-  { course: '2ºESO', subjects: [{ id: '2eso-matematicas', title: 'Matemáticas' }] },
+  {
+    course: '1ºESO',
+    subjects: [
+      { id: '1eso-matematicas', title: 'Matemáticas' },
+      { id: '1eso-refuerzo-matematicas', title: 'Refuerzo de Matemáticas', support: true },
+    ],
+  },
+  {
+    course: '2ºESO',
+    subjects: [
+      { id: '2eso-matematicas', title: 'Matemáticas' },
+      { id: '2eso-refuerzo-matematicas', title: 'Refuerzo de Matemáticas', support: true },
+    ],
+  },
   { course: '3ºESO', subjects: [{ id: '3eso-matematicas', title: 'Matemáticas' }] },
   {
     course: '4ºESO',
