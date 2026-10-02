@@ -281,7 +281,6 @@ function printEvaluationSheets() {
   const sheets = students.value.map((student) => {
     const identity = studentIdentities.value.get(student.id) || {}
     const evaluation = evaluationRecords.value[student.id] || defaultEvaluation()
-    const photo = identity.foto || student.foto || ''
     const signature = signatureImages.length
       ? signatureImages[Math.floor(Math.random() * signatureImages.length)]
       : null
@@ -291,7 +290,6 @@ function printEvaluationSheets() {
       <header class="sheet-header">
         <div class="sheet-logos">${logoHtml}</div>
         <div class="sheet-title"><div>INFORME DE EVALUACIÓN INICIAL</div><small>IES África · Refuerzo de Matemáticas</small></div>
-        ${photo ? `<img class="sheet-student-photo" src="${escapeHtml(photo)}" alt="Fotografía del alumno" />` : ''}
       </header>
       <div class="student-line"><strong>ALUMNO/A</strong><span>${escapeHtml(identity.nombre || student.nombre || '')}</span><strong>CURSO</strong><span>${escapeHtml(groupName)}</span></div>
       <section><h2>1. VALORACIÓN GENERAL DE DESARROLLO INICIAL DE LAS COMPETENCIAS CLAVE</h2><div class="general-options">${general}</div></section>
