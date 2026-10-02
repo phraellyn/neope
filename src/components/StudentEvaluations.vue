@@ -251,6 +251,14 @@ function marker(checked) {
   return `<span class="marker${checked ? ' marker-checked' : ''}">${checked ? '●' : '○'}</span>`
 }
 
+function formatReportDate(date = new Date()) {
+  return new Intl.DateTimeFormat('es-ES', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(date)
+}
+
 function printEvaluationSheets() {
   if (loading.value || !students.value.length || selectedPeriod.value !== 'inicial') {
     showAppErrorToast('Selecciona «Inicial» para imprimir los cuestionarios.')
@@ -268,6 +276,7 @@ function printEvaluationSheets() {
   ]
   const logoHtml = printLogos.map(([url, alt]) => `<img src="${url}" alt="${alt}" />`).join('')
   const groupName = props.group?.nombre || props.group?.curso || ''
+  const reportDate = formatReportDate()
   const sheets = students.value.map((student) => {
     const identity = studentIdentities.value.get(student.id) || {}
     const evaluation = evaluationRecords.value[student.id] || defaultEvaluation()
@@ -284,7 +293,7 @@ function printEvaluationSheets() {
       <section><h2>1. VALORACIÓN GENERAL DE DESARROLLO INICIAL DE LAS COMPETENCIAS CLAVE</h2><div class="general-options">${general}</div></section>
       <section><h2>2. ACTITUD GENERAL</h2><p class="instruction">Marque con una opción lo que corresponda.</p><table><thead><tr><th>Aspecto</th>${ATTITUDE_OPTIONS.map((option) => `<th>${escapeHtml(option.title)}</th>`).join('')}</tr></thead><tbody>${attitudes}</tbody></table></section>
       <section class="observations"><h2>OBSERVACIONES DEL TUTOR</h2><p class="observation-note">(fortalezas, aspectos a mejorar, recomendaciones a la familia…)</p><div class="observation-box">${escapeHtml(evaluation.observacionesTutor).replaceAll('\n', '<br>')}</div></section>
-      <footer><div>Fuenlabrada, ______ de __________________ de 2026</div><div class="signature"><strong>EL/LA TUTOR/A</strong><span>Fdo: _______________________________________</span></div><p>Don/Doña ________________________________________, tutor/a legal del alumno/a ________________________, del curso ${escapeHtml(groupName)}, ha recibido el informe de la EVALUACIÓN INICIAL del curso 2026/2027.</p><div class="signature"><span>Firma tutores legales: __________________________</span></div><small>Calle de Portugal, 41 – 28943 FUENLABRADA (MADRID) – C.C. 28077907 – Teléfono: 916073584 – FAX 916085507</small></footer>
+      <footer><div>Fuenlabrada, ${escapeHtml(reportDate)}</div><div class="signature"><strong>EL/LA TUTOR/A</strong><span>Fdo: _______________________________________</span></div><p>Don/Doña ________________________________________, tutor/a legal del alumno/a ________________________, del curso ${escapeHtml(groupName)}, ha recibido el informe de la EVALUACIÓN INICIAL del curso 2026/2027.</p><div class="signature"><span>Firma tutores legales: __________________________</span></div><small>Calle de Portugal, 41 – 28943 FUENLABRADA (MADRID) – C.C. 28077907 – Teléfono: 916073584 – FAX 916085507</small></footer>
     </article>`
   }).join('')
   let printStarted = false
