@@ -158,6 +158,7 @@ const isSavingTeacherProfile = ref(false)
 const teacherProfileError = ref('')
 const profileImageInput = ref(null)
 const profileImageTarget = ref(null)
+const profileSignatureInput = ref(null)
 const exercises = ref([])
 const selectedExerciseId = ref(null)
 const exerciseEditor = ref(emptyExercise())
@@ -1258,6 +1259,7 @@ function emptyTeacherCenter() {
 
 function normalizeTeacherProfile(profile) {
   const centros = Array.isArray(profile?.centros) ? profile.centros : []
+  const firmas = Array.isArray(profile?.firmas) ? profile.firmas : []
   return {
     centros: centros.map((center) => ({
       id: center.id || crypto.randomUUID(),
@@ -1270,6 +1272,12 @@ function normalizeTeacherProfile(profile) {
         url: image.url,
         path: image.path || '',
       })) : [],
+    })),
+    firmas: firmas.filter((image) => image?.url).map((image) => ({
+      id: image.id || crypto.randomUUID(),
+      nombre: image.nombre || 'Firma',
+      url: image.url,
+      path: image.path || '',
     })),
   }
 }
@@ -1348,11 +1356,54 @@ async function removeProfileImage(center, image) {
   await saveTeacherProfile()
 }
 
+function openProfileSignaturePicker() {
+  profileSignatureInput.value?.click()
+}
+
+async function uploadProfileSignatures(event) {
+  const files = [...(event.target.files || [])]
+  event.target.value = ''
+  if (!files.length) return
+  const pngFiles = files.filter((file) => file.type === 'image/png' || file.name.toLowerCase().endsWith('.png'))
+  if (!pngFiles.length) {
+    teacherProfileError.value = 'Las firmas deben estar en formato PNG.'
+    return
+  }
+  isSavingTeacherProfile.value = true
+  teacherProfileError.value = ''
+  try {
+    for (const file of pngFiles) {
+      const imageId = crypto.randomUUID()
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const path = `teachers/${currentTeacherId.value}/profile/signatures/${imageId}-${safeName}`
+      const reference = storageRef(storage, path)
+      await uploadBytes(reference, file, { contentType: 'image/png' })
+      const url = await getDownloadURL(reference)
+      teacherProfile.value.firmas ||= []
+      teacherProfile.value.firmas.push({ id: imageId, nombre: file.name, url, path })
+    }
+    await saveTeacherProfile()
+  } catch (error) {
+    teacherProfileError.value = 'No se han podido subir todas las firmas.'
+    console.error('Error al subir firmas del perfil:', error)
+  } finally {
+    isSavingTeacherProfile.value = false
+  }
+}
+
+async function removeProfileSignature(signature) {
+  teacherProfile.value.firmas = (teacherProfile.value.firmas || []).filter((item) => item.id !== signature.id)
+  if (signature.path) {
+    try { await deleteObject(storageRef(storage, signature.path)) } catch (error) { console.warn('No se pudo eliminar la firma:', error) }
+  }
+  await saveTeacherProfile()
+}
+
 async function saveTeacherProfile() {
   isSavingTeacherProfile.value = true
   teacherProfileError.value = ''
   try {
-    await setDoc(teacherDocument.value, { perfil: { centros: teacherProfile.value.centros } }, { merge: true })
+    await setDoc(teacherDocument.value, { perfil: { centros: teacherProfile.value.centros, firmas: teacherProfile.value.firmas || [] } }, { merge: true })
   } catch (error) {
     teacherProfileError.value = 'No se ha podido guardar el perfil del profesor.'
     console.error('Error al guardar el perfil del profesor:', error)
@@ -5036,6 +5087,7 @@ onBeforeUnmount(() => {
         </section>
         <section v-else-if="active === 'Perfil'" class="teacher-profile-page">
           <input ref="profileImageInput" type="file" accept="image/*" multiple hidden @change="uploadProfileImages">
+          <input ref="profileSignatureInput" type="file" accept=".png,image/png" multiple hidden @change="uploadProfileSignatures">
           <header class="teacher-profile-intro">
             <div>
               <span class="teacher-profile-eyebrow">Perfil profesional</span>
@@ -5044,6 +5096,22 @@ onBeforeUnmount(() => {
             </div>
             <v-avatar size="64" class="teacher-profile-avatar" color="primary"><img v-if="isAdministrator" src="/brand/carlos-sanchez-catala.png" alt=""><span v-else>{{ currentUserInitials }}</span></v-avatar>
           </header>
+          <v-card class="teacher-signatures-card" variant="outlined">
+            <header class="teacher-signatures-header">
+              <div>
+                <strong>Firmas del profesor</strong>
+                <p>Sube una o varias imágenes PNG. Las plantillas podrán utilizarlas como <code>firma.png</code>.</p>
+              </div>
+              <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-signature-freehand" :loading="isSavingTeacherProfile" @click="openProfileSignaturePicker">Añadir firmas PNG</v-btn>
+            </header>
+            <div v-if="teacherProfile.firmas?.length" class="teacher-signatures-grid">
+              <div v-for="signature in teacherProfile.firmas" :key="signature.id" class="teacher-signature-item">
+                <img :src="signature.url" :alt="signature.nombre || 'Firma del profesor'">
+                <v-btn icon="mdi-close" size="x-small" variant="flat" color="error" aria-label="Eliminar firma" @click="removeProfileSignature(signature)" />
+              </div>
+            </div>
+            <p v-else class="teacher-signatures-empty">Todavía no hay firmas añadidas.</p>
+          </v-card>
           <div v-if="!teacherProfile.centros.length" class="teacher-profile-empty">
             <v-icon icon="mdi-school-outline" size="48" />
             <strong>Aún no hay centros registrados</strong>

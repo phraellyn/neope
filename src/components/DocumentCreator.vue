@@ -660,6 +660,8 @@ const currentCenter = computed(() => {
   return centers.find((center) => String(center.curso || '').replace(/\D/g, '') === normalizedYear) || centers[0]
 })
 const currentCenterLogo = computed(() => currentCenter.value?.imagenes?.find((image) => image?.url)?.url || '')
+const teacherSignatureImages = computed(() => (Array.isArray(props.teacherProfile?.firmas) ? props.teacherProfile.firmas : [])
+  .filter((image) => image?.url))
 const filteredDocuments = computed(() => {
   const query = normalizeName(props.libraryQuery)
   if (!query) return documents.value
@@ -1782,7 +1784,8 @@ function documentAssetSignature() {
     .filter((item) => item.type !== 'tool')
     .flatMap((item) => exerciseImageFiles(exerciseForQueue(item)).map((file) => `${item.exerciseId}:${file.path}:${file.url}`))
   const directFiles = sourceFiles.value.map((file) => [file.id, file.name, file.size, file.url || ''].join(':'))
-  return [currentCenterLogo.value, ...exerciseFiles, ...directFiles].join('|')
+  const signatureFiles = teacherSignatureImages.value.map((image) => `${image.path || image.id}:${image.url}`)
+  return [currentCenterLogo.value, ...signatureFiles, ...exerciseFiles, ...directFiles].join('|')
 }
 
 async function documentAssets() {
@@ -1793,6 +1796,10 @@ async function documentAssets() {
     } catch (error) {
       throw new Error(`No se ha podido preparar el logotipo del centro: ${error?.message || 'error desconocido'}`)
     }
+  }
+  if (teacherSignatureImages.value.length) {
+    const selectedSignature = teacherSignatureImages.value[Math.floor(Math.random() * teacherSignatureImages.value.length)]
+    assets['firma.png'] = { url: selectedSignature.url }
   }
   exerciseQueue.value.filter((item) => item.type !== 'tool').forEach((item) => {
     const exercise = exerciseForQueue(item)
