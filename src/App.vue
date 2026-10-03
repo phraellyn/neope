@@ -5534,6 +5534,7 @@ onBeforeUnmount(() => {
             :key="selectedCareerGroup.id"
             :group="selectedCareerGroup"
             :teacher-profile="teacherProfile"
+            :teacher-name="isAdministrator ? 'Carlos Sánchez Catalá' : currentUserName"
           />
           <Classroom
             v-else-if="selectedCareerGroup"

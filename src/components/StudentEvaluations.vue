@@ -9,6 +9,7 @@ import { showAppErrorToast } from '../composables/useAppErrorToast'
 const props = defineProps({
   group: { type: Object, required: true },
   teacherProfile: { type: Object, default: () => ({ centros: [] }) },
+  teacherName: { type: String, default: '' },
 })
 
 const PERIODS = Object.freeze([
@@ -270,13 +271,14 @@ function printEvaluationSheets() {
     return
   }
   const printLogos = [
-    ['/brand/evaluation/comunidad-madrid.png', 'Comunidad de Madrid'],
-    ['/brand/evaluation/fse.png', 'Fondo Social Europeo'],
     ['/brand/evaluation/ies-africa.png', 'IES África'],
+    ['/brand/evaluation/fse.png', 'Fondo Social Europeo'],
+    ['/brand/evaluation/comunidad-madrid.png', 'Comunidad de Madrid'],
   ]
   const logoHtml = printLogos.map(([url, alt]) => `<img src="${url}" alt="${alt}" />`).join('')
   const groupName = props.group?.nombre || props.group?.curso || ''
   const reportDate = formatReportDate()
+  const teacherName = String(props.teacherName || props.teacherProfile?.nombre || '').trim()
   const signatureImages = (Array.isArray(props.teacherProfile?.firmas) ? props.teacherProfile.firmas : []).filter((image) => image?.url)
   const sheets = students.value.map((student) => {
     const identity = studentIdentities.value.get(student.id) || {}
@@ -289,13 +291,13 @@ function printEvaluationSheets() {
     return `<article class="sheet">
       <header class="sheet-header">
         <div class="sheet-logos">${logoHtml}</div>
-        <div class="sheet-title"><div>INFORME DE EVALUACIÓN INICIAL</div><small>IES África · Refuerzo de Matemáticas</small></div>
+        <div class="sheet-title">INFORME DE EVALUACIÓN INICIAL</div>
       </header>
       <div class="student-line"><strong>ALUMNO/A</strong><span>${escapeHtml(identity.nombre || student.nombre || '')}</span><strong>CURSO</strong><span>${escapeHtml(groupName)}</span></div>
       <section><h2>1. VALORACIÓN GENERAL DE DESARROLLO INICIAL DE LAS COMPETENCIAS CLAVE</h2><div class="general-options">${general}</div></section>
       <section><h2>2. ACTITUD GENERAL</h2><p class="instruction">Marque con una opción lo que corresponda.</p><table><thead><tr><th>Aspecto</th>${ATTITUDE_OPTIONS.map((option) => `<th>${escapeHtml(option.title)}</th>`).join('')}</tr></thead><tbody>${attitudes}</tbody></table></section>
       <section class="observations"><h2>OBSERVACIONES DEL TUTOR</h2><p class="observation-note">(fortalezas, aspectos a mejorar, recomendaciones a la familia…)</p><div class="observation-box">${escapeHtml(evaluation.observacionesTutor).replaceAll('\n', '<br>')}</div></section>
-      <footer><div>Fuenlabrada, ${escapeHtml(reportDate)}</div><div class="signature"><strong>EL/LA TUTOR/A</strong><span class="teacher-signature-slot">${signature ? `<img class="teacher-signature-image" src="${escapeHtml(signature.url)}" alt="Firma del profesor" />` : ''}<span>Fdo: _______________________________________</span></span></div><p>Don/Doña ________________________________________, tutor/a legal del alumno/a ________________________, del curso ${escapeHtml(groupName)}, ha recibido el informe de la EVALUACIÓN INICIAL del curso 2026/2027.</p><div class="signature"><span>Firma tutores legales: __________________________</span></div><small>Calle de Portugal, 41 – 28943 FUENLABRADA (MADRID) – C.C. 28077907 – Teléfono: 916073584 – FAX 916085507</small></footer>
+      <footer><div>Fuenlabrada, ${escapeHtml(reportDate)}</div><div class="signature"><strong>EL/LA TUTOR/A</strong><span class="teacher-signature-slot">${signature ? `<img class="teacher-signature-image" src="${escapeHtml(signature.url)}" alt="Firma del profesor" />` : ''}<span>Fdo. ${teacherName ? escapeHtml(teacherName) : '_______________________________________'}</span></span></div><p>Don/Doña ________________________________________, tutor/a legal del alumno/a ________________________, del curso ${escapeHtml(groupName)}, ha recibido el informe de la EVALUACIÓN INICIAL del curso 2026/2027.</p><div class="signature"><span>Firma tutores legales: __________________________</span></div><small>Calle de Portugal, 41 – 28943 FUENLABRADA (MADRID) – C.C. 28077907 – Teléfono: 916073584 – FAX 916085507</small></footer>
     </article>`
   }).join('')
   let printStarted = false
@@ -310,6 +312,22 @@ function printEvaluationSheets() {
     @page{size:A4;margin:12mm}*{box-sizing:border-box}html,body{margin:0;padding:0;color:#1d1d1d;font-family:Arial,Helvetica,sans-serif}.sheet{width:100%;height:273mm;min-height:0;page-break-after:always;padding:5mm 4mm;display:flex;flex-direction:column;gap:4mm}.sheet:last-child{page-break-after:auto}.sheet-header{display:flex;align-items:center;gap:6mm;min-height:27mm;border-bottom:1.2px solid #233f69;padding-bottom:3mm}.sheet-logos{display:flex;align-items:center;gap:3mm;height:24mm;max-width:84mm}.sheet-logos img{max-width:26mm;max-height:23mm;object-fit:contain}.sheet-title{flex:1;color:#203f6a;font-size:16pt;font-weight:800;line-height:1.15}.sheet-title small{display:block;margin-top:2mm;font-size:9pt;font-weight:500}.sheet-student-photo{width:22mm;height:22mm;border:1px solid #b8c5d2;border-radius:50%;object-fit:cover}.student-line{display:grid;grid-template-columns:auto 1fr auto 38mm;gap:3mm;align-items:end;border:1px solid #565656;padding:3mm;font-size:10pt}.student-line span{min-height:5mm;border-bottom:1px solid #565656}.sheet section{margin-top:1mm}.sheet h2{margin:0 0 2.5mm;color:#203f6a;font-size:10.3pt;line-height:1.15}.general-options{display:flex;gap:12mm;padding:1mm 4mm;font-size:10pt}.marker{display:inline-block;width:4.5mm;color:#59616c;font-size:14pt;line-height:.7;vertical-align:-.5mm}.marker-checked{color:#203f6a}.instruction,.observation-note{margin:0 0 2mm;font-size:8.5pt;color:#555}table{width:100%;border-collapse:collapse;font-size:8.6pt}th,td{border:1px solid #555;padding:2.5mm 2mm;text-align:center;vertical-align:middle}th:first-child{width:43%;text-align:left}tbody th{font-weight:600}.observations{flex:1;min-height:39mm}.observation-box{min-height:30mm;border:1px solid #555;padding:3mm;font-size:9pt;line-height:1.3}.sheet footer{margin-top:auto;border-top:1px solid #777;padding-top:3mm;font-size:8pt;line-height:1.25}.signature{display:flex;justify-content:space-between;gap:10mm;margin:4mm 0;align-items:flex-end}.teacher-signature-slot{display:flex;min-width:64mm;align-items:flex-end;flex-direction:column;gap:1mm}.teacher-signature-image{display:block;width:40mm;height:13mm;object-fit:contain}.sheet footer p{margin:3mm 0}.sheet footer>small{display:block;margin-top:4mm;text-align:center;font-size:6.7pt;color:#555}
     @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
   </style></head><body>${sheets}</body></html>`)
+  const printStyle = printWindow.document.createElement('style')
+  printStyle.textContent = `
+    @page{size:A4;margin:10mm}
+    .sheet{height:277mm;padding:10mm 10mm}
+    .sheet-header{flex-direction:column;align-items:stretch;gap:3mm;min-height:38mm;border-bottom:0;padding-bottom:1mm}
+    .sheet-logos{display:grid;width:100%;max-width:none;height:27mm;grid-template-columns:1fr 1fr 1fr;align-items:center;gap:8mm}
+    .sheet-logos img{justify-self:center;max-height:25mm;object-fit:contain}
+    .sheet-logos img:first-child{justify-self:start;max-width:32mm}
+    .sheet-logos img:nth-child(2){max-width:45mm}
+    .sheet-logos img:last-child{justify-self:end;max-width:27mm}
+    .sheet-title{text-align:center;color:#203f6a;font-size:14pt;text-decoration:underline;text-underline-offset:1.2mm}
+    .general-options{flex-direction:column;gap:2mm;padding-left:9mm}
+    .teacher-signature-image{width:60mm!important;height:19.5mm!important;transform:translateY(5mm) scale(1.5);transform-origin:center center}
+    .teacher-signature-slot>span{width:60mm;text-align:center}
+  `
+  printWindow.document.head.appendChild(printStyle)
   printWindow.document.close()
   window.setTimeout(() => {
     if (printWindow.document.readyState === 'complete') startPrint()
