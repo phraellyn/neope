@@ -340,13 +340,9 @@ async function hydrate() {
   try {
     const identities = await loadStudentIdentitiesForGroup(props.group)
     studentIdentities.value = identities
-    const firstStudent = students.value[0]
-    if (firstStudent) {
-      const saved = identities.get(firstStudent.id)?.evaluacionesPrivadas?.[props.group.id]?.[selectedPeriod.value]
-      evaluationRecords.value[firstStudent.id] = saved ? clone(saved) : defaultEvaluation()
-    }
     students.value.forEach((student) => {
-      ensureStudentEvaluation(student.id)
+      const saved = identities.get(student.id)?.evaluacionesPrivadas?.[props.group.id]?.[selectedPeriod.value]
+      evaluationRecords.value[student.id] = saved ? clone(saved) : defaultEvaluation()
     })
   } catch (error) {
     loadError.value = error?.message || 'No se han podido abrir las evaluaciones locales.'
