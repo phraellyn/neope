@@ -1,5 +1,5 @@
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   collection,
   deleteDoc,
@@ -32,7 +32,7 @@ import 'katex/dist/katex.min.css'
 import { auth, db, functions, isAppCheckConfigured, storage } from './services/firebase'
 import MasonryGrid from './components/MasonryGrid.vue'
 import ExerciseCurriculumPicker from './components/ExerciseCurriculumPicker.vue'
-import ExerciseCompetencyEditor from './components/ExerciseCompetencyEditor.vue'
+import ExerciseGradingEditor from './components/ExerciseGradingEditor.vue'
 import ExerciseVariantSelector from './components/ExerciseVariantSelector.vue'
 import MathConceptMap from './components/MathConceptMap.vue'
 import DocumentCreator from './components/DocumentCreator.vue'
@@ -162,6 +162,7 @@ const profileSignatureInput = ref(null)
 const exercises = ref([])
 const selectedExerciseId = ref(null)
 const exerciseEditor = ref(emptyExercise())
+const exerciseEditorBaseline = ref('')
 const exerciseView = ref('search')
 const exerciseSearchQuery = ref('')
 const exerciseSearchCurriculum = ref(emptyCurriculum())
@@ -181,9 +182,20 @@ const selectedExerciseVersion = ref(0)
 const exerciseSearchVersions = ref({})
 const exerciseEditorTab = ref('code')
 const exerciseContentTarget = ref(null)
-const exerciseCompetencyTarget = ref(null)
+const exerciseGradingTarget = ref(null)
 const exerciseAttachmentInput = ref(null)
+const exerciseSourceInput = ref(null)
 const isUploadingExerciseFiles = ref(false)
+const exerciseSourceDialog = ref(false)
+const isGeneratingExerciseFromFiles = ref(false)
+const exerciseSourceOptions = reactive({
+  transcribeLatex: true,
+  inferClassification: true,
+  inferConcepts: true,
+  generateGradingCriteria: true,
+  inferCompetencial: true,
+  generateSolutions: true,
+})
 const isGeneratingPartSolution = ref(null)
 const sessionUploadedAttachmentPaths = new Set()
 const pendingDeletedAttachments = []
@@ -197,6 +209,7 @@ const aiModelOptions = Object.freeze([
   { title: 'GPT-5.6 Sol', value: 'openai/gpt-5.6-sol', subtitle: 'Premium · máxima capacidad' },
   { title: 'GPT-6 Astra', value: 'openai/gpt-6-astra', subtitle: 'Premium · máxima capacidad' },
   { title: 'Claude Fable 5.1', value: 'anthropic/claude-fable-5.1', subtitle: 'Premium · razonamiento y redacción' },
+  { title: 'Claude Sonnet 5.5', value: 'anthropic/claude-sonnet-5.5', subtitle: 'Premium · razonamiento y redacción' },
   { title: 'Kimi K3', value: 'moonshotai/kimi-k3', subtitle: 'Premium · razonamiento de contexto largo' },
 ])
 const selectedAiModel = ref('google/gemini-3-flash-preview')
@@ -219,6 +232,25 @@ const teacherUiErrors = [
   firestoreError,
   exerciseDeleteError,
 ]
+
+function exerciseDraftFingerprint(value = exerciseEditor.value) {
+  return JSON.stringify({
+    id: value?.id || null,
+    enunciado: value?.enunciado || '',
+    curriculum: value?.curriculum || {},
+    archivos: value?.archivos || [],
+    variaciones: value?.variaciones || [],
+    structure: value?.structure || {},
+  })
+}
+
+const exerciseEditorDirty = computed(() => exerciseView.value === 'edit'
+  && Boolean(exerciseEditorBaseline.value)
+  && exerciseDraftFingerprint() !== exerciseEditorBaseline.value)
+
+function confirmDiscardExerciseChanges() {
+  return !exerciseEditorDirty.value || window.confirm('Hay cambios sin guardar en el ejercicio. ¿Quieres descartarlos?')
+}
 
 teacherUiErrors.forEach((source) => {
   let lastPresentedError = ''
@@ -804,7 +836,7 @@ function emptyExercise() {
   const structure = parseExerciseLatex('')
   return {
     id: null,
-    schemaVersion: 3,
+    schemaVersion: 4,
     revision: 0,
     enunciado: '',
     tags: [],
@@ -2454,7 +2486,7 @@ function openNewExercise() {
   exerciseEditor.value = emptyExercise()
   exerciseEditorTab.value = 'code'
   exerciseContentTarget.value = null
-  exerciseCompetencyTarget.value = null
+  exerciseGradingTarget.value = null
   sessionUploadedAttachmentPaths.clear()
   pendingDeletedAttachments.splice(0)
   selectedExerciseVersion.value = 0
@@ -2462,6 +2494,7 @@ function openNewExercise() {
   exercisePreviewTab.value = 'statement'
   exercisePreviewMode.value = 'segmented'
   exerciseView.value = 'edit'
+  exerciseEditorBaseline.value = exerciseDraftFingerprint()
   mountLatexEditor()
 }
 
@@ -2471,7 +2504,7 @@ function editExercise(exercise = selectedExercise.value) {
   exerciseEditor.value = normalizeExercise(exercise)
   exerciseEditorTab.value = 'code'
   exerciseContentTarget.value = null
-  exerciseCompetencyTarget.value = null
+  exerciseGradingTarget.value = null
   sessionUploadedAttachmentPaths.clear()
   pendingDeletedAttachments.splice(0)
   selectedExerciseVersion.value = 0
@@ -2479,13 +2512,15 @@ function editExercise(exercise = selectedExercise.value) {
   exercisePreviewTab.value = 'statement'
   exercisePreviewMode.value = 'segmented'
   exerciseView.value = 'edit'
+  exerciseEditorBaseline.value = exerciseDraftFingerprint()
   exerciseCompilationStatus.value = exerciseEditor.value.compilation?.status || 'ready'
   isCompiling.value = ['queued', 'compiling'].includes(exerciseCompilationStatus.value)
   watchExerciseCompilation(exercise.id)
   mountLatexEditor()
 }
 
-async function cancelExerciseEdit() {
+async function cancelExerciseEdit({ force = false } = {}) {
+  if (!force && !confirmDiscardExerciseChanges()) return
   stopWatchingExerciseCompilation()
   destroyLatexEditor()
   clearExercisePreviews()
@@ -2494,9 +2529,10 @@ async function cancelExerciseEdit() {
   exerciseView.value = 'search'
   exerciseEditor.value = emptyExercise()
   exerciseContentTarget.value = null
-  exerciseCompetencyTarget.value = null
+  exerciseGradingTarget.value = null
   selectedExerciseVersion.value = 0
   exercisePreviewMode.value = 'segmented'
+  exerciseEditorBaseline.value = ''
 }
 
 function selectExerciseEditorTab(tab) {
@@ -2504,8 +2540,8 @@ function selectExerciseEditorTab(tab) {
   if (tab === 'contents' && exerciseContentTarget.value === null) {
     exerciseContentTarget.value = activeExerciseHasSections.value ? 0 : 'exercise'
   }
-  if (tab === 'competencies' && exerciseCompetencyTarget.value === null) {
-    exerciseCompetencyTarget.value = activeExerciseHasSections.value ? 0 : 'exercise'
+  if (tab === 'grading' && exerciseGradingTarget.value === null) {
+    exerciseGradingTarget.value = activeExerciseHasSections.value ? 0 : 'exercise'
   }
   if (tab === 'code') nextTick(() => latexCodeEditor?.requestMeasure())
 }
@@ -2612,27 +2648,22 @@ function selectExercisePartContents(apartadoIndex) {
   selectExerciseEditorTab('contents')
 }
 
-function selectExercisePartCompetencies(apartadoIndex = null) {
-  exerciseCompetencyTarget.value = typeof apartadoIndex === 'number'
+function selectExercisePartGrading(apartadoIndex = null) {
+  exerciseGradingTarget.value = typeof apartadoIndex === 'number'
     ? apartadoIndex
     : activeExerciseHasSections.value ? 0 : 'exercise'
-  selectExerciseEditorTab('competencies')
+  selectExerciseEditorTab('grading')
 }
 
-function updateExerciseCompetencies(structure) {
+function updateExerciseGrading(structure) {
   activeExerciseVersion.value.structure = aggregateExerciseStructure(structure)
-  const hasAchievements = [
-    ...(activeExerciseVersion.value.structure.achievements || []),
-    ...(activeExerciseVersion.value.structure.apartados || []).flatMap((part) => part.achievements || []),
-  ].length > 0
-  if (hasAchievements) exerciseEditor.value.curriculum.competencial = true
 }
 
-function selectedCompetencyTargetLabel() {
-  if (typeof exerciseCompetencyTarget.value === 'number') {
-    return `Competencias del apartado ${String.fromCharCode(97 + exerciseCompetencyTarget.value)}`
+function selectedGradingTargetLabel() {
+  if (typeof exerciseGradingTarget.value === 'number') {
+    return `Criterios del apartado ${String.fromCharCode(97 + exerciseGradingTarget.value)}`
   }
-  return 'Competencias del ejercicio'
+  return 'Criterios de calificación del ejercicio'
 }
 
 function selectedContentTargetLabel() {
@@ -2793,11 +2824,12 @@ function openExerciseFilePicker() {
   exerciseAttachmentInput.value?.click()
 }
 
-async function uploadExerciseFiles(event) {
+async function uploadExerciseFiles(event, { openGenerator = false } = {}) {
   const files = [...(event?.target?.files || [])]
   if (!files.length || isUploadingExerciseFiles.value) return
   isUploadingExerciseFiles.value = true
   exercisesError.value = ''
+  let uploadedCount = 0
   try {
     const exerciseId = ensureExerciseId()
     const rejected = []
@@ -2829,15 +2861,179 @@ async function uploadExerciseFiles(event) {
         size: file.size,
       })
       sessionUploadedAttachmentPaths.add(path)
+      uploadedCount += 1
       imageNumber += 1
     }
     if (rejected.length) exercisesError.value = `No se han añadido: ${rejected.join(', ')}. Usa PNG, JPG o PDF de hasta 5 MB.`
+    if (openGenerator && uploadedCount > 0) {
+      exerciseEditorTab.value = 'files'
+      exerciseSourceDialog.value = true
+    }
   } catch (error) {
     exercisesError.value = error.message || 'No se han podido subir los archivos.'
     console.error('Error al subir archivos del ejercicio:', error)
   } finally {
     if (event?.target) event.target.value = ''
     isUploadingExerciseFiles.value = false
+  }
+}
+
+function openExerciseSourcePicker() {
+  exerciseSourceInput.value?.click()
+}
+
+async function createExerciseFromSourceFiles(event) {
+  if (!event?.target?.files?.length) return
+  openNewExercise()
+  await nextTick()
+  await uploadExerciseFiles(event, { openGenerator: true })
+}
+
+function arrayBufferBase64(buffer) {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return btoa(binary)
+}
+
+async function exerciseFilesForAi() {
+  const files = []
+  let encodedSize = 0
+  for (const file of normalizeExerciseFiles(exerciseEditor.value.archivos).slice(0, 6)) {
+    const response = await fetch(file.url)
+    if (!response.ok) throw new Error(`No se ha podido leer ${file.originalName || file.nombre}.`)
+    const blob = await response.blob()
+    const dataUrl = `data:${file.type || blob.type};base64,${arrayBufferBase64(await blob.arrayBuffer())}`
+    encodedSize += dataUrl.length
+    if (encodedSize > 7_500_000) throw new Error('Los archivos superan el tamaño máximo de 7,5 MB para analizarlos con IA.')
+    files.push({ name: file.compilerName, mimeType: file.type || blob.type, dataUrl })
+  }
+  return files
+}
+
+function exerciseGenerationConceptCatalog() {
+  return mathConceptNodes.value.map((node) => ({
+    id: node.id,
+    title: node.title,
+    path: conceptTitlePath(node.id).join(' · '),
+    selected: normalizeCurriculum(exerciseEditor.value.curriculum).conceptIds.includes(node.id),
+  }))
+}
+
+function gradingCriteriaFromGenerated(items = []) {
+  return items.map((item) => ({
+    id: item.id || globalThis.crypto?.randomUUID?.() || `criterion-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    description: String(item.description || '').trim(),
+    points: Math.max(0, Number(item.points) || 0),
+    source: 'ai',
+    model: selectedAiModel.value,
+  })).filter((item) => item.description)
+}
+
+function generatedExerciseStructure(generated) {
+  const includeSolutions = exerciseSourceOptions.generateSolutions
+  const includeGrading = exerciseSourceOptions.generateGradingCriteria
+  const parts = (generated.parts || []).map((part) => ({
+    id: globalThis.crypto?.randomUUID?.() || `part-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    enunciado: part.statement || '',
+    respuesta: includeSolutions ? part.answer || '' : '',
+    solucion: includeSolutions ? part.workedSolution || '' : '',
+    puntuacion: Number(part.points) || 0,
+    tiempo: Number(part.durationMinutes) || 0,
+    contenidos: exerciseSourceOptions.inferConcepts ? part.contentIds || [] : [],
+    gradingCriteria: includeGrading ? gradingCriteriaFromGenerated(part.achievements) : [],
+  }))
+  return aggregateExerciseStructure({
+    enunciado: generated.statement || '',
+    respuesta: includeSolutions ? generated.answer || '' : '',
+    solucion: includeSolutions ? generated.workedSolution || '' : '',
+    puntuacion: Number(generated.points) || 0,
+    tiempo: Number(generated.durationMinutes) || 0,
+    apartadosEnv: parts.length ? generated.partsEnvironment : null,
+    partsEnvironment: parts.length ? generated.partsEnvironment : null,
+    apartados: parts,
+    final: '',
+    info: generated.info || '',
+    contenidos: exerciseSourceOptions.inferConcepts ? generated.contentIds || [] : [],
+    contenidosGenerales: exerciseSourceOptions.inferConcepts ? generated.contentIds || [] : [],
+    gradingCriteria: includeGrading ? gradingCriteriaFromGenerated(generated.achievements) : [],
+  })
+}
+
+async function generateExerciseFromFiles() {
+  if (!exerciseEditor.value.archivos.length || isGeneratingExerciseFromFiles.value) return
+  if (!isAppCheckConfigured) {
+    exercisesError.value = 'App Check no está configurado en este entorno.'
+    return
+  }
+  isGeneratingExerciseFromFiles.value = true
+  exercisesError.value = ''
+  try {
+    const current = normalizeCurriculum(exerciseEditor.value.curriculum)
+    const currentSubject = mathSubjectsById.get(current.subjectId)
+    const response = await httpsCallable(functions, 'generateDocumentContent', { timeout: 310_000 })({
+      model: selectedAiModel.value,
+      mode: 'exercise',
+      sourceType: 'exercise-image',
+      course: current.course || '',
+      subjectId: current.subjectId || '',
+      subjectTitle: currentSubject?.title || '',
+      selectedConceptIds: current.conceptIds,
+      concepts: exerciseGenerationConceptCatalog(),
+      subjectCatalog: mathSubjects.map((subject) => ({ id: subject.id, course: subject.course, title: subject.title })),
+      generationOptions: { ...exerciseSourceOptions },
+      latex: activeExerciseCode.value,
+      files: await exerciseFilesForAi(),
+      latexCapabilities: {
+        customCommands: ['\\ej', '\\ap', '\\info', '\\M', '\\p', '\\T', '\\t', '\\includegraphics'],
+        environments: ['apartados', 'apartadosc', 'solucion', 'tikzpicture', 'aligned', 'matrizp', 'detp', 'sistemap'],
+      },
+    })
+    const generated = response.data?.generatedExercises?.[0]
+    if (!generated) throw new Error('La IA no ha generado un ejercicio utilizable.')
+    const generatedStructure = generatedExerciseStructure(generated)
+    if (exerciseSourceOptions.transcribeLatex || !activeExerciseCode.value.trim()) {
+      replaceActiveExerciseCode(buildExerciseLatex(generatedStructure, { preserveApartadosEnvironment: true }), generatedStructure)
+      activeExerciseVersion.value.solucionIA = Boolean(exerciseSourceOptions.generateSolutions)
+    } else {
+      const structure = activeExerciseStructure.value
+      if (exerciseSourceOptions.inferConcepts) {
+        structure.contenidosGenerales = generatedStructure.contenidosGenerales
+        structure.contenidos = generatedStructure.contenidos
+        structure.apartados.forEach((part, index) => { part.contenidos = generatedStructure.apartados[index]?.contenidos || part.contenidos })
+      }
+      if (exerciseSourceOptions.generateGradingCriteria) {
+        structure.gradingCriteria = generatedStructure.gradingCriteria
+        structure.apartados.forEach((part, index) => { part.gradingCriteria = generatedStructure.apartados[index]?.gradingCriteria || part.gradingCriteria })
+      }
+      activeExerciseVersion.value.structure = aggregateExerciseStructure(structure)
+    }
+    const inferredSubject = mathSubjectsById.get(response.data?.inferredSubjectId)
+    if (exerciseSourceOptions.inferClassification && inferredSubject) {
+      exerciseEditor.value.curriculum = {
+        ...normalizeCurriculum(exerciseEditor.value.curriculum),
+        course: inferredSubject.course || response.data?.inferredCourse || null,
+        subjectId: inferredSubject.id,
+      }
+    }
+    if (exerciseSourceOptions.inferConcepts) {
+      exerciseEditor.value.curriculum = {
+        ...normalizeCurriculum(exerciseEditor.value.curriculum),
+        conceptIds: [...activeExerciseVersion.value.structure.contenidos],
+      }
+    }
+    if (exerciseSourceOptions.inferCompetencial) {
+      exerciseEditor.value.curriculum.competencial = Boolean(generated.competencial)
+    }
+    exerciseSourceDialog.value = false
+    mountLatexEditor()
+  } catch (error) {
+    exercisesError.value = error?.message || 'No se ha podido crear el ejercicio a partir de los archivos.'
+    showAppErrorToast(exercisesError.value, { copyText: exercisesError.value })
+  } finally {
+    isGeneratingExerciseFromFiles.value = false
   }
 }
 
@@ -2873,7 +3069,7 @@ function selectExerciseVersion(version) {
   if (version === null || version < 0 || version > exerciseEditor.value.variaciones.length) return
   selectedExerciseVersion.value = version
   exerciseContentTarget.value = null
-  exerciseCompetencyTarget.value = null
+  exerciseGradingTarget.value = null
   exerciseCompilationStatus.value = activeExerciseVersion.value.compilation?.status || exerciseEditor.value.compilation?.status || 'ready'
   isCompiling.value = ['queued', 'compiling'].includes(exerciseCompilationStatus.value)
   exercisePreviewTab.value = compiledSolutionPdfUrl.value && exercisePreviewTab.value === 'solution' ? 'solution' : 'statement'
@@ -3336,7 +3532,7 @@ function structuredVariationForSave(variation, previous = {}) {
   variation.analysis = { valid: true, ambiguous: analysis.ambiguous }
   variation.structure = mergeExerciseStructure(analysis.structure, variation.structure || {})
   const candidate = exerciseDocumentStructure(variation.structure, previous, (Number(previous.revision) || 0) + 1)
-  const sourceChanged = Number(previous.schemaVersion || 0) < 3 || compilationSource(candidate) !== compilationSource(previous)
+  const sourceChanged = Number(previous.schemaVersion || 0) < 4 || compilationSource(candidate) !== compilationSource(previous)
   const revision = sourceChanged ? (Number(previous.revision) || 0) + 1 : Number(previous.revision) || 1
   const persisted = {
     ...exerciseDocumentStructure(variation.structure, previous, revision),
@@ -3371,7 +3567,7 @@ async function saveExercise(options = {}) {
     const structure = mergeExerciseStructure(analysis.structure, exerciseEditor.value.structure || {})
     exerciseEditor.value.structure = structure
     const candidateStructure = exerciseDocumentStructure(structure, previousData, (Number(previousData.revision) || 0) + 1)
-    const sourceChanged = Number(previousData.schemaVersion || 0) < 3
+    const sourceChanged = Number(previousData.schemaVersion || 0) < 4
       || compilationSource(candidateStructure) !== compilationSource(previousData)
     const revision = sourceChanged ? (Number(previousData.revision) || 0) + 1 : Number(previousData.revision) || 1
     const persistedStructure = exerciseDocumentStructure(structure, previousData, revision)
@@ -3428,14 +3624,16 @@ async function saveExercise(options = {}) {
     else exercises.value[index] = savedExercise
     exercises.value.sort((a, b) => a.id.localeCompare(b.id))
     selectedExerciseId.value = reference.id
+    exerciseEditorBaseline.value = exerciseDraftFingerprint(savedExercise)
     if (closeAfterSave) {
       stopWatchingExerciseCompilation()
       destroyLatexEditor()
       clearExercisePreviews()
       exerciseEditor.value = emptyExercise()
       selectedExerciseVersion.value = 0
-      exerciseCompetencyTarget.value = null
+      exerciseGradingTarget.value = null
       exerciseView.value = 'search'
+      exerciseEditorBaseline.value = ''
     } else {
       const activeVersionIndex = selectedExerciseVersion.value
       exerciseEditor.value = savedExercise
@@ -3506,7 +3704,7 @@ async function deleteExercise() {
     exercises.value = exercises.value.filter((exercise) => exercise.id !== exerciseId)
     selectedExerciseId.value = null
     selectedExerciseVersion.value = 0
-    exerciseCompetencyTarget.value = null
+    exerciseGradingTarget.value = null
     exerciseEditor.value = emptyExercise()
     exercisePreviewTab.value = 'statement'
     exerciseView.value = 'search'
@@ -4389,6 +4587,14 @@ async function toggleGradebookConfiguration() {
 }
 
 async function setActiveView(view) {
+  if (active.value === 'Ejercicios' && exerciseView.value === 'edit' && view !== 'Ejercicios') {
+    if (!confirmDiscardExerciseChanges()) return
+    await cancelExerciseEdit({ force: true })
+  }
+  if (active.value === 'Documentos' && view !== 'Documentos' && documentWorkflow.value.dirty) {
+    if (!window.confirm('Hay cambios sin guardar en el documento. ¿Quieres descartarlos?')) return
+    documentCreatorRef.value?.backToLibrary?.({ force: true })
+  }
   if (active.value === 'Grupo' && groupView.value === 'programming' && view !== 'Grupo') {
     await programmingRef.value?.flush?.()
   }
@@ -4535,6 +4741,12 @@ function handleLocalIdentityBackupStatus(event) {
   })
 }
 
+function protectUnsavedEditors(event) {
+  if (!exerciseEditorDirty.value && !documentWorkflow.value.dirty) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
 onMounted(() => {
   stopAuthWatch = onAuthStateChanged(auth, async (user) => {
     const sequence = ++authSessionSequence
@@ -4554,6 +4766,7 @@ onMounted(() => {
   window.addEventListener('touchmove', handleExerciseScroll, { passive: true })
   window.addEventListener('pagehide', flushGradebookOnPageHide)
   window.addEventListener(LOCAL_IDENTITY_BACKUP_EVENT, handleLocalIdentityBackupStatus)
+  window.addEventListener('beforeunload', protectUnsavedEditors)
   document.addEventListener('visibilitychange', flushGradebookWhenHidden)
 })
 
@@ -4566,6 +4779,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('touchmove', handleExerciseScroll)
   window.removeEventListener('pagehide', flushGradebookOnPageHide)
   window.removeEventListener(LOCAL_IDENTITY_BACKUP_EVENT, handleLocalIdentityBackupStatus)
+  window.removeEventListener('beforeunload', protectUnsavedEditors)
   document.removeEventListener('visibilitychange', flushGradebookWhenHidden)
   flushGradebookOnPageHide()
   stopWatchingExerciseCompilation()
@@ -5024,6 +5238,26 @@ onBeforeUnmount(() => {
           </template>
         </v-tooltip>
         <v-spacer v-if="active === 'Ejercicios'" />
+        <input
+          v-if="active === 'Ejercicios'"
+          ref="exerciseSourceInput"
+          type="file"
+          accept=".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf"
+          multiple
+          hidden
+          @change="createExerciseFromSourceFiles"
+        />
+        <v-btn
+          v-if="active === 'Ejercicios'"
+          color="primary"
+          variant="tonal"
+          prepend-icon="mdi-image-plus-outline"
+          class="app-toolbar-source-exercise mr-2"
+          :loading="isUploadingExerciseFiles"
+          @click="openExerciseSourcePicker"
+        >
+          Desde imagen/PDF
+        </v-btn>
         <v-btn v-if="active === 'Ejercicios'" color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action app-toolbar-new-exercise mr-2" @click="openNewExercise">Nuevo ejercicio</v-btn>
         <v-spacer v-if="active === 'Ejercicios'" />
         <v-tooltip text="Calendario" location="bottom">
@@ -5238,12 +5472,12 @@ onBeforeUnmount(() => {
                   <v-tabs :model-value="exerciseEditorTab" density="compact" @update:model-value="selectExerciseEditorTab">
                     <v-tab value="code">Código</v-tab>
                     <v-tab value="contents">Contenidos</v-tab>
-                    <v-tab value="competencies">Competencias</v-tab>
+                    <v-tab value="grading">Criterios de calificación</v-tab>
                     <v-tab value="files">Archivos</v-tab>
                   </v-tabs>
                   <v-spacer />
                   <span v-if="exerciseEditorTab === 'contents'" class="exercise-content-toolbar-label">{{ selectedContentTargetLabel() }}</span>
-                  <span v-if="exerciseEditorTab === 'competencies'" class="exercise-content-toolbar-label">{{ selectedCompetencyTargetLabel() }}</span>
+                  <span v-if="exerciseEditorTab === 'grading'" class="exercise-content-toolbar-label">{{ selectedGradingTargetLabel() }}</span>
                   <v-tooltip v-if="exerciseEditorTab === 'code'" text="Formatear código LaTeX" location="bottom">
                     <template #activator="{ props }">
                       <v-btn
@@ -5269,17 +5503,16 @@ onBeforeUnmount(() => {
                     :exercise-counts="editorExerciseCountByConcept"
                   />
                 </div>
-                <div v-show="exerciseEditorTab === 'competencies'" class="exercise-editor-competencies">
-                  <ExerciseCompetencyEditor
+                <div v-show="exerciseEditorTab === 'grading'" class="exercise-editor-competencies">
+                  <ExerciseGradingEditor
                     :model-value="activeExerciseStructure"
-                    :target="exerciseCompetencyTarget"
+                    :target="exerciseGradingTarget"
                     :curriculum="{ ...exerciseEditor.curriculum, ...(exerciseAiCurriculum() || {}) }"
                     :subjects="mathSubjects"
                     :ai-model="selectedAiModel"
                     :latex="activeExerciseCode"
-                    @update:model-value="updateExerciseCompetencies"
-                    @update:target="exerciseCompetencyTarget = $event"
-                    @generated="exerciseEditor.curriculum.competencial = true"
+                    @update:model-value="updateExerciseGrading"
+                    @update:target="exerciseGradingTarget = $event"
                   />
                 </div>
                 <div v-show="exerciseEditorTab === 'files'" class="exercise-editor-files">
@@ -5289,7 +5522,10 @@ onBeforeUnmount(() => {
                       <strong>Archivos del ejercicio</strong>
                       <span>Imágenes y otros recursos que podrá utilizar el código LaTeX.</span>
                     </div>
-                    <v-btn color="primary" variant="tonal" prepend-icon="mdi-paperclip-plus" :loading="isUploadingExerciseFiles" @click="openExerciseFilePicker">Añadir archivos</v-btn>
+                    <div class="exercise-files-action-buttons">
+                      <v-btn v-if="exerciseEditor.archivos.length" color="primary" variant="tonal" prepend-icon="mdi-auto-fix" @click="exerciseSourceDialog = true">Generar desde archivos</v-btn>
+                      <v-btn color="primary" variant="tonal" prepend-icon="mdi-paperclip-plus" :loading="isUploadingExerciseFiles" @click="openExerciseFilePicker">Añadir archivos</v-btn>
+                    </div>
                   </div>
                   <div v-if="exerciseEditor.archivos.length" class="exercise-files-list">
                     <v-card v-for="file in exerciseEditor.archivos" :key="file.path" variant="outlined" class="exercise-file-card">
@@ -5323,8 +5559,8 @@ onBeforeUnmount(() => {
                         <v-tooltip :text="activeExerciseHasSections ? 'Seleccionar contenidos del ejercicio completo' : 'Seleccionar contenidos'" location="bottom">
                           <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-chart-donut-variant" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" :aria-label="activeExerciseHasSections ? 'Seleccionar contenidos del ejercicio completo' : 'Seleccionar contenidos'" @click="selectExercisePartContents(activeExerciseHasSections ? 'global' : 'exercise')" /></template>
                         </v-tooltip>
-                        <v-tooltip :text="activeExerciseHasSections ? 'Desglosar competencias por apartados' : 'Desglosar competencias del ejercicio'" location="bottom">
-                          <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-shield-star-outline" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" :aria-label="activeExerciseHasSections ? 'Desglosar competencias por apartados' : 'Desglosar competencias del ejercicio'" @click="selectExercisePartCompetencies()" /></template>
+                        <v-tooltip :text="activeExerciseHasSections ? 'Definir criterios de calificación por apartados' : 'Definir criterios de calificación'" location="bottom">
+                          <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-format-list-checks" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" :aria-label="activeExerciseHasSections ? 'Definir criterios de calificación por apartados' : 'Definir criterios de calificación'" @click="selectExercisePartGrading()" /></template>
                         </v-tooltip>
                         <v-tooltip v-if="selectedExerciseVersion === 0" text="Generar todas las soluciones" location="bottom">
                           <template #activator="{ props }">
@@ -5402,15 +5638,15 @@ onBeforeUnmount(() => {
                     </div>
                   </article>
 
-                  <article v-for="(apartado, apartadoIndex) in activeExerciseStructure.apartados" v-show="segmentedExercisePreview" :key="apartado.id || apartadoIndex" class="exercise-preview-block" :class="{ 'exercise-preview-block-content-active': (exerciseContentTarget === apartadoIndex && exerciseEditorTab === 'contents') || (exerciseCompetencyTarget === apartadoIndex && exerciseEditorTab === 'competencies') }">
+                  <article v-for="(apartado, apartadoIndex) in activeExerciseStructure.apartados" v-show="segmentedExercisePreview" :key="apartado.id || apartadoIndex" class="exercise-preview-block" :class="{ 'exercise-preview-block-content-active': (exerciseContentTarget === apartadoIndex && exerciseEditorTab === 'contents') || (exerciseGradingTarget === apartadoIndex && exerciseEditorTab === 'grading') }">
                     <div class="exercise-part-toolbar exercise-segment-actions">
                       <strong class="exercise-part-label">{{ String.fromCharCode(97 + apartadoIndex) }}</strong>
                       <v-spacer />
                       <v-tooltip text="Seleccionar contenidos del apartado" location="bottom">
                         <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-chart-donut-variant" size="x-small" rounded="circle" class="exercise-segment-icon" :variant="exerciseContentTarget === apartadoIndex && exerciseEditorTab === 'contents' ? 'flat' : 'tonal'" color="primary" :aria-label="`Seleccionar contenidos del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="selectExercisePartContents(apartadoIndex)" /></template>
                       </v-tooltip>
-                      <v-tooltip text="Desglosar competencias del apartado" location="bottom">
-                        <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-shield-star-outline" size="x-small" rounded="circle" class="exercise-segment-icon" :variant="exerciseCompetencyTarget === apartadoIndex && exerciseEditorTab === 'competencies' ? 'flat' : 'tonal'" color="primary" :aria-label="`Desglosar competencias del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="selectExercisePartCompetencies(apartadoIndex)" /></template>
+                      <v-tooltip text="Definir criterios de calificación del apartado" location="bottom">
+                        <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-format-list-checks" size="x-small" rounded="circle" class="exercise-segment-icon" :variant="exerciseGradingTarget === apartadoIndex && exerciseEditorTab === 'grading' ? 'flat' : 'tonal'" color="primary" :aria-label="`Definir criterios de calificación del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="selectExercisePartGrading(apartadoIndex)" /></template>
                       </v-tooltip>
                       <v-tooltip v-if="!apartado.solucion" text="Generar solución de este apartado" location="bottom">
                         <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-auto-fix" size="x-small" rounded="circle" class="exercise-segment-icon" variant="tonal" color="primary" :loading="isGeneratingPartSolution === apartadoIndex" :disabled="isGeneratingPartSolution !== null" :aria-label="`Generar solución del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="generateExercisePartSolution(apartadoIndex)" /></template>
@@ -5740,6 +5976,28 @@ onBeforeUnmount(() => {
           <v-spacer />
           <v-btn color="primary" variant="tonal" :disabled="isSavingMathConcepts" @click="deleteMathConceptKeepingChildren()">Conservar descendientes</v-btn>
           <v-btn color="error" variant="flat" :disabled="isSavingMathConcepts" @click="deleteMathConceptBranch()">Borrar descendientes</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="exerciseSourceDialog" max-width="620" persistent>
+      <v-card>
+        <v-card-title class="d-flex align-center"><v-icon icon="mdi-image-auto-adjust" class="mr-2" />Crear ejercicio con IA</v-card-title>
+        <v-card-text>
+          <p class="mb-4">Elige qué partes debe completar el modelo a partir de las imágenes o PDF adjuntos.</p>
+          <div class="exercise-source-options">
+            <v-checkbox v-model="exerciseSourceOptions.transcribeLatex" label="Transcribir y maquetar el código LaTeX" hide-details density="compact" />
+            <v-checkbox v-model="exerciseSourceOptions.inferClassification" label="Elegir curso y asignatura" hide-details density="compact" />
+            <v-checkbox v-model="exerciseSourceOptions.inferConcepts" label="Elegir contenidos" hide-details density="compact" />
+            <v-checkbox v-model="exerciseSourceOptions.generateGradingCriteria" label="Crear criterios de calificación" hide-details density="compact" />
+            <v-checkbox v-model="exerciseSourceOptions.inferCompetencial" label="Detectar si es competencial" hide-details density="compact" />
+            <v-checkbox v-model="exerciseSourceOptions.generateSolutions" label="Generar respuestas y resoluciones" hide-details density="compact" />
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" :disabled="isGeneratingExerciseFromFiles" @click="exerciseSourceDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" variant="flat" :loading="isGeneratingExerciseFromFiles" @click="generateExerciseFromFiles">Generar</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

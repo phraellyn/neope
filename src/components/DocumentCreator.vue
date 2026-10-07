@@ -11,6 +11,8 @@ import ExerciseVariantSelector from './ExerciseVariantSelector.vue'
 import DocumentPdfPreview from './DocumentPdfPreview.vue'
 import DocumentCodeEditor from './DocumentCodeEditor.vue'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
+import DocumentAssessmentAlignmentEditor from './DocumentAssessmentAlignmentEditor.vue'
+import DocumentQueueChildren from './DocumentQueueChildren.vue'
 import MasonryGrid from './MasonryGrid.vue'
 import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, mergeExerciseStructure, parseExerciseLatex } from '../utils/exerciseStructure'
 import { compactExerciseConceptLabel, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
@@ -103,6 +105,7 @@ const sourceFileInput = ref(null)
 const sourceFiles = ref([])
 const isPreparingSourceFiles = ref(false)
 const sourceLatexDraft = ref('')
+const documentEditorBaseline = ref('')
 // El creador actual sigue trabajando con una cola para conservar su interfaz,
 // pero esa cola ya es la lista de bloques del modelo de contenido común.
 const exerciseQueue = computed({
@@ -152,6 +155,7 @@ const dragPayload = ref(null)
 const viewedDocument = ref(null)
 const viewerAssessmentExercises = ref([])
 const viewerAssessmentLoading = ref(false)
+const assessmentAlignmentDialog = ref(false)
 const queueStructureCache = new WeakMap()
 const grayscaleLogoCache = new Map()
 const generatedSegmentArtifacts = new Map()
@@ -479,19 +483,45 @@ function parseTemplateMetadata(code = '') {
   try {
     const markerMetadata = parseTemplateMarkers(code)
     const fields = markerMetadata.fields
-    if (!fields.length) return null
-    const declaredTools = [...code.matchAll(/^\s*%\s*neope:tool\s+(\{.*\})\s*$/gm)]
+    const explicitTools = [...code.matchAll(/^\s*%\s*neope:tool\s+(\{.*\})\s*$/gm)]
       .flatMap((match) => {
         try { return [JSON.parse(match[1])] } catch { return [] }
       })
+    const compactTools = [...code.matchAll(/^\s*%%%\s*([^,\n]+),([^,\n]+),(.+?)\s*$/gm)].flatMap((match) => {
+      const label = match[1].trim()
+      const description = match[2].trim()
+      let latex = match[3].trim().replace(/\s*%%%\s*$/, '').trim()
+      if (!latex.startsWith('\\')) return []
+      const argumentsList = []
+      latex = latex.replace(/\{([^{}]+)\}/g, (source, argumentLabel) => {
+        if (/^[A-Za-z@*]+$/.test(argumentLabel) && /^\\begin/.test(latex) && argumentsList.length === 0) return source
+        const key = normalizeName(argumentLabel).replace(/[^a-z0-9]+/g, '-') || `arg${argumentsList.length + 1}`
+        argumentsList.push({ key, label: argumentLabel.trim(), type: 'text', default: '' })
+        return `{{{${key}}}}`
+      })
+      const environment = match[3].trim().match(/^\\begin\{([^{}]+)\}/)?.[1]
+      return [{
+        id: normalizeName(label).replace(/[^a-z0-9]+/g, '-') || `tool-${explicitTools.length + argumentsList.length}`,
+        label,
+        description,
+        kind: environment ? 'environment' : 'command',
+        ...(environment ? { begin: latex, end: `\\end{${environment}}` } : { code: latex }),
+        arguments: argumentsList,
+      }]
+    })
+    const declaredTools = [...explicitTools, ...compactTools]
     const tools = declaredTools
-      .filter((tool) => tool?.id && (tool.code || tool.command))
+      .filter((tool) => tool?.id && (tool.code || tool.command || tool.begin || tool.environment))
       .map((tool) => ({
         id: String(tool.id),
         label: tool.label || tool.name || tool.id,
         description: tool.description || 'Inserta un bloque LaTeX en el documento.',
         icon: tool.icon || 'mdi-tools',
-        code: tool.code || `\\${String(tool.command).replace(/^\\/, '')}`,
+        kind: tool.kind === 'environment' || tool.begin || tool.environment ? 'environment' : 'command',
+        behavior: tool.behavior || '',
+        code: tool.code || (tool.command ? `\\${String(tool.command).replace(/^\\/, '')}` : ''),
+        begin: tool.begin || (tool.environment ? `\\begin{${tool.environment}}` : ''),
+        end: tool.end || (tool.environment ? `\\end{${tool.environment}}` : ''),
         arguments: Array.isArray(tool.arguments) ? tool.arguments.filter((argument) => argument?.key && argument?.label).map((argument) => ({
           key: String(argument.key),
           label: String(argument.label),
@@ -501,6 +531,7 @@ function parseTemplateMetadata(code = '') {
           max: argument.max,
         })) : [],
       }))
+    if (!fields.length && !tools.length) return null
     return {
       name: 'Documento',
       command: markerMetadata.command || 'logo',
@@ -671,38 +702,31 @@ const filteredDocuments = computed(() => {
     ...Object.values(documentData.campos || {}),
   ].join(' ')).includes(query))
 })
-const selectedExercises = computed(() => exerciseQueue.value.filter((item) => item.type !== 'tool'))
+function flattenDocumentBlocks(blocks = []) {
+  return (Array.isArray(blocks) ? blocks : []).flatMap((block) => [
+    block,
+    ...(block?.type === 'tool' ? flattenDocumentBlocks(block.children) : []),
+  ])
+}
+
+function mapDocumentBlocks(blocks = [], mapper) {
+  return blocks.map((block) => {
+    const mapped = mapper(block)
+    return mapped?.type === 'tool'
+      ? { ...mapped, children: mapDocumentBlocks(mapped.children || [], mapper) }
+      : mapped
+  })
+}
+
+const selectedExercises = computed(() => flattenDocumentBlocks(exerciseQueue.value).filter((item) => item.type !== 'tool'))
 const documentTools = computed(() => {
-  const declared = selectedMetadata.value.tools || []
-  const builtins = []
-  builtins.push({
-    id: 'obligatorios',
-    label: 'Obligatorios',
-    description: 'Inicia una sección de ejercicios obligatorios',
-    icon: '',
-    code: '\\item[] \\textsf{\\textbf{El alumno debe responder obligatoriamente los siguientes ejercicios}}',
-    arguments: [],
-  })
-  builtins.push({
-    id: 'optativos',
-    label: 'Optatividad',
-    description: 'Inicia una sección de ejercicios optativos',
-    icon: '',
-    code: null,
-    arguments: [{ key: 'count', label: 'Ejercicios a elegir', type: 'number', default: 1, min: 1 }],
-  })
-  builtins.push({
-    id: 'salto-pagina',
-    label: 'Salto de página',
-    description: 'Inserta un salto de página',
-    icon: '',
-    code: '\\newpage',
-    arguments: [],
-  })
-  const tools = [...declared, ...builtins]
-  return tools
-    .filter((tool, index) => tools.findIndex((candidate) => candidate.id === tool.id) === index)
-    .sort((left, right) => ({ obligatorios: 0, optativos: 1, 'salto-pagina': 2 }[left.id] ?? 3) - ({ obligatorios: 0, optativos: 1, 'salto-pagina': 2 }[right.id] ?? 3))
+  if (!selectedTemplates.value.length) return []
+  const definitions = selectedTemplates.value.map((template) => new Map((template.metadata.tools || []).map((tool) => [tool.id, tool])))
+  const commonIds = [...definitions[0].keys()].filter((id) => definitions.every((tools) => tools.has(id)))
+  return commonIds.map((id) => ({
+    ...definitions[0].get(id),
+    templateDefinitions: Object.fromEntries(selectedTemplates.value.map((template, index) => [template.key, definitions[index].get(id)])),
+  }))
 })
 const assessmentFieldsComplete = computed(() => !documentAssessment.evaluable
   || Boolean(effectiveAssessmentGroupId.value && documentAssessment.shortName.trim()))
@@ -740,7 +764,23 @@ const workflowState = computed(() => ({
   isSaving: isSaving.value,
   totalSteps: lastStep.value,
   canSave: currentStep.value === lastStep.value && Boolean(previewUrl.value) && !isCompiling.value,
+  dirty: mode.value === 'editor' && Boolean(documentEditorBaseline.value) && documentFingerprint() !== documentEditorBaseline.value,
 }))
+
+function documentFingerprint() {
+  return JSON.stringify({
+    selectedTemplateKeys: selectedTemplateKeys.value,
+    fields: { ...fieldValues },
+    assessment: { ...documentAssessment },
+    curriculum: documentCurriculum.value,
+    content: serializeDocumentContent(documentContent.value),
+    sourceLatex: sourceLatexDraft.value,
+  })
+}
+
+function markDocumentBaseline() {
+  documentEditorBaseline.value = documentFingerprint()
+}
 
 watch(workflowState, (state) => emit('state-change', state), { immediate: true })
 watch(selectedPreviewTemplateKey, (key) => {
@@ -817,6 +857,7 @@ function generationExercisePayload(item) {
       answer: part.respuesta,
       workedSolution: part.solucion,
       contentIds: part.contenidos || [],
+      gradingCriteria: part.gradingCriteria || [],
     }))
     : [{
       segmentIndex: -1,
@@ -825,6 +866,7 @@ function generationExercisePayload(item) {
       answer: structure.respuesta,
       workedSolution: structure.solucion,
       contentIds: structure.contenidos || [],
+      gradingCriteria: structure.gradingCriteria || [],
     }]
   return {
     sourceBlockId: item.blockId,
@@ -883,7 +925,7 @@ async function compileGeneratedSegment(code, preambleName, assets) {
 }
 
 async function compileGeneratedSegmentPreviews(blocks) {
-  const generatedBlocks = blocks.filter((block) => block.type !== 'tool' && block.snapshot)
+  const generatedBlocks = flattenDocumentBlocks(blocks).filter((block) => block.type !== 'tool' && block.snapshot)
   if (!generatedBlocks.length) return
   const template = exercisePreambleTemplate()
   if (!template) throw new Error('No se encuentra la plantilla «ejercicio» necesaria para crear la matriz de evaluación.')
@@ -931,7 +973,7 @@ function generatedSnapshot(generated, curriculum, index) {
     puntuacion: part.points,
     tiempo: part.durationMinutes,
     contenidos: part.contentIds || [],
-    achievements: part.achievements || [],
+    gradingCriteria: (part.achievements || []).map(({ description, points }) => ({ description, points, source: 'ai', model: documentAiModel.value })),
   }))
   const structure = aggregateExerciseStructure({
     enunciado: generated.statement,
@@ -946,7 +988,7 @@ function generatedSnapshot(generated, curriculum, index) {
     info: generated.info,
     contenidosGenerales: generated.contentIds || [],
     contenidos: generated.contentIds || [],
-    achievements: generated.achievements || [],
+    gradingCriteria: (generated.achievements || []).map(({ description, points }) => ({ description, points, source: 'ai', model: documentAiModel.value })),
   })
   const id = `document-generated-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${index}`}`
   const code = buildExerciseLatex(structure)
@@ -955,6 +997,11 @@ function generatedSnapshot(generated, curriculum, index) {
     enunciado: code,
     codigo: code,
     structure,
+    assessment: {
+      segments: parts.length
+        ? Object.fromEntries(parts.map((part, partIndex) => [part.id, generated.parts?.[partIndex]?.achievements || []]))
+        : { exercise: generated.achievements || [] },
+    },
     curriculum: {
       course: curriculum.course,
       subjectId: curriculum.subjectId,
@@ -971,11 +1018,14 @@ function generatedSnapshot(generated, curriculum, index) {
 function alignedSnapshot(item, alignments, curriculum) {
   const original = exerciseForQueue(item)
   const structure = structureWithQueueMetrics(item)
+  const assessment = { segments: {} }
   alignments.filter((entry) => entry.sourceBlockId === item.blockId).forEach((entry) => {
     const target = entry.segmentIndex < 0 ? structure : structure.apartados[entry.segmentIndex]
     if (!target) return
     target.contenidos = entry.contentIds || []
-    target.achievements = entry.achievements || []
+    target.gradingCriteria = (entry.achievements || []).map(({ description, points }) => ({ description, points, source: 'ai', model: documentAiModel.value }))
+    const segmentId = entry.segmentIndex < 0 ? 'exercise' : target.id
+    assessment.segments[segmentId] = entry.achievements || []
   })
   const aggregated = aggregateExerciseStructure(structure)
   const active = activeVersion(original, item.version)
@@ -987,6 +1037,7 @@ function alignedSnapshot(item, alignments, curriculum) {
     enunciado: code,
     codigo: code,
     structure: aggregated,
+    assessment,
     curriculum: {
       ...(original?.curriculum || {}),
       course: curriculum.course || original?.curriculum?.course,
@@ -1040,7 +1091,7 @@ async function generateOrRegenerateContent() {
     })
     let blocks
     if (alignOnly) {
-      blocks = exerciseQueue.value.map((item) => item.type === 'tool' ? item : {
+      blocks = mapDocumentBlocks(exerciseQueue.value, (item) => item.type === 'tool' ? item : {
         ...item,
         version: 0,
         generated: false,
@@ -1146,7 +1197,7 @@ function cardConceptLabel(exercise) {
 const matchingExercises = computed(() => {
   const query = normalizeName(exerciseQuery.value)
   const filter = documentCurriculum.value
-  const queuedIds = new Set(exerciseQueue.value.filter((item) => item.type !== 'tool').map((item) => item.exerciseId))
+  const queuedIds = new Set(selectedExercises.value.map((item) => item.exerciseId))
   return props.exercises.filter((exercise) => {
     if (queuedIds.has(exercise.id)) return false
     const searchText = normalizeName(exerciseStatementText(exercise))
@@ -1384,23 +1435,80 @@ function queueExercisePdf(item) {
   return activeVersion(exercise, item.version)?.pdf?.enunciado || ''
 }
 
-const assessmentPreviewExercises = computed(() => exerciseQueue.value
-  .filter((item) => item.type !== 'tool')
+const assessmentPreviewExercises = computed(() => selectedExercises.value
   .map((item, index) => {
     const exercise = exerciseForQueue(item)
     const active = activeVersion(exercise, item.version)
     const structure = versionStructure(exercise, item.version)
     return assessmentExerciseModel({
       exerciseId: item.exerciseId,
+      sourceBlockId: item.blockId,
       version: Number(item.version) || 0,
       structure: {
         ...structure,
         pdfenunciadocompleto: structure.pdfenunciadocompleto || active?.pdf?.enunciado || '',
         pdfsolucioncompleto: structure.pdfsolucioncompleto || active?.pdf?.resuelto || '',
       },
+      assessment: item.snapshot?.assessment || {},
       order: index,
     })
   }))
+
+function emptyAchievementFromCriterion(criterion) {
+  return {
+    id: criterion.id || globalThis.crypto?.randomUUID?.() || `achievement-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    description: criterion.description || '',
+    points: Number(criterion.points) || 0,
+    alignment: { criterionIds: [], descriptorEvidence: [], source: 'manual' },
+  }
+}
+
+function ensureAssessmentSnapshots() {
+  selectedExercises.value.forEach((item) => {
+    if (!item.snapshot) {
+      const original = props.exercises.find((exercise) => exercise.id === item.exerciseId)
+      const active = activeVersion(original, item.version)
+      const structure = structureWithQueueMetrics(item)
+      item.snapshot = {
+        ...(original || {}),
+        ...(active || {}),
+        id: item.exerciseId,
+        enunciado: buildExerciseLatex(structure),
+        codigo: buildExerciseLatex(structure),
+        structure,
+        variaciones: [],
+      }
+    }
+    item.snapshot.assessment ||= { segments: {} }
+    item.snapshot.assessment.segments ||= {}
+    const structure = item.snapshot.structure || structureWithQueueMetrics(item)
+    if (structure.apartados?.length) {
+      structure.apartados.forEach((part) => {
+        if (!Array.isArray(item.snapshot.assessment.segments[part.id])) {
+          item.snapshot.assessment.segments[part.id] = (part.gradingCriteria || []).map(emptyAchievementFromCriterion)
+        }
+      })
+    } else if (!Array.isArray(item.snapshot.assessment.segments.exercise)) {
+      item.snapshot.assessment.segments.exercise = (structure.gradingCriteria || []).map(emptyAchievementFromCriterion)
+    }
+  })
+  exerciseQueue.value = [...exerciseQueue.value]
+}
+
+function openAssessmentAlignment() {
+  ensureAssessmentSnapshots()
+  assessmentAlignmentDialog.value = true
+  invalidateContentPreview()
+}
+
+function updateDocumentAchievementAlignment(achievement, alignment) {
+  const item = selectedExercises.value.find((candidate) => candidate.blockId === achievement.sourceBlockId)
+  const list = item?.snapshot?.assessment?.segments?.[achievement.segmentId]
+  const target = list?.find((candidate) => candidate.id === achievement.id)
+  if (!target) return
+  target.alignment = alignment
+  exerciseQueue.value = [...exerciseQueue.value]
+}
 
 const isAssessmentPreviewSelected = computed(() => selectedPreviewTemplateKey.value === ASSESSMENT_PREVIEW_KEY)
 
@@ -1467,7 +1575,8 @@ function queueApartadoPdf(item, apartadoIndex) {
 
 function removeQueuedBlock(block) {
   if (!block?.blockId) return
-  exerciseQueue.value = exerciseQueue.value.filter((item) => item.blockId !== block.blockId)
+  removeBlockFromTree(exerciseQueue.value, block.blockId)
+  exerciseQueue.value = [...exerciseQueue.value]
   invalidateContentPreview()
 }
 
@@ -1497,18 +1606,18 @@ function isTool(item) {
   return item?.type === 'tool'
 }
 
-function exerciseOrder(index) {
-  return exerciseQueue.value.slice(0, index + 1).filter((item) => !isTool(item)).length
+function exerciseOrder(index, siblings = exerciseQueue.value) {
+  return siblings.slice(0, index + 1).filter((item) => !isTool(item)).length
 }
 
 function isSectionBoundaryTool(item) {
-  return isTool(item) && ['obligatorios', 'optativos'].includes(item.toolId)
+  return isTool(item) && ['required-section', 'optional-section'].includes(toolForQueue(item)?.behavior)
 }
 
-function exercisesAfterTool(index, toolId) {
+function exercisesAfterTool(index, siblings = exerciseQueue.value) {
   let count = 0
-  for (let cursor = index + 1; cursor < exerciseQueue.value.length; cursor += 1) {
-    const item = exerciseQueue.value[cursor]
+  for (let cursor = index + 1; cursor < siblings.length; cursor += 1) {
+    const item = siblings[cursor]
     // La sección termina al encontrar cualquier otro separador de sección;
     // los saltos de página no son separadores y se ignoran aquí.
     if (isSectionBoundaryTool(item)) break
@@ -1517,36 +1626,36 @@ function exercisesAfterTool(index, toolId) {
   return count
 }
 
-function exercisesBeforeTool(index) {
+function exercisesBeforeTool(index, siblings = exerciseQueue.value) {
   let count = 0
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const item = exerciseQueue.value[cursor]
+    const item = siblings[cursor]
     if (isSectionBoundaryTool(item)) break
     count += 1
   }
   return count
 }
 
-function exercisesAfterAnyBoundary(index) {
+function exercisesAfterAnyBoundary(index, siblings = exerciseQueue.value) {
   let count = 0
-  for (let cursor = index + 1; cursor < exerciseQueue.value.length; cursor += 1) {
-    if (!isTool(exerciseQueue.value[cursor])) count += 1
+  for (let cursor = index + 1; cursor < siblings.length; cursor += 1) {
+    if (!isTool(siblings[cursor])) count += 1
   }
   return count
 }
 
-function exercisesAfterAnyTool(index) {
+function exercisesAfterAnyTool(index, siblings = exerciseQueue.value) {
   let count = 0
-  for (let cursor = index + 1; cursor < exerciseQueue.value.length; cursor += 1) {
-    const item = exerciseQueue.value[cursor]
+  for (let cursor = index + 1; cursor < siblings.length; cursor += 1) {
+    const item = siblings[cursor]
     if (isSectionBoundaryTool(item)) break
     count += 1
   }
   return count
 }
 
-function optionalToolChoiceOptions(index) {
-  const count = exercisesAfterTool(index, 'optativos')
+function optionalToolChoiceOptions(index, siblings = exerciseQueue.value) {
+  const count = exercisesAfterTool(index, siblings)
   return Array.from({ length: Math.max(0, count - 1) }, (_, option) => option + 1)
 }
 
@@ -1575,26 +1684,43 @@ function addTool(tool) {
   invalidateContentPreview()
 }
 
-function toolCode(item, index = -1) {
-  const tool = toolForQueue(item)
-  if (!tool) return ''
+function fillToolTemplate(value, args) {
+  return String(value || '').replace(/\{\{\s*([A-Za-z][\w-]*)\s*\}\}/g, (_, key) => String(args[key] ?? ''))
+}
+
+function toolCode(item, index = -1, template = selectedTemplate.value, siblings = exerciseQueue.value) {
+  const sharedTool = toolForQueue(item)
+  if (!sharedTool) return ''
+  const tool = sharedTool.templateDefinitions?.[template?.key] || sharedTool
   const args = toolArguments(item, tool)
-  if (tool.id === 'obligatorios') {
-    if (index >= 0 && !exercisesAfterAnyTool(index)) return ''
-    return '\\obligatorios'
+  if (tool.behavior === 'required-section') {
+    if (index >= 0 && !exercisesAfterAnyTool(index, siblings)) return ''
+    return fillToolTemplate(tool.code, args)
   }
-  if (tool.id === 'salto-pagina') {
-    if (index >= 0 && (!exercisesBeforeTool(index) || !exercisesAfterAnyBoundary(index))) return ''
-    return '\\salto'
+  if (tool.behavior === 'page-break') {
+    if (index >= 0 && (!exercisesBeforeTool(index, siblings) || !exercisesAfterAnyBoundary(index, siblings))) return ''
+    return fillToolTemplate(tool.code, args)
   }
-  if (index >= 0 && (!exercisesBeforeTool(index) || !exercisesAfterAnyTool(index))) return ''
-  if (tool.id === 'optativos') {
-    const available = index >= 0 ? exercisesAfterTool(index, tool.id) : Number(args.count || 0) + 1
+  if (tool.behavior === 'optional-section') {
+    if (index >= 0 && (!exercisesBeforeTool(index, siblings) || !exercisesAfterAnyTool(index, siblings))) return ''
+    const available = index >= 0 ? exercisesAfterTool(index, siblings) : Number(args.count || 0) + 1
     if (available <= 1) return ''
     const count = Math.min(Math.max(1, Number(args.count) || 1), available - 1)
-    return `\\optativos{${numberToSpanish(count)}}{${numberToSpanish(available)}}`
+    return fillToolTemplate(tool.code, { ...args, count, available, countWord: numberToSpanish(count), availableWord: numberToSpanish(available) })
   }
-  return String(tool.code || '').replace(/\{\{\s*([A-Za-z][\w-]*)\s*\}\}/g, (_, key) => String(args[key] ?? ''))
+  if (tool.kind === 'environment') {
+    const content = renderDocumentBlocks(item.children || [], template)
+    return [fillToolTemplate(tool.begin, args), content, fillToolTemplate(tool.end, args)].filter(Boolean).join('\n')
+  }
+  return fillToolTemplate(tool.code, args)
+}
+
+function renderDocumentBlocks(blocks = [], template = selectedTemplate.value) {
+  return blocks.map((item, index) => isTool(item)
+    ? toolCode(item, index, template, blocks)
+    : queueExerciseCode(item, template))
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 function numberToSpanish(value) {
@@ -1602,38 +1728,80 @@ function numberToSpanish(value) {
   return words[Number(value)] || String(value)
 }
 
-function dropOnQueueSection(event, section, targetBlockId = null) {
+function findBlockContainer(blocks, blockId) {
+  for (const block of blocks) {
+    if (block.blockId === blockId) return { block, children: blocks }
+    const nested = findBlockContainer(block.children || [], blockId)
+    if (nested) return nested
+  }
+  return null
+}
+
+function removeBlockFromTree(blocks, blockId) {
+  const index = blocks.findIndex((block) => block.blockId === blockId)
+  if (index !== -1) return blocks.splice(index, 1)[0]
+  for (const block of blocks) {
+    const removed = removeBlockFromTree(block.children || [], blockId)
+    if (removed) return removed
+  }
+  return null
+}
+
+function destinationChildren(containerBlockId = null) {
+  if (!containerBlockId) return exerciseQueue.value
+  const target = findBlockContainer(exerciseQueue.value, containerBlockId)?.block
+  if (!target || toolForQueue(target)?.kind !== 'environment') return exerciseQueue.value
+  target.children ||= []
+  return target.children
+}
+
+function blockContains(block, blockId) {
+  if (!block || !blockId) return false
+  if (block.blockId === blockId) return true
+  return (block.children || []).some((child) => blockContains(child, blockId))
+}
+
+function dropOnQueueSection(event, section, targetBlockId = null, containerBlockId = null) {
   event.preventDefault()
   const payload = dragPayload.value
   dragPayload.value = null
   if (!payload) return
+  const destination = destinationChildren(containerBlockId)
   if (payload.type === 'exercise') {
     const exercise = props.exercises.find((item) => item.id === payload.exerciseId)
-    if (exercise) addExercise(exercise, section)
+    if (exercise) {
+      const version = selectedVersionFor(exercise)
+      const item = createExerciseDocumentBlock(exercise.id, { version, metrics: metricsForVersion(exercise, version) })
+      const targetIndex = targetBlockId ? destination.findIndex((candidate) => candidate.blockId === targetBlockId) : -1
+      destination.splice(targetIndex < 0 ? destination.length : targetIndex, 0, item)
+      exerciseQueue.value = [...exerciseQueue.value]
+      invalidateContentPreview()
+    }
     return
   }
   if (payload.type === 'tool') {
-    const targetIndex = targetBlockId
-      ? exerciseQueue.value.findIndex((candidate) => candidate.blockId === targetBlockId)
-      : -1
+    const targetIndex = targetBlockId ? destination.findIndex((candidate) => candidate.blockId === targetBlockId) : -1
     const tool = documentTools.value.find((candidate) => candidate.id === payload.toolId)
     const args = tool?.arguments?.reduce((values, argument) => ({ ...values, [argument.key]: argument.default ?? '' }), {}) || {}
-    exerciseQueue.value.splice(targetIndex === -1 ? exerciseQueue.value.length : targetIndex, 0, createToolDocumentBlock(payload.toolId, { args }))
+    destination.splice(targetIndex === -1 ? destination.length : targetIndex, 0, createToolDocumentBlock(payload.toolId, { args }))
+    exerciseQueue.value = [...exerciseQueue.value]
     normalizeQueueSections()
     invalidateContentPreview()
     return
   }
   if (payload.type === 'queue') {
-    const sourceIndex = exerciseQueue.value.findIndex((item) => item.blockId === payload.blockId)
-    if (sourceIndex === -1) return
-    const [item] = exerciseQueue.value.splice(sourceIndex, 1)
+    const source = findBlockContainer(exerciseQueue.value, payload.blockId)?.block
+    if (!source || payload.blockId === containerBlockId || blockContains(source, containerBlockId)) return
+    const item = removeBlockFromTree(exerciseQueue.value, payload.blockId)
+    if (!item) return
     item.section = 'required'
     if (targetBlockId) {
-      const targetIndex = exerciseQueue.value.findIndex((candidate) => candidate.blockId === targetBlockId)
-      exerciseQueue.value.splice(targetIndex === -1 ? exerciseQueue.value.length : targetIndex, 0, item)
+      const targetIndex = destination.findIndex((candidate) => candidate.blockId === targetBlockId)
+      destination.splice(targetIndex === -1 ? destination.length : targetIndex, 0, item)
     } else {
-      exerciseQueue.value.push(item)
+      destination.push(item)
     }
+    exerciseQueue.value = [...exerciseQueue.value]
     normalizeQueueSections()
     invalidateContentPreview()
   }
@@ -1665,7 +1833,7 @@ function generatedCodeForTemplate(template, options = {}) {
     || sourceType === DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM
     || exerciseQueue.value.some((item) => item.type !== 'tool' && item.snapshot))
   const exercises = usesStructuredBlocks
-    ? exerciseQueue.value.map((item, index) => isTool(item) ? toolCode(item, index) : queueExerciseCode(item, template)).filter(Boolean).join('\n\n')
+    ? renderDocumentBlocks(exerciseQueue.value, template)
     : ''
   const beforeExercises = normalizeDisplayMathDelimiters(documentContent.value.beforeExercisesLatex || '')
   const afterExercises = normalizeDisplayMathDelimiters(documentContent.value.afterExercisesLatex || '')
@@ -1801,7 +1969,7 @@ async function documentAssets() {
     const selectedSignature = teacherSignatureImages.value[Math.floor(Math.random() * teacherSignatureImages.value.length)]
     assets['firma.png'] = { url: selectedSignature.url }
   }
-  exerciseQueue.value.filter((item) => item.type !== 'tool').forEach((item) => {
+  selectedExercises.value.forEach((item) => {
     const exercise = exerciseForQueue(item)
     exerciseImageFiles(exercise).forEach((file, index) => {
       assets[documentExerciseAssetName(exercise, file, index)] = { url: file.url }
@@ -2089,17 +2257,23 @@ function resetWorkflow() {
 function newDocument() {
   resetWorkflow()
   mode.value = 'editor'
+  markDocumentBaseline()
 }
 
 function newDocumentWithContext(context) {
   resetWorkflow()
   creationContext.value = { ...context }
   mode.value = 'editor'
+  markDocumentBaseline()
 }
 
-function backToLibrary() {
+function backToLibrary(options = {}) {
+  const force = options?.force === true
+  if (!force && workflowState.value.dirty && !window.confirm('Hay cambios sin guardar en el documento. ¿Quieres descartarlos?')) return false
   resetWorkflow()
   mode.value = 'library'
+  documentEditorBaseline.value = ''
+  return true
 }
 
 async function assessmentModelsForDocument(documentData) {
@@ -2124,6 +2298,7 @@ async function assessmentModelsForDocument(documentData) {
         pdfenunciadocompleto: structure.pdfenunciadocompleto || active?.pdf?.enunciado || '',
         pdfsolucioncompleto: structure.pdfsolucioncompleto || active?.pdf?.resuelto || '',
       },
+      assessment: reference.snapshot?.assessment || reference.assessment || {},
       order,
     })
   })).then((models) => models.filter(Boolean))
@@ -2206,7 +2381,7 @@ async function deleteDocument() {
         if (path) paths.add(path)
       }
     })
-    ;(documentData.content?.blocks || []).forEach((block) => {
+    ;flattenDocumentBlocks(documentData.content?.blocks || []).forEach((block) => {
       ;(block?.snapshot?.matrixFiles || []).forEach((file) => {
         if (file?.path) paths.add(file.path)
         else if (file?.url) {
@@ -2573,11 +2748,11 @@ function editDocument(documentData) {
   currentStep.value = 1
   maxVisitedStep.value = lastStep.value
   mode.value = 'editor'
+  markDocumentBaseline()
 }
 
 function documentAssessmentPoints() {
-  return exerciseQueue.value
-    .filter((item) => item.type !== 'tool')
+  return selectedExercises.value
     .reduce((total, item) => total + (Number(queueMetrics(item).puntuacion) || 0), 0)
 }
 
@@ -2613,8 +2788,7 @@ function documentAssessmentItem(documentId) {
     documentAssessment: {
       documentId,
       maxPoints: documentAssessmentPoints(),
-      exercises: exerciseQueue.value
-        .filter((item) => item.type !== 'tool')
+      exercises: selectedExercises.value
         .map((item, order) => ({
           exerciseId: item.exerciseId,
           version: Number(item.version) || 0,
@@ -2647,7 +2821,7 @@ async function saveDocument() {
       ...(previousDocument?.pdfs || []).map((pdf) => pdf?.path || storagePathFromUrl(pdf?.url)),
     ].filter(Boolean))
     const previousMatrixPaths = new Set(
-      (previousDocument?.content?.blocks || [])
+      flattenDocumentBlocks(previousDocument?.content?.blocks || [])
         .flatMap((block) => block?.snapshot?.matrixFiles || [])
         .map((file) => file?.path || storagePathFromUrl(file?.url))
         .filter(Boolean),
@@ -2661,7 +2835,7 @@ async function saveDocument() {
         customMetadata: { documentId: reference.id, exerciseId: artifact.exerciseId, segment: artifact.key },
       })
       const url = await getDownloadURL(storageRef(storage, path))
-      const block = exerciseQueue.value.find((item) => item.exerciseId === artifact.exerciseId && item.snapshot)
+      const block = selectedExercises.value.find((item) => item.exerciseId === artifact.exerciseId && item.snapshot)
       if (block) {
         const structure = block.snapshot.structure
         if (artifact.key === 'main-statement') structure.pdfenunciado = url
@@ -2760,10 +2934,10 @@ async function saveDocument() {
         maxPoints: assessmentItem?.documentAssessment?.maxPoints || 0,
       },
       bloques: exerciseQueue.value.map((item, order) => ({ ...item, order })),
-      ejercicios: exerciseQueue.value.filter((item) => item.type !== 'tool').map((item, order) => ({ ...item, order })),
+      ejercicios: selectedExercises.value.map((item, order) => ({ ...item, order })),
       optativos: {
         disponibles: selectedExercises.value.length,
-        elegir: exerciseQueue.value.find((item) => isTool(item) && item.toolId === 'optativos')?.args?.count || 0,
+        elegir: exerciseQueue.value.find((item) => isTool(item) && toolForQueue(item)?.behavior === 'optional-section')?.args?.count || 0,
       },
       codigo: activeDocumentCode(selectedTemplate.value),
       codigos: Object.fromEntries(previewDocuments.value.map((entry) => [entry.templateKey, entry.code])),
@@ -2773,6 +2947,7 @@ async function saveDocument() {
       updatedAt: now,
     }
     await setDoc(reference, data)
+    markDocumentBaseline()
     const syncedItem = await syncDocumentAssessment({
       documentId: reference.id,
       previousGroupId: previousDocument?.assessment?.groupId || null,
@@ -3277,7 +3452,7 @@ defineExpose({
                     v-for="(item, index) in exerciseQueue"
                     :key="item.blockId"
                     class="document-queue-card"
-                    :class="{ 'document-tool-queue-card': isTool(item), [`document-tool-${toolForQueue(item)?.id}`]: isTool(item), 'document-tool-disabled': isTool(item) && toolForQueue(item)?.id === 'optativos' && optionalToolChoiceOptions(index).length === 0 }"
+                    :class="{ 'document-tool-queue-card': isTool(item), [`document-tool-${toolForQueue(item)?.id}`]: isTool(item), 'document-tool-disabled': isTool(item) && toolForQueue(item)?.behavior === 'optional-section' && optionalToolChoiceOptions(index).length === 0 }"
                     draggable="true"
                     @dragstart="startQueueDrag($event, item)"
                     @dragover.prevent
@@ -3295,7 +3470,7 @@ defineExpose({
                       <v-spacer />
                       <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Quitar ejercicio" @click="removeQueuedBlock(item)" />
                     </header>
-                    <div v-if="isTool(item) && toolForQueue(item)?.id === 'optativos'" class="document-tool-queue-body">
+                    <div v-if="isTool(item) && toolForQueue(item)?.behavior === 'optional-section'" class="document-tool-queue-body">
                       <div class="document-tool-choice" role="group" aria-label="Número de ejercicios optativos que deben elegirse">
                         <button
                           v-for="option in optionalToolChoiceOptions(index)"
@@ -3323,6 +3498,17 @@ defineExpose({
                         @update:model-value="invalidateContentPreview"
                       />
                     </div>
+                    <DocumentQueueChildren
+                      v-if="isTool(item) && toolForQueue(item)?.kind === 'environment'"
+                      :blocks="item.children || []"
+                      :tools="documentTools"
+                      :exercises="exercises"
+                      :container-id="item.blockId"
+                      @drag-start="(event, block) => startQueueDrag(event, block)"
+                      @drop-block="(event, target, container) => dropOnQueueSection(event, 'required', target, container)"
+                      @remove="removeQueuedBlock"
+                      @argument-change="(block, key, value) => setToolArgument(block, key, value)"
+                    />
                     <ExerciseVariantSelector
                       v-if="!isTool(item)"
                       :model-value="item.version"
@@ -3384,6 +3570,15 @@ defineExpose({
 
         <div v-else-if="currentStep === 3" class="document-preview-step">
           <div class="document-preview-display-toolbar">
+            <v-btn
+              v-if="documentAssessment.evaluable"
+              prepend-icon="mdi-link-variant"
+              size="small"
+              rounded="pill"
+              variant="text"
+              @click="openAssessmentAlignment"
+            >Vinculación curricular</v-btn>
+            <v-spacer />
             <v-btn
               prepend-icon="mdi-refresh"
               size="small"
@@ -3505,6 +3700,19 @@ defineExpose({
           @update:model-value="onDocumentCurriculumUpdate"
         />
       </v-card-text>
+    </v-card>
+  </v-dialog>
+  <v-dialog v-model="assessmentAlignmentDialog" max-width="1280" width="calc(100% - 28px)">
+    <v-card>
+      <v-card-title class="d-flex align-center"><v-icon icon="mdi-link-variant" class="mr-2" />Vinculación curricular del documento<v-spacer /><v-btn icon="mdi-close" rounded="circle" variant="text" aria-label="Cerrar" @click="assessmentAlignmentDialog = false" /></v-card-title>
+      <v-divider />
+      <DocumentAssessmentAlignmentEditor
+        :exercises="assessmentPreviewExercises"
+        :subject-id="documentCurriculum.subjectId || selectedGroupOption?.subjectId || ''"
+        @update-alignment="updateDocumentAchievementAlignment"
+      />
+      <v-divider />
+      <v-card-actions><v-spacer /><v-btn color="primary" variant="flat" @click="assessmentAlignmentDialog = false">Listo</v-btn></v-card-actions>
     </v-card>
   </v-dialog>
   <v-dialog v-model="documentDeleteDialog" max-width="430" persistent>
@@ -3713,7 +3921,8 @@ defineExpose({
 .document-tool-queue-header.document-tool-salto-pagina { background: #fff1cf; color: #876b2f; }
 .document-tool-card.document-tool-obligatorios,
 .document-tool-card.document-tool-optativos,
-.document-tool-card.document-tool-salto-pagina {
+.document-tool-card.document-tool-salto-pagina,
+.document-tool-card.document-tool-seccion {
   border-color: #244f88;
   background: #315f97;
   color: #fff;
@@ -3721,13 +3930,15 @@ defineExpose({
 }
 .document-tool-queue-header.document-tool-obligatorios,
 .document-tool-queue-header.document-tool-optativos,
-.document-tool-queue-header.document-tool-salto-pagina {
+.document-tool-queue-header.document-tool-salto-pagina,
+.document-tool-queue-header.document-tool-seccion {
   background: #315f97;
   color: #fff;
 }
 .document-tool-queue-card.document-tool-obligatorios,
 .document-tool-queue-card.document-tool-optativos,
-.document-tool-queue-card.document-tool-salto-pagina {
+.document-tool-queue-card.document-tool-salto-pagina,
+.document-tool-queue-card.document-tool-seccion {
   border-color: #244f88;
   background: #315f97;
   color: #fff;
@@ -3750,7 +3961,8 @@ defineExpose({
 }
 .document-tool-card.document-tool-obligatorios span,
 .document-tool-card.document-tool-optativos span,
-.document-tool-card.document-tool-salto-pagina span {
+.document-tool-card.document-tool-salto-pagina span,
+.document-tool-card.document-tool-seccion span {
   color: rgba(255,255,255,.82);
 }
 .document-tool-choice {

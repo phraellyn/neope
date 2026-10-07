@@ -38,15 +38,11 @@ assert.equal(analysis.structure.tiempo, 12)
 assert.deepEqual(analysis.structure.apartados.map((part) => part.tiempo), [5, 7])
 
 const structure = mergeExerciseStructure(analysis.structure, {})
-structure.apartados[0].achievements = [{
+structure.apartados[0].gradingCriteria = [{
   id: 'logro-1',
   description: 'Plantea correctamente la relación necesaria.',
   points: 0.5,
-  alignment: {
-    criterionIds: ['2bto-matematicas-ii-cr-1-1'],
-    descriptorEvidence: [{ descriptorId: 'bachillerato-stem1', strength: 'strong' }],
-    source: 'manual',
-  },
+  source: 'manual',
 }]
 const document = exerciseDocumentStructure(structure, {}, 1)
 const restored = exerciseStructureFromDocument(document)
@@ -64,12 +60,12 @@ assert.match(rebuilt, /\\T\{12\}/)
 assert.match(rebuilt, /\\t\{5\}/)
 assert.match(rebuilt, /\\t\{7\}/)
 assert.doesNotMatch(rebuilt, /\\ej[^\n]*\\\\\n\s*\n/)
-assert.deepEqual(restored.apartados[0].achievements, structure.apartados[0].achievements)
+assert.deepEqual(restored.apartados[0].gradingCriteria, structure.apartados[0].gradingCriteria)
 assert.doesNotMatch(rebuilt, /Plantea correctamente/)
 const achievementOnlyEdit = exerciseDocumentStructure({
   ...restored,
   apartados: restored.apartados.map((part, index) => index === 0
-    ? { ...part, achievements: [{ ...part.achievements[0], points: 0.75 }] }
+    ? { ...part, gradingCriteria: [{ ...part.gradingCriteria[0], points: 0.75 }] }
     : part),
 }, document, 1)
 assert.deepEqual(

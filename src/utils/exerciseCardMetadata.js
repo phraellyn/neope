@@ -8,6 +8,7 @@ const modelLabels = Object.freeze({
   'openai/gpt-5.6-sol': 'GPT-5.6 Sol',
   'openai/gpt-6-astra': 'GPT-6 Astra',
   'anthropic/claude-fable-5.1': 'Claude Fable 5.1',
+  'anthropic/claude-sonnet-5.5': 'Claude Sonnet 5.5',
   'moonshotai/kimi-k3': 'Kimi K3',
 })
 

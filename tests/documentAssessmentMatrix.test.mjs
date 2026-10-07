@@ -9,7 +9,7 @@ const simple = assessmentExerciseModel({
   structure: {
     pdfenunciadocompleto: 'statement.pdf',
     pdfsolucioncompleto: 'solved.pdf',
-    achievements: [{ id: 'a1', description: 'Resuelve el problema', points: 2 }],
+    gradingCriteria: [{ id: 'a1', description: 'Resuelve el problema', points: 2 }],
     apartados: [],
   },
 })
@@ -27,10 +27,10 @@ const segmented = assessmentExerciseModel({
     pdfenunciado: 'root-statement.pdf',
     pdfenunciadocompleto: 'complete-statement.pdf',
     pdfsolucioncompleto: 'complete-solved.pdf',
-    achievements: [{ id: 'root', description: 'No debe mezclarse', points: 5 }],
+    gradingCriteria: [{ id: 'root', description: 'No debe mezclarse', points: 5 }],
     apartados: [
-      { id: 'part-a', pdfsolucion: 'a-solved.pdf', achievements: [{ id: 'a', description: 'Primer logro', points: 1 }] },
-      { id: 'part-b', pdfsolucion: 'b-solved.pdf', achievements: [{ id: 'b', description: 'Segundo logro', points: 1.5 }] },
+      { id: 'part-a', pdfsolucion: 'a-solved.pdf', gradingCriteria: [{ id: 'a', description: 'Primer logro', points: 1 }] },
+      { id: 'part-b', pdfsolucion: 'b-solved.pdf', gradingCriteria: [{ id: 'b', description: 'Segundo logro', points: 1.5 }] },
     ],
   },
 })

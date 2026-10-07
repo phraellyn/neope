@@ -697,6 +697,7 @@ const aiModels = Object.freeze({
   'openai/gpt-5.6-sol': { reasoningEffort: 'minimal', label: 'GPT-5.6 Sol' },
   'openai/gpt-6-astra': { reasoningEffort: 'minimal', label: 'GPT-6 Astra' },
   'anthropic/claude-fable-5.1': { reasoningEffort: 'minimal', label: 'Claude Fable 5.1' },
+  'anthropic/claude-sonnet-5.5': { reasoningEffort: 'minimal', label: 'Claude Sonnet 5.5' },
   'moonshotai/kimi-k3': { reasoningEffort: 'minimal', label: 'Kimi K3' },
 })
 
@@ -785,10 +786,10 @@ const rubricAlignmentResponseFormat = {
   },
 }
 
-const exerciseCompetenciesResponseFormat = {
+const exerciseGradingResponseFormat = {
   type: 'json_schema',
   json_schema: {
-    name: 'exercise_competency_breakdown',
+    name: 'exercise_grading_breakdown',
     strict: true,
     schema: {
       type: 'object',
@@ -799,33 +800,20 @@ const exerciseCompetenciesResponseFormat = {
             type: 'object',
             properties: {
               segmentId: { type: 'string' },
-              achievements: {
+              gradingCriteria: {
                 type: 'array',
                 items: {
                   type: 'object',
                   properties: {
                     description: { type: 'string' },
                     points: { type: 'number', minimum: 0 },
-                    criterionIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
-                    descriptorEvidence: {
-                      type: 'array',
-                      items: {
-                        type: 'object',
-                        properties: {
-                          descriptorId: { type: 'string' },
-                          strength: { type: 'string', enum: ['weak', 'medium', 'strong'] },
-                        },
-                        required: ['descriptorId', 'strength'],
-                        additionalProperties: false,
-                      },
-                    },
                   },
-                  required: ['description', 'points', 'criterionIds', 'descriptorEvidence'],
+                  required: ['description', 'points'],
                   additionalProperties: false,
                 },
               },
             },
-            required: ['segmentId', 'achievements'],
+            required: ['segmentId', 'gradingCriteria'],
             additionalProperties: false,
           },
         },
@@ -897,10 +885,11 @@ const documentContentResponseFormat = {
               partsEnvironment: { type: 'string', enum: ['none', 'apartados', 'apartadosc'] },
               parts: { type: 'array', items: documentGeneratedPartSchema },
               info: { type: 'string' },
+              competencial: { type: 'boolean' },
               contentIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
               achievements: { type: 'array', items: documentAchievementSchema },
             },
-            required: ['statement', 'answer', 'workedSolution', 'points', 'durationMinutes', 'sourcePage', 'partsEnvironment', 'parts', 'info', 'contentIds', 'achievements'],
+            required: ['statement', 'answer', 'workedSolution', 'points', 'durationMinutes', 'sourcePage', 'partsEnvironment', 'parts', 'info', 'competencial', 'contentIds', 'achievements'],
             additionalProperties: false,
           },
         },
@@ -919,8 +908,10 @@ const documentContentResponseFormat = {
           },
         },
         afterExercisesLatex: { type: 'string' },
+        inferredCourse: { type: 'string' },
+        inferredSubjectId: { type: 'string' },
       },
-      required: ['beforeExercisesLatex', 'generatedExercises', 'alignments', 'afterExercisesLatex'],
+      required: ['beforeExercisesLatex', 'generatedExercises', 'alignments', 'afterExercisesLatex', 'inferredCourse', 'inferredSubjectId'],
       additionalProperties: false,
     },
   },
@@ -1786,7 +1777,7 @@ export const suggestRubricAlignment = onCall({
   }
 })
 
-export const suggestExerciseCompetencies = onCall({
+export const suggestExerciseGradingCriteria = onCall({
   region: 'europe-west1',
   timeoutSeconds: 120,
   memory: '512MiB',
@@ -1803,8 +1794,6 @@ export const suggestExerciseCompetencies = onCall({
   const cleanText = (value, maximum = 8_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
   const course = cleanText(request.data?.course, 80)
   const subjectId = cleanText(request.data?.subjectId, 120)
-  const catalog = lomloeCatalogForSubject(subjectId)
-  if (!catalog) throw new HttpsError('failed-precondition', 'No hay datos LOMLOE para la asignatura seleccionada.')
 
   const segments = (Array.isArray(request.data?.segments) ? request.data.segments : [])
     .slice(0, 24)
@@ -1822,29 +1811,6 @@ export const suggestExerciseCompetencies = onCall({
     throw new HttpsError('invalid-argument', 'No hay ningún segmento evaluable con enunciado y puntuación.')
   }
 
-  const competencies = (catalog.specificCompetencies || []).map((competency) => ({
-    id: competency.id,
-    code: competency.code,
-    description: competency.description,
-    descriptorIds: competency.descriptorIds || [],
-  }))
-  const criteria = (catalog.evaluationCriteria || []).map((criterion) => ({
-    id: criterion.id,
-    code: criterion.code,
-    competenceId: criterion.competenceId,
-    description: criterion.description,
-    descriptorIds: criterion.descriptorIds || [],
-  }))
-  const stage = catalog.stage || (String(request.data?.course || '').includes('BTO') ? 'Bachillerato' : 'ESO')
-  const descriptors = (lomloeMathLaw.global?.operationalDescriptors || [])
-    .filter((descriptor) => !descriptor.stage || descriptor.stage === stage)
-    .map((descriptor) => ({
-      id: descriptor.id,
-      code: descriptor.code,
-      keyCompetencyId: descriptor.keyCompetencyId,
-      description: descriptor.description,
-    }))
-
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
@@ -1860,11 +1826,11 @@ export const suggestExerciseCompetencies = onCall({
         messages: [
           {
             role: 'system',
-            content: `Eres especialista en evaluación competencial LOMLOE y diseño de ejercicios de Matemáticas. Descompón la puntuación de cada segmento en logros observables, independientes y corregibles. No redactes niveles de desempeño ni criterios genéricos; describe exactamente qué debe demostrar el alumno en ese ejercicio. Usa el enunciado, la respuesta breve, la resolución, el curso y los contenidos como contexto, pero no premies dos veces la misma acción.
+            content: `Eres especialista en corrección analítica y diseño de ejercicios de Matemáticas. Descompón la puntuación de cada segmento en criterios de calificación observables, independientes y corregibles. No redactes niveles de desempeño, referencias legales ni criterios genéricos; describe exactamente qué debe demostrar el alumno en ese ejercicio. Usa el enunciado, la respuesta breve, la resolución, el curso y los contenidos como contexto, pero no premies dos veces la misma acción.
 
 ${achievementGranularityInstructions(course)}
 
-Vincula cada logro solo con los identificadores legales proporcionados que realmente permita observar. Para cada descriptor operativo relacionado que produzca evidencia, asigna weak, medium o strong según su calidad y directitud. No inventes identificadores. Antes de devolver la respuesta, revisa que ninguna descripción contenga varias acciones evaluables que deban tener puntuación independiente y que la suma de cada segmento sea exacta. Devuelve todos los segmentos solicitados y únicamente el JSON del esquema.`,
+Antes de devolver la respuesta, revisa que ninguna descripción contenga varias acciones evaluables que deban tener puntuación independiente y que la suma de cada segmento sea exacta. Devuelve todos los segmentos solicitados y únicamente el JSON del esquema.`,
           },
           {
             role: 'user',
@@ -1872,18 +1838,15 @@ Vincula cada logro solo con los identificadores legales proporcionados que realm
               context: {
                 course,
                 subjectId,
-                subjectTitle: cleanText(request.data?.subjectTitle, 200) || catalog.subjectTitle,
+              subjectTitle: cleanText(request.data?.subjectTitle, 200),
                 curriculum: curriculumPromptContext(request.data?.curriculum),
                 completeLatex: cleanText(request.data?.latex, 60_000),
               },
               segments,
-              specificCompetencies: competencies,
-              evaluationCriteria: criteria,
-              operationalDescriptors: descriptors,
             }),
           },
         ],
-        response_format: exerciseCompetenciesResponseFormat,
+        response_format: exerciseGradingResponseFormat,
         provider: { require_parameters: true, data_collection: 'deny' },
         max_tokens: 8_000,
       }),
@@ -1899,58 +1862,43 @@ Vincula cada logro solo con los identificadores legales proporcionados que realm
     if (!suggestion?.segments?.length) throw new HttpsError('internal', 'La IA no ha generado ningún logro evaluable.')
 
     const segmentById = new Map(segments.map((segment) => [segment.id, segment]))
-    const criterionById = new Map(criteria.map((criterion) => [criterion.id, criterion]))
-    const competencyMap = new Map(competencies.map((competency) => [competency.id, competency]))
-    const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id))
     const normalizedSegments = []
 
     for (const generatedSegment of suggestion.segments) {
       const segment = segmentById.get(generatedSegment?.segmentId)
       if (!segment || normalizedSegments.some((item) => item.segmentId === segment.id)) continue
-      let achievements = (Array.isArray(generatedSegment.achievements) ? generatedSegment.achievements : [])
+      let gradingCriteria = (Array.isArray(generatedSegment.gradingCriteria) ? generatedSegment.gradingCriteria : [])
         .slice(0, 10)
-        .map((achievement) => {
-          const criterionIds = [...new Set((achievement?.criterionIds || []).filter((id) => criterionById.has(id)))]
-          const allowedDescriptorIds = new Set(criterionIds.flatMap((criterionId) => {
-            const criterion = criterionById.get(criterionId)
-            return [
-              ...(criterion?.descriptorIds || []),
-              ...(competencyMap.get(criterion?.competenceId)?.descriptorIds || []),
-            ]
-          }))
-          const descriptorEvidence = (achievement?.descriptorEvidence || [])
-            .filter((evidence) => descriptorIds.has(evidence?.descriptorId)
-              && allowedDescriptorIds.has(evidence.descriptorId)
-              && ['weak', 'medium', 'strong'].includes(evidence?.strength))
-            .filter((evidence, index, values) => values.findIndex((candidate) => candidate.descriptorId === evidence.descriptorId) === index)
+        .map((criterion) => {
           return {
-            id: `achievement-${randomUUID()}`,
-            description: cleanText(achievement?.description, 1_200),
-            points: Math.max(0, Number(achievement?.points) || 0),
-            alignment: { criterionIds, descriptorEvidence, source: 'ai', model },
+            id: `criterion-${randomUUID()}`,
+            description: cleanText(criterion?.description, 1_200),
+            points: Math.max(0, Number(criterion?.points) || 0),
+            source: 'ai',
+            model,
           }
         })
-        .filter((achievement) => achievement.description)
+        .filter((criterion) => criterion.description)
 
-      if (!achievements.length) continue
-      const rawTotal = achievements.reduce((total, achievement) => total + achievement.points, 0)
-      if (rawTotal <= 0) achievements = achievements.map((achievement) => ({ ...achievement, points: 1 }))
-      const weightTotal = achievements.reduce((total, achievement) => total + achievement.points, 0)
+      if (!gradingCriteria.length) continue
+      const rawTotal = gradingCriteria.reduce((total, criterion) => total + criterion.points, 0)
+      if (rawTotal <= 0) gradingCriteria = gradingCriteria.map((criterion) => ({ ...criterion, points: 1 }))
+      const weightTotal = gradingCriteria.reduce((total, criterion) => total + criterion.points, 0)
       let assignedCents = 0
       const targetCents = Math.round(segment.points * 100)
-      achievements = achievements.map((achievement, index) => {
-        const cents = index === achievements.length - 1
+      gradingCriteria = gradingCriteria.map((criterion, index) => {
+        const cents = index === gradingCriteria.length - 1
           ? targetCents - assignedCents
-          : Math.max(0, Math.round((achievement.points / weightTotal) * targetCents))
+          : Math.max(0, Math.round((criterion.points / weightTotal) * targetCents))
         assignedCents += cents
-        return { ...achievement, points: Math.max(0, cents) / 100 }
-      }).filter((achievement) => achievement.points > 0)
-      if (!achievements.length) continue
-      const normalizedTotal = achievements.reduce((total, achievement) => total + Math.round(achievement.points * 100), 0)
+        return { ...criterion, points: Math.max(0, cents) / 100 }
+      }).filter((criterion) => criterion.points > 0)
+      if (!gradingCriteria.length) continue
+      const normalizedTotal = gradingCriteria.reduce((total, criterion) => total + Math.round(criterion.points * 100), 0)
       if (normalizedTotal !== targetCents) {
-        achievements.at(-1).points = Math.max(0, Math.round((achievements.at(-1).points * 100) + targetCents - normalizedTotal) / 100)
+        gradingCriteria.at(-1).points = Math.max(0, Math.round((gradingCriteria.at(-1).points * 100) + targetCents - normalizedTotal) / 100)
       }
-      normalizedSegments.push({ segmentId: segment.id, achievements })
+      normalizedSegments.push({ segmentId: segment.id, gradingCriteria })
     }
 
     const missingSegments = segments.filter((segment) => !normalizedSegments.some((item) => item.segmentId === segment.id))
@@ -1960,9 +1908,9 @@ Vincula cada logro solo con los identificadores legales proporcionados que realm
     return { segments: normalizedSegments, model }
   } catch (error) {
     if (error instanceof HttpsError) throw error
-    if (error?.name === 'TimeoutError') throw new HttpsError('deadline-exceeded', 'La IA ha tardado demasiado en desglosar las competencias.')
-    console.error('Exercise competency suggestion failed', { model, subjectId, error })
-    throw new HttpsError('internal', 'No se ha podido generar el desglose competencial con IA.')
+    if (error?.name === 'TimeoutError') throw new HttpsError('deadline-exceeded', 'La IA ha tardado demasiado en generar los criterios de calificación.')
+    console.error('Exercise grading suggestion failed', { model, subjectId, error })
+    throw new HttpsError('internal', 'No se han podido generar los criterios de calificación con IA.')
   }
 })
 
@@ -2019,17 +1967,17 @@ export const generateDocumentContent = onCall({
   const clean = (value, maximum = 20_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
   const model = clean(request.data?.model, 120) || 'google/gemini-3-flash-preview'
   if (!Object.hasOwn(aiModels, model)) throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
-  const mode = request.data?.mode === 'align' ? 'align' : 'generate'
+  const mode = request.data?.mode === 'align' ? 'align' : request.data?.mode === 'exercise' ? 'exercise' : 'generate'
   const sourceType = clean(request.data?.sourceType, 40)
   const course = clean(request.data?.course, 80)
   const subjectId = clean(request.data?.subjectId, 160)
   const catalog = lomloeCatalogForSubject(subjectId)
-  if (!catalog) throw new HttpsError('failed-precondition', 'Selecciona un curso y una asignatura con datos LOMLOE antes de generar.')
+  if (!catalog && mode !== 'exercise') throw new HttpsError('failed-precondition', 'Selecciona un curso y una asignatura con datos LOMLOE antes de generar.')
 
-  const stage = catalog.stage || (course.includes('BTO') ? 'Bachillerato' : 'ESO')
+  const stage = catalog?.stage || (course.includes('BTO') ? 'Bachillerato' : 'ESO')
   const law = {
-    competencies: (catalog.specificCompetencies || []).map((item) => ({ id: item.id, code: item.code, description: item.description, descriptorIds: item.descriptorIds || [] })),
-    criteria: (catalog.evaluationCriteria || []).map((item) => ({ id: item.id, code: item.code, competenceId: item.competenceId, description: item.description, descriptorIds: item.descriptorIds || [] })),
+    competencies: (catalog?.specificCompetencies || []).map((item) => ({ id: item.id, code: item.code, description: item.description, descriptorIds: item.descriptorIds || [] })),
+    criteria: (catalog?.evaluationCriteria || []).map((item) => ({ id: item.id, code: item.code, competenceId: item.competenceId, description: item.description, descriptorIds: item.descriptorIds || [] })),
     descriptors: (lomloeMathLaw.global?.operationalDescriptors || [])
       .filter((item) => !item.stage || item.stage === stage)
       .map((item) => ({ id: item.id, code: item.code, keyCompetencyId: item.keyCompetencyId, description: item.description })),
@@ -2051,6 +1999,11 @@ export const generateDocumentContent = onCall({
       answer: clean(segment?.answer, 5_000),
       workedSolution: clean(segment?.workedSolution, 24_000),
       contentIds: (Array.isArray(segment?.contentIds) ? segment.contentIds : []).filter((id) => allowedConceptIds.has(id)),
+      gradingCriteria: (Array.isArray(segment?.gradingCriteria) ? segment.gradingCriteria : []).slice(0, 16).map((criterion) => ({
+        id: clean(criterion?.id, 180),
+        description: clean(criterion?.description, 1_200),
+        points: Math.max(0, Number(criterion?.points) || 0),
+      })).filter((criterion) => criterion.description),
     })),
   })).filter((item) => item.sourceBlockId && item.latex)
   if (mode === 'align' && !sourceExercises.length) throw new HttpsError('invalid-argument', 'No hay ejercicios que analizar.')
@@ -2090,6 +2043,8 @@ export const generateDocumentContent = onCall({
 
   const task = mode === 'align'
     ? 'No reescribas ni alteres los ejercicios. Devuelve únicamente alignments para todos sus segmentos evaluables, conservando sourceBlockId y segmentIndex.'
+    : mode === 'exercise'
+      ? 'Transcribe el material aportado como un único ejercicio Neope editable. Infiere curso, asignatura, contenidos, criterios de calificación y si es competencial; genera respuestas y resoluciones únicamente cuando se solicite.'
     : sourceType === 'curriculum'
       ? 'Diseña un conjunto breve y coherente de ejercicios nuevos que evalúe los conceptos seleccionados, con dificultad adecuada al curso, solución completa, respuestas breves, segmentación y desglose competencial.'
       : 'Reconstruye fielmente el documento aportado como LaTeX editable y ejercicios Neope estructurados. Conserva no solo las preguntas, sino también su estructura visual, instrucciones, tablas de recogida de datos, espacios de respuesta, recuadros, líneas, rejillas, diagramas y dibujos; completa después respuestas, resoluciones, segmentación, contenidos y logros evaluables.'
@@ -2098,12 +2053,14 @@ export const generateDocumentContent = onCall({
     context: {
       course,
       subjectId,
-      subjectTitle: clean(request.data?.subjectTitle, 200) || catalog.subjectTitle,
+      subjectTitle: clean(request.data?.subjectTitle, 200) || catalog?.subjectTitle || '',
       sourceType,
       sourceFiles: files.map((file, index) => ({ page: index + 1, name: file.name, mimeType: file.mimeType })),
       expectedPageCount,
       requestedConceptIds: (Array.isArray(request.data?.selectedConceptIds) ? request.data.selectedConceptIds : []).filter((id) => allowedConceptIds.has(id)),
       sourceLatex: clean(request.data?.latex, 100_000),
+      generationOptions: request.data?.generationOptions || {},
+      subjectCatalog: (Array.isArray(request.data?.subjectCatalog) ? request.data.subjectCatalog : []).slice(0, 80),
     },
     sourceExercises,
     concepts,
@@ -2138,7 +2095,7 @@ export const generateDocumentContent = onCall({
         reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
         messages: [{
           role: 'system',
-          content: `Eres un profesor experto en diseño editorial de documentos, ejercicios de Matemáticas y evaluación competencial LOMLOE. Devuelve exclusivamente el JSON solicitado. Cada ejercicio generado debe ser correcto, autosuficiente y apropiado para ${course}.
+          content: `Eres un profesor experto en diseño editorial de documentos y ejercicios de Matemáticas. Devuelve exclusivamente el JSON solicitado. Cada ejercicio generado debe ser correcto y autosuficiente${course ? `, apropiado para ${course}` : ''}.
 
 RECONSTRUCCIÓN VISUAL OBLIGATORIA:
 - Antes de redactar, haz internamente un inventario completo y ordenado de todo lo visible en todas las páginas. No omitas elementos porque no sean preguntas matemáticas.
@@ -2166,7 +2123,10 @@ REGLAS MATEMÁTICAS Y DE EVALUACIÓN:
 - Usa LaTeX puro, sin Markdown. En matemáticas destacadas usa $$...$$, nunca \\[...\\].
 - Escribe directamente todos los caracteres españoles en UTF-8 (á, é, í, ó, ú, ü, ñ, ¿, ¡). No uses formas heredadas como \\'o, \\~n o \\c{c}; hacen el código innecesariamente ilegible.
 - aligned no activa el modo matemático: todo bloque \\begin{aligned}...\\end{aligned} debe estar completamente envuelto en $$...$$. Nunca escribas aligned directamente en modo texto ni dentro de center sin esos delimitadores.
-- Los logros deben ser observables, independientes y corregibles. contentIds, criterionIds y descriptorId solo pueden proceder de los catálogos recibidos; no inventes identificadores.
+- Los logros deben ser observables, independientes y corregibles. Cuando un segmento incluya gradingCriteria, conserva exactamente ese desglose y sus puntuaciones: tu tarea es vincularlo curricularmente, no reescribirlo. contentIds, criterionIds y descriptorId solo pueden proceder de los catálogos recibidos; no inventes identificadores.
+${mode === 'exercise' ? `- Devuelve inferredCourse e inferredSubjectId eligiendo exclusivamente una combinación incluida en subjectCatalog. Si generationOptions.inferClassification es false, conserva los valores recibidos en context.
+- Devuelve exactamente un ejercicio. competencial será true únicamente si exige aplicar matemáticas en un contexto real o significativo, modelizar, interpretar o tomar decisiones; no por el mero hecho de tener texto.
+- Si generationOptions.generateSolutions es false, answer y workedSolution deben ser cadenas vacías. Si generationOptions.generateGradingCriteria es false, achievements debe ser vacío. Si generationOptions.inferConcepts es false, contentIds debe conservar los aportados o quedar vacío.` : '- Devuelve inferredCourse e inferredSubjectId con los valores recibidos en context.'}
 ${achievementGranularityInstructions(course)}
 - Antes de devolver la respuesta, revisa que ninguna descripción contenga varias acciones evaluables que deban tener puntuación independiente y que la suma de los logros de cada segmento sea exacta.
 - Mantén las soluciones en un ancho editorial de 8 cm, sin líneas vacías dentro de aligned y usando matrizp, detp y sistemap para matrices, determinantes y sistemas.`,
@@ -2211,6 +2171,7 @@ ${achievementGranularityInstructions(course)}
         partsEnvironment: parts.length && exercise?.partsEnvironment === 'apartadosc' ? 'apartadosc' : (parts.length ? 'apartados' : 'none'),
         parts,
         info: clean(exercise?.info, 1_000) || `Generado por ${aiModels[model].label}`,
+        competencial: Boolean(exercise?.competencial),
       }
     }).filter((exercise) => exercise.statement)
     const beforeExercisesLatex = mode === 'align'
@@ -2231,7 +2192,7 @@ ${achievementGranularityInstructions(course)}
       }
     }).filter(Boolean)
     if (mode === 'align' && !alignments.length) throw new HttpsError('internal', 'La IA no ha generado el análisis de los ejercicios.')
-    if (mode === 'generate' && !generatedExercises.length) throw new HttpsError('internal', 'La IA no ha generado ningún ejercicio.')
+    if (mode !== 'align' && !generatedExercises.length) throw new HttpsError('internal', 'La IA no ha generado ningún ejercicio.')
     console.info('Document content generation completed', {
       model,
       resolvedModel: payload.model || model,
@@ -2248,6 +2209,8 @@ ${achievementGranularityInstructions(course)}
       generatedExercises,
       alignments,
       afterExercisesLatex,
+      inferredCourse: clean(generated.inferredCourse, 80) || course,
+      inferredSubjectId: clean(generated.inferredSubjectId, 160) || subjectId,
       model: payload.model || model,
     }
   } catch (error) {

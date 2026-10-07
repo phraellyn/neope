@@ -9,19 +9,14 @@ import {
 import { assessmentExerciseModel as createAssessmentExerciseModel } from '../utils/documentAssessmentMatrix'
 import { resolveDocumentAssessmentReferences } from '../utils/documentAssessmentReferences'
 
-const clone = (value) => JSON.parse(JSON.stringify(value))
-
 function exerciseSourceStructure(source = {}) {
   if (Number(source.schemaVersion) >= 3 && source.statement) return aggregateExerciseStructure(exerciseStructureFromDocument(source))
   return mergeExerciseStructure(parseExerciseLatex(source.codigo || source.latex || source.enunciado || ''), source.structure || source)
 }
 
-function assessmentExerciseModel(exerciseId, version, source, order) {
+function assessmentExerciseModel(exerciseId, version, source, order, assessment = {}) {
   const structure = exerciseSourceStructure(source)
-  if (!structure.apartados?.length && !structure.achievements?.length) {
-    structure.achievements = clone(source.achievements || source.structure?.achievements || [])
-  }
-  return createAssessmentExerciseModel({ exerciseId, version, structure, order })
+  return createAssessmentExerciseModel({ exerciseId, version, structure, assessment, order })
 }
 
 export async function loadDocumentAssessmentExercises(item) {
@@ -46,7 +41,7 @@ export async function loadDocumentAssessmentExercises(item) {
       }
       const version = Number(reference.version) || 0
       const source = version === 0 ? exercise : exercise.variaciones?.[version - 1] || exercise
-      return assessmentExerciseModel(reference.exerciseId, version, source, order)
+      return assessmentExerciseModel(reference.exerciseId, version, source, order, reference.snapshot?.assessment || reference.assessment || {})
     }))
     .then((items) => items.filter(Boolean))
 }

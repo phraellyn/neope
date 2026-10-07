@@ -1,4 +1,4 @@
-export const DOCUMENT_CONTENT_SCHEMA_VERSION = 2
+export const DOCUMENT_CONTENT_SCHEMA_VERSION = 3
 
 export const DOCUMENT_CONTENT_SOURCE_TYPES = Object.freeze({
   EXERCISE_BANK: 'exercise-bank',
@@ -78,6 +78,7 @@ export function normalizeDocumentBlock(block, index = 0) {
       blockId,
       toolId,
       args: clonePlain(plainObject(input.args), {}),
+      children: normalizeDocumentBlocks(input.children || []),
       section: input.section === 'optional' ? 'optional' : 'required',
     }
   }
@@ -192,12 +193,13 @@ export function createExerciseDocumentBlock(exerciseId, {
   })
 }
 
-export function createToolDocumentBlock(toolId, { args = {}, section = 'required' } = {}) {
+export function createToolDocumentBlock(toolId, { args = {}, children = [], section = 'required' } = {}) {
   return normalizeDocumentBlock({
     type: 'tool',
     blockId: createDocumentBlockId('tool'),
     toolId,
     args,
+    children,
     section,
   })
 }

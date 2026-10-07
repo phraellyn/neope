@@ -2,10 +2,14 @@ function text(value) {
   return String(value || '').trim()
 }
 
-function achievementRows(achievements, exerciseId, version, sectionKey, sectionLabel) {
+function achievementRows(achievements, exerciseId, version, sectionKey, sectionLabel, sourceBlockId = '') {
   return (Array.isArray(achievements) ? achievements : []).map((achievement, index) => ({
     ...achievement,
     key: `${exerciseId}:${version}:${sectionKey}:${achievement.id || index}`,
+    exerciseId,
+    sourceBlockId,
+    version,
+    segmentId: sectionKey === 'general' ? 'exercise' : sectionKey,
     section: sectionLabel,
   }))
 }
@@ -16,12 +20,28 @@ function achievementRows(achievements, exerciseId, version, sectionKey, sectionL
  * la vista previa del documento y el cuaderno representen el examen de forma
  * diferente.
  */
-export function assessmentExerciseModel({ exerciseId, version = 0, structure = {}, order = 0 }) {
+function assessmentAchievements(assessment, segmentId, gradingCriteria = []) {
+  const aligned = assessment?.segments?.[segmentId]
+  if (Array.isArray(aligned)) return aligned
+  return (Array.isArray(gradingCriteria) ? gradingCriteria : []).map((criterion) => ({
+    ...criterion,
+    alignment: { criterionIds: [], descriptorEvidence: [], source: 'manual' },
+  }))
+}
+
+export function assessmentExerciseModel({ exerciseId, sourceBlockId = '', version = 0, structure = {}, assessment = {}, order = 0 }) {
   const parts = Array.isArray(structure.apartados) ? structure.apartados : []
   const label = `Ejercicio ${order + 1}`
 
   if (!parts.length) {
-    const achievements = achievementRows(structure.achievements, exerciseId, version, 'general', 'Ejercicio')
+    const achievements = achievementRows(
+      assessmentAchievements(assessment, 'exercise', structure.gradingCriteria),
+      exerciseId,
+      version,
+      'general',
+      'Ejercicio',
+      sourceBlockId,
+    )
     return {
       exerciseId,
       version,
@@ -47,7 +67,14 @@ export function assessmentExerciseModel({ exerciseId, version = 0, structure = {
       kind: 'part',
       label: partLabel,
       pdf: text(part.pdfsolucion),
-      achievements: achievementRows(part.achievements, exerciseId, version, partKey, partLabel),
+      achievements: achievementRows(
+        assessmentAchievements(assessment, partKey, part.gradingCriteria),
+        exerciseId,
+        version,
+        partKey,
+        partLabel,
+        sourceBlockId,
+      ),
     }
   })
   const rows = [{

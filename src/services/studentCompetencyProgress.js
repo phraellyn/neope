@@ -29,14 +29,14 @@ function sourceStructure(source = {}) {
   return mergeExerciseStructure(parseExerciseLatex(source.codigo || source.latex || source.enunciado || ''), source.structure || source)
 }
 
-function achievementsForExercise(exerciseId, version, source) {
+function achievementsForExercise(exerciseId, version, source, assessment = {}) {
   const structure = sourceStructure(source)
-  if (!structure.apartados?.length && !structure.achievements?.length) {
-    structure.achievements = clone(source.achievements || source.structure?.achievements, [])
-  }
   const parts = structure.apartados?.length
-    ? structure.apartados.map((part, index) => ({ key: part.id || `part-${index}`, achievements: part.achievements || [] }))
-    : [{ key: 'general', achievements: structure.achievements || [] }]
+    ? structure.apartados.map((part, index) => {
+      const key = part.id || `part-${index}`
+      return { key, achievements: assessment?.segments?.[key] || [] }
+    })
+    : [{ key: 'general', achievements: assessment?.segments?.exercise || [] }]
   return parts.flatMap((part) => part.achievements.map((achievement) => ({
     ...achievement,
     key: `${exerciseId}:${version}:${part.key}:${achievement.id}`,
@@ -74,7 +74,7 @@ async function loadDocumentAchievements(group) {
       if (!exercise) return []
       const version = Number(reference.version) || 0
       const source = version === 0 ? exercise : exercise.variaciones?.[version - 1] || exercise
-      return achievementsForExercise(reference.exerciseId, version, source)
+      return achievementsForExercise(reference.exerciseId, version, source, reference.snapshot?.assessment || reference.assessment || {})
     }))
     return [item.id, lists.flat()]
   }))
