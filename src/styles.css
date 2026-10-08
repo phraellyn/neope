@@ -25,6 +25,7 @@ body { margin: 0; background: #f8f9fe; }
 .exercise-ai-model .v-field__input { min-height: 36px; padding-top: 0; padding-bottom: 0; font-size: .72rem; font-weight: 650; }
 .exercise-ai-model .v-field__prepend-inner { align-self: stretch; align-items: center; padding-top: 0; color: #57708f; }
 .exercise-ai-model .v-field__append-inner { padding-top: 7px; }
+.ai-model-option-title { font-weight: 800 !important; }
 .document-toolbar-step { color: #607692; font-size: .72rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
 .page-shell { max-width: 1240px; margin: 0 auto; padding: 44px 48px 64px; }
 .page-shell-exercise-search { max-width: none; padding: 4px 6px 32px; }
@@ -561,6 +562,21 @@ body { margin: 0; background: #f8f9fe; }
 .teacher-profile-intro p { max-width: 680px; margin: 0; color: #71839a; font-size: .86rem; line-height: 1.5; }
 .teacher-profile-avatar { background: #e7eef8; box-shadow: 0 5px 16px rgba(25,55,95,.12); }
 .teacher-profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.teacher-profile-tabs { width: fit-content; margin: -8px 0 22px; border: 1px solid #d8e3ef; border-radius: 999px; background: #edf3fa; }
+.teacher-profile-tabs .v-tab { min-height: 36px; border-radius: 999px; font-size: .72rem; font-weight: 800; letter-spacing: .06em; }
+.teacher-models-panel { display: grid; gap: 16px; }
+.teacher-models-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 16px; border: 1px solid #d9e3ef; background: #eef4fb; }
+.teacher-models-heading strong { color: #315f97; font-size: .9rem; }
+.teacher-models-heading p { margin: 3px 0 0; color: #71839a; font-size: .74rem; }
+.teacher-models-heading code { color: #315f97; }
+.teacher-models-list { display: grid; gap: 10px; }
+.teacher-model-card { display: grid; grid-template-columns: 28px minmax(150px, .8fr) minmax(260px, 1.2fr) minmax(210px, 1fr) 34px; align-items: center; gap: 10px; padding: 10px; border-color: #d9e3ef; border-radius: 6px !important; background: #fff; }
+.teacher-model-order { display: grid; width: 26px; height: 26px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 50%; background: #e5eef8; color: #315f97; cursor: pointer; font: inherit; font-size: .7rem; font-weight: 850; transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease; }
+.teacher-model-order:hover { border-color: #8eadd0; background: #d4e3f4; transform: scale(1.06); }
+.teacher-model-order:focus-visible { outline: 2px solid #315f97; outline-offset: 2px; }
+.teacher-model-order-active { border-color: #315f97; background: #315f97; color: #fff; box-shadow: 0 0 0 3px rgba(49,95,151,.15); }
+.teacher-model-order-active:hover { border-color: #254b79; background: #254b79; }
+.teacher-models-empty { min-height: 230px; }
 .teacher-signatures-card { margin-bottom: 20px; border-color: #d9e3ef; border-radius: 2px !important; background: #fff; }
 .teacher-signatures-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 16px; border-bottom: 1px solid #e1e9f2; background: #eef4fb; }
 .teacher-signatures-header strong { color: #315f97; font-size: .9rem; }
@@ -608,6 +624,10 @@ body { margin: 0; background: #f8f9fe; }
   .teacher-signatures-header { align-items: flex-start; flex-direction: column; }
   .teacher-profile-grid { grid-template-columns: 1fr; }
   .teacher-center-fields { grid-template-columns: 1fr; }
+  .teacher-models-heading { align-items: flex-start; flex-direction: column; }
+  .teacher-model-card { grid-template-columns: 28px minmax(0, 1fr) 34px; }
+  .teacher-model-card .v-input { grid-column: 2; }
+  .teacher-model-card .v-btn { grid-column: 3; grid-row: 1; }
 }
 
 /* Las vistas de trabajo son deliberadamente "a sangre" en tablet. Las reglas

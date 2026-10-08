@@ -701,6 +701,25 @@ const aiModels = Object.freeze({
   'moonshotai/kimi-k3': { reasoningEffort: 'minimal', label: 'Kimi K3' },
 })
 
+async function resolveAiModel(request, requestedModel) {
+  const model = String(requestedModel || 'google/gemini-3-flash-preview').trim().slice(0, 180)
+  const teacher = await adminDb.doc(`teachers/${request.auth.uid}`).get()
+  const configuredModels = teacher.data()?.perfil?.modelos
+  if (Array.isArray(configuredModels)) {
+    const configured = configuredModels.find((item) => String(item?.openRouterId || '').trim() === model)
+    if (!configured) throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está configurado en tu perfil.')
+    return {
+      id: model,
+      label: String(configured.nombre || model).trim().slice(0, 160) || model,
+      description: String(configured.descripcion || '').trim().slice(0, 500),
+      reasoningEffort: 'minimal',
+    }
+  }
+  const legacy = aiModels[model]
+  if (!legacy) throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
+  return { id: model, ...legacy }
+}
+
 const variationResponseFormat = {
   type: 'json_schema',
   json_schema: {
@@ -1004,7 +1023,7 @@ async function waitForRetry(milliseconds) {
   await new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
-async function requestOpenRouterWithRetry({ body, model, deadlineAt, maximumAttempts = 3 }) {
+async function requestOpenRouterWithRetry({ body, model, modelLabel = model, deadlineAt, maximumAttempts = 3 }) {
   let lastFailure = null
   for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
     const remainingMs = deadlineAt - Date.now()
@@ -1061,7 +1080,7 @@ async function requestOpenRouterWithRetry({ body, model, deadlineAt, maximumAtte
 
   throw new HttpsError(
     'unavailable',
-    `Fallo temporal de ${aiModels[model]?.label || model} en OpenRouter tras varios intentos. ${lastFailure?.message || 'Vuelve a intentarlo dentro de unos instantes.'}`,
+    `Fallo temporal de ${modelLabel || model} en OpenRouter tras varios intentos. ${lastFailure?.message || 'Vuelve a intentarlo dentro de unos instantes.'}`,
     {
       provider: lastFailure?.provider,
       status: lastFailure?.status,
@@ -1322,11 +1341,9 @@ export const generateExerciseVariation = onCall({
   if (!enunciado || enunciado.length > 60_000) {
     throw new HttpsError('invalid-argument', 'El enunciado es obligatorio y no puede superar 60.000 caracteres.')
   }
-  if (!Object.hasOwn(aiModels, model)) {
-    throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
-  }
+  const modelConfig = await resolveAiModel(request, model)
   const exerciseForGeneration = normalizeDisplayMathDelimiters(stripLegacySolutionCommands(enunciado))
-  const modelLabel = aiModels[model].label
+  const modelLabel = modelConfig.label
 
   try {
     console.info('OpenRouter variation request started', {
@@ -1369,7 +1386,7 @@ export const generateExerciseVariation = onCall({
         },
         body: JSON.stringify({
           model,
-          reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+          reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
           messages: [
             { role: 'system', content: analysisSystemPrompt },
             { role: 'user', content: [curriculumContext, 'EJERCICIO BASE:', exerciseForGeneration].filter(Boolean).join('\n\n') },
@@ -1422,7 +1439,7 @@ ${variation?.enunciado || ''}`
         },
         body: JSON.stringify({
           model,
-          reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+          reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: [originalRequest, repairRequest].filter(Boolean).join('\n\n') },
@@ -1529,15 +1546,13 @@ export const generateExerciseSolution = onCall({
   if (!enunciado || enunciado.length > 60_000) {
     throw new HttpsError('invalid-argument', 'El enunciado es obligatorio y no puede superar 60.000 caracteres.')
   }
-  if (!Object.hasOwn(aiModels, model)) {
-    throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
-  }
+  const modelConfig = await resolveAiModel(request, model)
   if (/\\begin\s*\{solucion\}/.test(enunciado)) {
     throw new HttpsError('failed-precondition', 'Esta variante ya tiene una solución.')
   }
 
   const exerciseForSolution = normalizeDisplayMathDelimiters(stripLegacySolutionCommands(enunciado))
-  const expectedInfo = infoContent(exerciseForSolution) || `Generado por ${aiModels[model].label}`
+  const expectedInfo = infoContent(exerciseForSolution) || `Generado por ${modelConfig.label}`
   try {
     console.info('OpenRouter solution request started', {
       model,
@@ -1554,7 +1569,7 @@ export const generateExerciseSolution = onCall({
       },
       body: JSON.stringify({
         model,
-        reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+        reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
         messages: [
           { role: 'system', content: solutionSystemPrompt },
           {
@@ -1612,7 +1627,7 @@ export const generateExerciseSolution = onCall({
         },
         body: JSON.stringify({
           model,
-          reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+          reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
           messages: [
             {
               role: 'system',
@@ -1680,9 +1695,7 @@ export const suggestRubricAlignment = onCall({
   requireTeacherAccess(request)
 
   const model = typeof request.data?.model === 'string' ? request.data.model : 'google/gemini-3-flash-preview'
-  if (!Object.hasOwn(aiModels, model)) {
-    throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
-  }
+  const modelConfig = await resolveAiModel(request, model)
 
   const text = (value, maximum = 4_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
   const criteria = (Array.isArray(request.data?.criteria) ? request.data.criteria : []).slice(0, 120).map((criterion) => ({
@@ -1722,7 +1735,7 @@ export const suggestRubricAlignment = onCall({
       },
       body: JSON.stringify({
         model,
-        reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+        reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
         messages: [
           {
             role: 'system',
@@ -1787,9 +1800,7 @@ export const suggestExerciseGradingCriteria = onCall({
   requireTeacherAccess(request)
 
   const model = typeof request.data?.model === 'string' ? request.data.model : 'google/gemini-3-flash-preview'
-  if (!Object.hasOwn(aiModels, model)) {
-    throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
-  }
+  const modelConfig = await resolveAiModel(request, model)
 
   const cleanText = (value, maximum = 8_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
   const course = cleanText(request.data?.course, 80)
@@ -1822,7 +1833,7 @@ export const suggestExerciseGradingCriteria = onCall({
       },
       body: JSON.stringify({
         model,
-        reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+        reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
         messages: [
           {
             role: 'system',
@@ -1965,8 +1976,8 @@ export const generateDocumentContent = onCall({
   requireTeacherAccess(request)
   const startedAt = Date.now()
   const clean = (value, maximum = 20_000) => typeof value === 'string' ? value.trim().slice(0, maximum) : ''
-  const model = clean(request.data?.model, 120) || 'google/gemini-3-flash-preview'
-  if (!Object.hasOwn(aiModels, model)) throw new HttpsError('invalid-argument', 'El modelo de IA seleccionado no está permitido.')
+  const model = clean(request.data?.model, 180) || 'google/gemini-3-flash-preview'
+  const modelConfig = await resolveAiModel(request, model)
   const mode = request.data?.mode === 'align' ? 'align' : request.data?.mode === 'exercise' ? 'exercise' : 'generate'
   const sourceType = clean(request.data?.sourceType, 40)
   const course = clean(request.data?.course, 80)
@@ -2089,10 +2100,11 @@ export const generateDocumentContent = onCall({
     })
     const { payload, attempt } = await requestOpenRouterWithRetry({
       model,
+      modelLabel: modelConfig.label,
       deadlineAt: startedAt + 270_000,
       body: {
         model,
-        reasoning: { effort: aiModels[model].reasoningEffort, exclude: true },
+        reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
         messages: [{
           role: 'system',
           content: `Eres un profesor experto en diseño editorial de documentos y ejercicios de Matemáticas. Devuelve exclusivamente el JSON solicitado. Cada ejercicio generado debe ser correcto y autosuficiente${course ? `, apropiado para ${course}` : ''}.
@@ -2170,7 +2182,7 @@ ${achievementGranularityInstructions(course)}
         achievements: parts.length ? [] : normalizeGeneratedAchievements(exercise?.achievements, points, law, model),
         partsEnvironment: parts.length && exercise?.partsEnvironment === 'apartadosc' ? 'apartadosc' : (parts.length ? 'apartados' : 'none'),
         parts,
-        info: clean(exercise?.info, 1_000) || `Generado por ${aiModels[model].label}`,
+        info: clean(exercise?.info, 1_000) || `Generado por ${modelConfig.label}`,
         competencial: Boolean(exercise?.competencial),
       }
     }).filter((exercise) => exercise.statement)
@@ -2217,7 +2229,7 @@ ${achievementGranularityInstructions(course)}
     if (error instanceof HttpsError) throw error
     if (error?.name === 'TimeoutError') {
       console.error('Document content generation timed out', { model, sourceType, elapsedMs: Date.now() - startedAt })
-      throw new HttpsError('deadline-exceeded', `La generación con ${aiModels[model].label} ha superado 4 minutos y medio.`)
+      throw new HttpsError('deadline-exceeded', `La generación con ${modelConfig.label} ha superado 4 minutos y medio.`)
     }
     console.error('Document content generation failed', { model, sourceType, elapsedMs: Date.now() - startedAt, error })
     throw new HttpsError('internal', 'No se ha podido generar el contenido del documento con IA.')

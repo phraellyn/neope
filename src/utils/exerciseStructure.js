@@ -296,8 +296,13 @@ function extractInfo(source) {
   }
 }
 
+function removeCriteriaCommands(source) {
+  const commands = topLevelCommands(text(source), ['criterios'])
+  return removeRanges(text(source), commands.map((command) => ({ start: command.start, end: command.fullEnd }))).trim()
+}
+
 export function parseExerciseLatex(value = '') {
-  const infoResult = extractInfo(text(value))
+  const infoResult = extractInfo(removeCriteriaCommands(text(value)))
   const leading = stripLeadingExerciseCommand(infoResult.source)
   const partsEnvironment = findEnvironment(leading.working, ['apartados', 'apartadosc'])
   const mainSource = partsEnvironment ? leading.working.slice(0, partsEnvironment.start) : leading.working
@@ -496,11 +501,62 @@ function scoreCommand(command, value) {
   return number(value) > 0 ? `\\${command}{${numberText(value)}}` : ''
 }
 
+// Los criterios se escriben dentro del argumento de \criterios. Conservamos
+// las expresiones matemáticas y los comandos LaTeX que pueda haber redactado
+// el profesor, pero protegemos los caracteres que romperían una celda o el
+// argumento de la macro.
+function criteriaCellText(value) {
+  const source = text(value).trim().replace(/\r?\n/g, ' ')
+  let inMath = false
+  let result = ''
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]
+    if (character === '$' && !escaped(source, index)) inMath = !inMath
+    if (!inMath && character === '&' && !escaped(source, index)) result += '\\&'
+    else if (!inMath && character === '%' && !escaped(source, index)) result += '\\%'
+    else if (!inMath && character === '#' && !escaped(source, index)) result += '\\#'
+    else if (!inMath && character === '_' && !escaped(source, index)) result += '\\_'
+    else result += character
+  }
+  return result
+}
+
+function criteriaPartLabel(index) {
+  return index < 26 ? String.fromCharCode(97 + index) : String(index + 1)
+}
+
+function criteriaTableBody(structure) {
+  const rows = []
+  const appendRows = (label, criteria) => {
+    const list = normalizeExerciseGradingCriteria(criteria)
+    list.forEach((criterion, index) => {
+      const description = criteriaCellText(criterion.description)
+      if (!description) return
+      const suffix = index === list.length - 1 ? ' \\\\ \\\\hline' : ' \\\\ '
+      rows.push(`${index === 0 ? label : ''} & ${description} & ${numberText(criterion.points)}${suffix}`)
+    })
+  }
+
+  if (structure.apartados.length) {
+    appendRows('', structure.gradingCriteria)
+    structure.apartados.forEach((part, index) => appendRows(criteriaPartLabel(index), part.gradingCriteria))
+  } else {
+    appendRows('', structure.gradingCriteria)
+  }
+  return rows.join('\n')
+}
+
+function criteriaCommand(structure) {
+  const body = criteriaTableBody(structure)
+  return body ? `\\criterios{\n${body}\n}` : ''
+}
+
 export function buildExerciseLatex(value = {}, options = {}) {
   const structure = aggregateExerciseStructure(value)
   const includeSolutions = options.includeSolutions !== false
   const includeAnswers = options.includeAnswers !== false
   const includeDurationMetadata = options.includeDurationMetadata !== false
+  const includeCriteria = options.includeCriteria ?? includeSolutions
   const preserveEnvironment = options.preserveApartadosEnvironment !== false && options.preservePartsEnvironment !== false
   const exerciseMetadata = [
     scoreCommand('M', structure.puntuacion),
@@ -533,6 +589,10 @@ export function buildExerciseLatex(value = {}, options = {}) {
     chunks.push(`\\begin{${environment}}\n${parts.join('\n\n')}\n\\end{${environment}}`)
   }
   if (text(structure.final).trim()) chunks.push(structure.final.trim())
+  if (includeCriteria) {
+    const criteria = criteriaCommand(structure)
+    if (criteria) chunks.push(criteria)
+  }
   if (text(structure.info).trim()) chunks.push(`\\info{${structure.info.trim()}}`)
   return chunks.filter(Boolean).join('\n\n')
 }

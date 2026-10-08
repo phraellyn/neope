@@ -33,7 +33,7 @@
 \usepackage{pgf}
 \usepackage{cancel}
 \usepackage{tikz}
-\usepackage{array,colortbl,multirow,multicol,booktabs,ctable,eurosym}
+\usepackage{array,colortbl,multirow,multicol,booktabs,ctable,eurosym,tabularx}
 \usepackage{pgfplots}
 \usetikzlibrary{3d,babel,positioning,arrows,shapes,calc}
 \usetikzlibrary{arrows.meta,shapes.geometric}
@@ -818,6 +818,18 @@
 			}
 		}
 	}
+}
+
+% Tabla de criterios de calificación generada por Neope. El argumento
+% contiene las filas; así cada plantilla puede redefinir el aspecto de la
+% tabla sin cambiar la estructura de los ejercicios.
+\newcommand{\criterios}[1]{%
+\par\vspace{2mm}%
+\setlength{\tabcolsep}{8pt}%
+\renewcommand{\arraystretch}{1.35}%
+\begin{tabularx}{\linewidth}{|c|X|c|}\hline
+#1
+\end{tabularx}%
 }
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

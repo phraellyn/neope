@@ -59,9 +59,10 @@ assert.match(rebuilt, /\\info\{Origen\}/)
 assert.match(rebuilt, /\\T\{12\}/)
 assert.match(rebuilt, /\\t\{5\}/)
 assert.match(rebuilt, /\\t\{7\}/)
+assert.match(rebuilt, /\\criterios\{[\s\S]*Plantea correctamente[\s\S]*0,5/)
 assert.doesNotMatch(rebuilt, /\\ej[^\n]*\\\\\n\s*\n/)
 assert.deepEqual(restored.apartados[0].gradingCriteria, structure.apartados[0].gradingCriteria)
-assert.doesNotMatch(rebuilt, /Plantea correctamente/)
+assert.doesNotMatch(buildExerciseLatex(restored, { includeSolutions: false, includeAnswers: false }), /\\criterios\{/)
 const achievementOnlyEdit = exerciseDocumentStructure({
   ...restored,
   apartados: restored.apartados.map((part, index) => index === 0
@@ -70,7 +71,9 @@ const achievementOnlyEdit = exerciseDocumentStructure({
 }, document, 1)
 assert.deepEqual(
   compilationArtifacts(achievementOnlyEdit, 'demo', 1).map((artifact) => artifact.code),
-  compilationArtifacts(document, 'demo', 1).map((artifact) => artifact.code),
+  compilationArtifacts(document, 'demo', 1).map((artifact) => artifact.code).map((code, index) => (
+    index === 1 ? code.replace('0,5', '0,75') : code
+  )),
 )
 
 const documentLatex = buildExerciseLatex(restored, {

@@ -152,6 +152,7 @@ const isSavingSchedule = ref(false)
 const firestoreError = ref('')
 const teacherDocument = computed(() => currentTeacherId.value ? doc(db, 'teachers', currentTeacherId.value) : null)
 const teacherProfile = ref({ centros: [] })
+const teacherProfileTab = ref('professional')
 const teacherProfileEditing = ref(false)
 const teacherProfileEditingCenterId = ref(null)
 const isSavingTeacherProfile = ref(false)
@@ -199,20 +200,39 @@ const exerciseSourceOptions = reactive({
 const isGeneratingPartSolution = ref(null)
 const sessionUploadedAttachmentPaths = new Set()
 const pendingDeletedAttachments = []
-const aiModelOptions = Object.freeze([
-  { title: 'Gemini 3 Flash', value: 'google/gemini-3-flash-preview', subtitle: 'Predeterminado · rápido y fiable' },
-  { title: 'Gemini 3.7 Flash', value: 'google/gemini-3.7-flash', subtitle: 'Nueva generación · rápido y preciso' },
-  { title: 'Gemini 3.8 Flash', value: 'google/gemini-3.8-flash', subtitle: 'Nueva generación · rápido y preciso' },
-  { title: 'GPT-5 Mini', value: 'openai/gpt-5-mini', subtitle: 'Equilibrio entre coste y calidad' },
-  { title: 'GPT-5.6 Luna', value: 'openai/gpt-5.6-luna', subtitle: 'Premium · rápida y estructurada' },
-  { title: 'GPT-5.6 Terra', value: 'openai/gpt-5.6-terra', subtitle: 'Premium · razonamiento equilibrado' },
-  { title: 'GPT-5.6 Sol', value: 'openai/gpt-5.6-sol', subtitle: 'Premium · máxima capacidad' },
-  { title: 'GPT-6 Astra', value: 'openai/gpt-6-astra', subtitle: 'Premium · máxima capacidad' },
-  { title: 'Claude Fable 5.1', value: 'anthropic/claude-fable-5.1', subtitle: 'Premium · razonamiento y redacción' },
-  { title: 'Claude Sonnet 5.5', value: 'anthropic/claude-sonnet-5.5', subtitle: 'Premium · razonamiento y redacción' },
-  { title: 'Kimi K3', value: 'moonshotai/kimi-k3', subtitle: 'Premium · razonamiento de contexto largo' },
+const defaultAiModels = Object.freeze([
+  { id: 'gemini-3-flash', nombre: 'Gemini 3 Flash', openRouterId: 'google/gemini-3-flash-preview', descripcion: 'Predeterminado · rápido y fiable' },
+  { id: 'gemini-3-7-flash', nombre: 'Gemini 3.7 Flash', openRouterId: 'google/gemini-3.7-flash', descripcion: 'Nueva generación · rápido y preciso' },
+  { id: 'gemini-3-8-flash', nombre: 'Gemini 3.8 Flash', openRouterId: 'google/gemini-3.8-flash', descripcion: 'Nueva generación · rápido y preciso' },
+  { id: 'gpt-5-mini', nombre: 'GPT-5 Mini', openRouterId: 'openai/gpt-5-mini', descripcion: 'Equilibrio entre coste y calidad' },
+  { id: 'gpt-5-6-luna', nombre: 'GPT-5.6 Luna', openRouterId: 'openai/gpt-5.6-luna', descripcion: 'Premium · rápida y estructurada' },
+  { id: 'gpt-5-6-terra', nombre: 'GPT-5.6 Terra', openRouterId: 'openai/gpt-5.6-terra', descripcion: 'Premium · razonamiento equilibrado' },
+  { id: 'gpt-5-6-sol', nombre: 'GPT-5.6 Sol', openRouterId: 'openai/gpt-5.6-sol', descripcion: 'Premium · máxima capacidad' },
+  { id: 'gpt-6-astra', nombre: 'GPT-6 Astra', openRouterId: 'openai/gpt-6-astra', descripcion: 'Premium · máxima capacidad' },
+  { id: 'claude-fable-5-1', nombre: 'Claude Fable 5.1', openRouterId: 'anthropic/claude-fable-5.1', descripcion: 'Premium · razonamiento y redacción' },
+  { id: 'claude-sonnet-5-5', nombre: 'Claude Sonnet 5.5', openRouterId: 'anthropic/claude-sonnet-5.5', descripcion: 'Premium · razonamiento y redacción' },
+  { id: 'kimi-k3', nombre: 'Kimi K3', openRouterId: 'moonshotai/kimi-k3', descripcion: 'Premium · razonamiento de contexto largo' },
 ])
+const aiModelOptions = computed(() => {
+  const configured = Array.isArray(teacherProfile.value.modelos) ? teacherProfile.value.modelos : defaultAiModels
+  return configured
+    .filter((model) => model?.openRouterId && model?.nombre)
+    .map((model) => ({
+      title: model.nombre,
+      value: model.openRouterId,
+      subtitle: model.descripcion || model.openRouterId,
+    }))
+})
 const selectedAiModel = ref('google/gemini-3-flash-preview')
+watch(aiModelOptions, (options) => {
+  const configuredDefault = String(teacherProfile.value.modeloPorDefecto || '').trim()
+  const preferred = options.find((model) => model.value === configuredDefault)?.value
+  if (preferred) {
+    selectedAiModel.value = preferred
+  } else if (!options.some((model) => model.value === selectedAiModel.value)) {
+    selectedAiModel.value = options[0]?.value || ''
+  }
+}, { immediate: true })
 const exercisesError = ref('')
 const latexEditorHost = ref(null)
 let latexCodeEditor
@@ -1289,9 +1309,24 @@ function emptyTeacherCenter() {
   return { id: crypto.randomUUID(), curso: '', centro: '', descripcion: '', imagenes: [] }
 }
 
+function emptyTeacherAiModel() {
+  return { id: crypto.randomUUID(), nombre: '', openRouterId: '', descripcion: '' }
+}
+
+function normalizeTeacherAiModels(models) {
+  return (Array.isArray(models) ? models : defaultAiModels).slice(0, 40).map((model) => ({
+    id: String(model?.id || crypto.randomUUID()),
+    nombre: String(model?.nombre || model?.title || '').trim(),
+    openRouterId: String(model?.openRouterId || model?.value || '').trim(),
+    descripcion: String(model?.descripcion || model?.subtitle || '').trim(),
+  })).filter((model) => model.nombre && model.openRouterId)
+}
+
 function normalizeTeacherProfile(profile) {
   const centros = Array.isArray(profile?.centros) ? profile.centros : []
   const firmas = Array.isArray(profile?.firmas) ? profile.firmas : []
+  const modelos = normalizeTeacherAiModels(profile?.modelos)
+  const requestedDefault = String(profile?.modeloPorDefecto || '').trim()
   return {
     centros: centros.map((center) => ({
       id: center.id || crypto.randomUUID(),
@@ -1311,7 +1346,64 @@ function normalizeTeacherProfile(profile) {
       url: image.url,
       path: image.path || '',
     })),
+    modelos,
+    modeloPorDefecto: modelos.some((model) => model.openRouterId === requestedDefault)
+      ? requestedDefault
+      : (modelos[0]?.openRouterId || ''),
   }
+}
+
+const teacherModelsValid = computed(() => {
+  const models = teacherProfile.value.modelos || []
+  const identifiers = models.map((model) => String(model.openRouterId || '').trim())
+  return models.length > 0
+    && models.every((model) => String(model.nombre || '').trim()
+      && /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:/-]*$/iu.test(String(model.openRouterId || '').trim()))
+    && new Set(identifiers).size === identifiers.length
+})
+
+function addTeacherAiModel() {
+  teacherProfile.value.modelos ||= []
+  const model = emptyTeacherAiModel()
+  teacherProfile.value.modelos.push(model)
+  if (!teacherProfile.value.modeloPorDefecto) teacherProfile.value.modeloPorDefecto = model.openRouterId
+}
+
+function removeTeacherAiModel(model) {
+  teacherProfile.value.modelos = (teacherProfile.value.modelos || []).filter((item) => item.id !== model.id)
+  if (teacherProfile.value.modeloPorDefecto === model.openRouterId) {
+    teacherProfile.value.modeloPorDefecto = teacherProfile.value.modelos[0]?.openRouterId || ''
+    selectedAiModel.value = teacherProfile.value.modeloPorDefecto
+  }
+}
+
+async function selectTeacherDefaultModel(model) {
+  if (!model?.openRouterId) return
+  teacherProfile.value.modeloPorDefecto = model.openRouterId
+  selectedAiModel.value = model.openRouterId
+  if (!teacherDocument.value) return
+  isSavingTeacherProfile.value = true
+  teacherProfileError.value = ''
+  try {
+    await setDoc(teacherDocument.value, { perfil: { modeloPorDefecto: model.openRouterId } }, { merge: true })
+  } catch (error) {
+    teacherProfileError.value = 'No se ha podido guardar el modelo predeterminado.'
+    console.error('Error al guardar el modelo predeterminado:', error)
+  } finally {
+    isSavingTeacherProfile.value = false
+  }
+}
+
+async function saveTeacherAiModels() {
+  if (!teacherModelsValid.value) {
+    teacherProfileError.value = 'Completa un nombre y un identificador OpenRouter válido y no repetido para cada modelo.'
+    return
+  }
+  teacherProfile.value.modelos = normalizeTeacherAiModels(teacherProfile.value.modelos)
+  if (!teacherProfile.value.modelos.some((model) => model.openRouterId === teacherProfile.value.modeloPorDefecto)) {
+    teacherProfile.value.modeloPorDefecto = teacherProfile.value.modelos[0]?.openRouterId || ''
+  }
+  await saveTeacherProfile()
 }
 
 function addTeacherCenter() {
@@ -1435,7 +1527,14 @@ async function saveTeacherProfile() {
   isSavingTeacherProfile.value = true
   teacherProfileError.value = ''
   try {
-    await setDoc(teacherDocument.value, { perfil: { centros: teacherProfile.value.centros, firmas: teacherProfile.value.firmas || [] } }, { merge: true })
+    await setDoc(teacherDocument.value, {
+      perfil: {
+        centros: teacherProfile.value.centros,
+        firmas: teacherProfile.value.firmas || [],
+        modelos: teacherProfile.value.modelos || [],
+        modeloPorDefecto: teacherProfile.value.modeloPorDefecto || teacherProfile.value.modelos?.[0]?.openRouterId || '',
+      },
+    }, { merge: true })
   } catch (error) {
     teacherProfileError.value = 'No se ha podido guardar el perfil del profesor.'
     console.error('Error al guardar el perfil del profesor:', error)
@@ -4923,7 +5022,10 @@ onBeforeUnmount(() => {
           class="exercise-ai-model"
         >
           <template #item="{ props, item }">
-            <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
+            <v-list-item v-bind="props">
+              <v-list-item-title class="ai-model-option-title">{{ item.raw.title }}</v-list-item-title>
+              <v-list-item-subtitle>{{ item.raw.subtitle }}</v-list-item-subtitle>
+            </v-list-item>
           </template>
         </v-select>
         <v-spacer />
@@ -5007,6 +5109,27 @@ onBeforeUnmount(() => {
         <template v-else>
           <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" :disabled="rubricWorkflow.isSaving" @click="closeActiveRubric">Rúbricas</v-btn>
           <v-spacer />
+          <v-select
+            v-model="selectedAiModel"
+            :items="aiModelOptions"
+            item-title="title"
+            item-value="value"
+            aria-label="Modelo de inteligencia artificial"
+            prepend-inner-icon="mdi-brain"
+            variant="outlined"
+            density="compact"
+            rounded="pill"
+            single-line
+            hide-details
+            class="exercise-ai-model mr-2"
+          >
+            <template #item="{ props, item }">
+              <v-list-item v-bind="props">
+                <v-list-item-title class="ai-model-option-title">{{ item.raw.title }}</v-list-item-title>
+                <v-list-item-subtitle>{{ item.raw.subtitle }}</v-list-item-subtitle>
+              </v-list-item>
+            </template>
+          </v-select>
           <v-tooltip v-if="rubricWorkflow.persisted" text="Duplicar rúbrica" location="bottom">
             <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-content-copy" rounded="circle" variant="text" aria-label="Duplicar rúbrica" @click="duplicateActiveRubric" /></template>
           </v-tooltip>
@@ -5207,7 +5330,8 @@ onBeforeUnmount(() => {
       <template v-else-if="active === 'Perfil'">
         <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back ml-1" @click="setActiveView('Ejercicios')">Volver</v-btn>
         <v-spacer />
-        <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action mr-3" @click="addTeacherCenter">Nuevo centro</v-btn>
+        <v-btn v-if="teacherProfileTab === 'professional'" color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action mr-3" @click="addTeacherCenter">Nuevo centro</v-btn>
+        <v-btn v-else color="primary" variant="flat" prepend-icon="mdi-plus" class="app-toolbar-primary-action mr-3" @click="addTeacherAiModel">Nuevo modelo</v-btn>
         <v-tooltip text="Calendario" location="bottom">
           <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
         </v-tooltip>
@@ -5325,11 +5449,17 @@ onBeforeUnmount(() => {
           <header class="teacher-profile-intro">
             <div>
               <span class="teacher-profile-eyebrow">Perfil profesional</span>
-              <h1>Centros y cursos</h1>
-              <p>Añade los centros donde trabajas o has trabajado. Sus logotipos podrán utilizarse más adelante en los documentos.</p>
+              <h1>{{ teacherProfileTab === 'models' ? 'Modelos de IA' : 'Centros y cursos' }}</h1>
+              <p v-if="teacherProfileTab === 'models'">Configura los modelos de OpenRouter disponibles en las herramientas de generación de Neope.</p>
+              <p v-else>Añade los centros donde trabajas o has trabajado. Sus logotipos podrán utilizarse más adelante en los documentos.</p>
             </div>
             <v-avatar size="64" class="teacher-profile-avatar" color="primary"><img v-if="isAdministrator" src="/brand/carlos-sanchez-catala.png" alt=""><span v-else>{{ currentUserInitials }}</span></v-avatar>
           </header>
+          <v-tabs v-model="teacherProfileTab" density="compact" class="teacher-profile-tabs" color="primary">
+            <v-tab value="professional" prepend-icon="mdi-school-outline">Perfil</v-tab>
+            <v-tab value="models" prepend-icon="mdi-brain">Modelos</v-tab>
+          </v-tabs>
+          <template v-if="teacherProfileTab === 'professional'">
           <v-card class="teacher-signatures-card" variant="outlined">
             <header class="teacher-signatures-header">
               <div>
@@ -5390,6 +5520,49 @@ onBeforeUnmount(() => {
             </v-card>
           </div>
           <LocalStudentDataTransfer />
+          </template>
+          <section v-else class="teacher-models-panel">
+            <header class="teacher-models-heading">
+              <div>
+                <strong>Modelos disponibles</strong>
+                <p>El identificador debe coincidir exactamente con el publicado por OpenRouter, por ejemplo <code>google/gemini-3.8-flash</code>.</p>
+              </div>
+              <v-btn
+                color="primary"
+                variant="flat"
+                prepend-icon="mdi-content-save-outline"
+                :disabled="!teacherModelsValid"
+                :loading="isSavingTeacherProfile"
+                @click="saveTeacherAiModels"
+              >Guardar modelos</v-btn>
+            </header>
+            <div v-if="teacherProfile.modelos?.length" class="teacher-models-list">
+              <v-card v-for="(model, index) in teacherProfile.modelos" :key="model.id" variant="outlined" class="teacher-model-card">
+                <v-tooltip :text="teacherProfile.modeloPorDefecto === model.openRouterId ? 'Modelo predeterminado' : 'Usar como modelo predeterminado'" location="top">
+                  <template #activator="{ props }">
+                    <button
+                      v-bind="props"
+                      type="button"
+                      class="teacher-model-order"
+                      :class="{ 'teacher-model-order-active': teacherProfile.modeloPorDefecto === model.openRouterId }"
+                      :aria-label="`${teacherProfile.modeloPorDefecto === model.openRouterId ? 'Modelo predeterminado' : 'Seleccionar como modelo predeterminado'}: ${model.nombre || `modelo ${index + 1}`}`"
+                      @click="selectTeacherDefaultModel(model)"
+                    >{{ index + 1 }}</button>
+                  </template>
+                </v-tooltip>
+                <v-text-field v-model="model.nombre" label="Nombre visible" placeholder="Gemini 3.8 Flash" variant="outlined" density="compact" hide-details />
+                <v-text-field v-model="model.openRouterId" label="Identificador de OpenRouter" placeholder="google/gemini-3.8-flash" variant="outlined" density="compact" hide-details />
+                <v-text-field v-model="model.descripcion" label="Comentario" placeholder="Rápido y preciso" variant="outlined" density="compact" hide-details />
+                <v-btn icon="mdi-delete-outline" rounded="circle" size="small" variant="text" color="error" aria-label="Eliminar modelo" @click="removeTeacherAiModel(model)" />
+              </v-card>
+            </div>
+            <div v-else class="teacher-profile-empty teacher-models-empty">
+              <v-icon icon="mdi-brain" size="44" />
+              <strong>No hay modelos configurados</strong>
+              <span>Añade al menos un modelo para poder utilizar las funciones de IA.</span>
+              <v-btn color="primary" variant="tonal" prepend-icon="mdi-plus" @click="addTeacherAiModel">Añadir modelo</v-btn>
+            </div>
+          </section>
         </section>
         <section v-else-if="active === 'Ejercicios'" class="exercises-page">
           <template v-if="exerciseView === 'search'">

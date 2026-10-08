@@ -436,6 +436,30 @@ const markerFieldDefinitions = Object.freeze({
   course: { key: 'course', label: 'Grupo', type: 'group', placeholder: '2ºBTO B' },
 })
 
+const exerciseCollectionTemplatePattern = /(?:^|\/)ejercicios\.tex$/i
+
+function isExerciseCollectionTemplate(template = null) {
+  return exerciseCollectionTemplatePattern.test(String(template?.archivo || '').trim())
+}
+
+function addTemplateSpecialFields(template, metadata) {
+  if (!isExerciseCollectionTemplate(template)) return metadata
+  if (metadata.fields.some((field) => field.key === 'includeCriteria')) return metadata
+  return {
+    ...metadata,
+    fields: [
+      ...metadata.fields,
+      {
+        key: 'includeCriteria',
+        label: 'Criterios de calificación',
+        type: 'checkbox',
+        default: true,
+        formOnly: true,
+      },
+    ],
+  }
+}
+
 function markerFieldDefinition(name, argument) {
   const normalized = normalizeName(name)
   const known = markerFieldDefinitions[normalized]
@@ -552,7 +576,7 @@ const documentTemplates = computed(() => {
       ...template,
       key: template.id || template.archivo,
       metadata: {
-        ...metadata,
+        ...addTemplateSpecialFields(template, metadata),
         name: template.nombre || 'Documento',
       },
     }]
@@ -586,7 +610,7 @@ function generationLatexCapabilities() {
     customCommands: [...commands].slice(0, 120),
     environments: [...environments].slice(0, 80),
     standardConstructs: ['\\rule', '\\vspace', '\\hspace', '\\parbox', '\\makebox', '\\fbox', '\\framebox', '\\raisebox', 'tabular', 'minipage', 'TikZ'],
-    headerFields: unifiedFields.value.map((field) => ({
+    headerFields: unifiedFields.value.filter((field) => Number.isFinite(field.argument)).map((field) => ({
       key: field.key,
       label: field.label,
       value: String(fieldValues[field.key] || '').trim(),
@@ -611,7 +635,8 @@ const unifiedFields = computed(() => {
     seen.add(identity)
     result.push({ ...field, unifiedKey: field.key })
   }))
-  return result.sort((a, b) => a.argument - b.argument)
+  return result.sort((a, b) => (Number.isFinite(a.argument) ? a.argument : Number.MAX_SAFE_INTEGER)
+    - (Number.isFinite(b.argument) ? b.argument : Number.MAX_SAFE_INTEGER))
 })
 const groupOptions = computed(() => {
   const seen = new Set()
@@ -732,7 +757,7 @@ const assessmentFieldsComplete = computed(() => !documentAssessment.evaluable
   || Boolean(effectiveAssessmentGroupId.value && documentAssessment.shortName.trim()))
 const requiredFieldsComplete = computed(() => Boolean(selectedTemplate.value)
   && selectedTemplates.value.length > 0
-  && unifiedFields.value.every((field) => String(fieldValues[field.key] || '').trim())
+  && unifiedFields.value.every((field) => field.type === 'checkbox' || String(fieldValues[field.key] || '').trim())
   && assessmentFieldsComplete.value)
 const canContinue = computed(() => {
   if (currentStep.value === 1) return requiredFieldsComplete.value
@@ -1423,6 +1448,7 @@ function queueExerciseCode(item, template = selectedTemplate.value) {
     // Los tiempos son metadatos de planificación de Neope. Las plantillas de
     // documentos no necesitan definir \T ni \t para poder usar ejercicios.
     includeDurationMetadata: false,
+    includeCriteria: criteriaEnabledForTemplate(template),
   }) || statementCode(sourceVersion?.enunciado || '')
   const exerciseCode = rewriteExerciseImageReferences(adaptExerciseEnvironmentsToTemplate(code, template), exercise)
   if (!item.pageBreakBefore) return exerciseCode
@@ -1809,7 +1835,9 @@ function dropOnQueueSection(event, section, targetBlockId = null, containerBlock
 
 function headerCode(template = selectedTemplate.value) {
   const metadata = template?.metadata || defaultMetadata
-  const fields = [...metadata.fields].sort((a, b) => a.argument - b.argument)
+  const fields = [...metadata.fields]
+    .filter((field) => Number.isFinite(field.argument))
+    .sort((a, b) => a.argument - b.argument)
   return `\\${metadata.command}\n${fields.map((field) => `    {${documentFieldValue(field, template)}}`).join('\n')}`
 }
 
@@ -1823,6 +1851,27 @@ function exercisePreambleRequirements(exercisesCode = '') {
     requirements.push('\\usetikzlibrary{3d}')
   }
   return requirements.join('\n')
+}
+
+// Mantiene compatibles las plantillas antiguas: si no definen \\criterios,
+// el documento sigue pudiendo mostrar el desglose generado por Neope. Una
+// plantilla que sí lo defina conserva el control total sobre su presentación
+// porque \\providecommand no sustituye una definición existente.
+function criteriaCommandFallback() {
+  return String.raw`\providecommand{\criterios}[1]{%
+\par\vspace{2mm}%
+\setlength{\tabcolsep}{8pt}%
+\renewcommand{\arraystretch}{1.35}%
+\ifdefined\tabularx
+\begin{tabularx}{\linewidth}{|c|X|c|}\hline
+#1
+\end{tabularx}%
+\else
+\begin{tabular}{|p{.12\linewidth}|p{.72\linewidth}|c|}\hline
+#1
+\end{tabular}%
+\fi
+}`
 }
 
 function generatedCodeForTemplate(template, options = {}) {
@@ -1848,6 +1897,8 @@ function generatedCodeForTemplate(template, options = {}) {
   return `\\input{../${templateInputName(template)}}
 
 ${preambleRequirements}
+
+${criteriaCommandFallback()}
 
 \\begin{document}
 
@@ -2056,7 +2107,7 @@ function revokePreview() {
 
 function resetFields() {
   Object.keys(fieldValues).forEach((key) => delete fieldValues[key])
-  unifiedFields.value.forEach((field) => { fieldValues[field.key] = '' })
+  unifiedFields.value.forEach((field) => { fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : '' })
 }
 
 function applyCreationContext() {
@@ -2079,7 +2130,7 @@ function applyCreationContext() {
 
 function ensureFields() {
   unifiedFields.value.forEach((field) => {
-    if (fieldValues[field.key] === undefined) fieldValues[field.key] = ''
+    if (fieldValues[field.key] === undefined) fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : ''
   })
 }
 
@@ -2153,7 +2204,18 @@ function formatDocumentDate(value) {
 
 function documentFieldValue(field, template = null) {
   const value = fieldValueFor(field, template)
+  if (field.type === 'checkbox') return ''
   return field.type === 'date' || field.key === 'date' ? formatDocumentDate(value) : String(value || '').trim()
+}
+
+function documentFieldStoredValue(field) {
+  const value = fieldValues[field.key]
+  if (field.type === 'checkbox') return Boolean(value)
+  return String(value || '').trim()
+}
+
+function criteriaEnabledForTemplate(template) {
+  return !isExerciseCollectionTemplate(template) || Boolean(fieldValues.includeCriteria)
 }
 
 function dateInputValue(value) {
@@ -2645,7 +2707,7 @@ function documentCardTitle(documentData) {
 
 function documentFieldEntries(documentData) {
   const metadata = documentTemplates.value.find((template) => template.archivo === documentData.plantilla?.archivo)?.metadata || defaultMetadata
-  return metadata.fields.map((field) => ({
+  return metadata.fields.filter((field) => field.type !== 'checkbox').map((field) => ({
     label: field.label,
     value: documentData.campos?.[field.key]
       ? (field.type === 'date' || field.key === 'date' ? formatDocumentDate(documentData.campos[field.key]) : documentData.campos[field.key])
@@ -2689,6 +2751,12 @@ function editDocument(documentData) {
   selectedPreviewTemplateKey.value = template.key
   resetFields()
   Object.assign(fieldValues, documentData.campos || {})
+  unifiedFields.value.filter((field) => field.type === 'checkbox').forEach((field) => {
+    const stored = documentData.campos?.[field.key]
+    fieldValues[field.key] = stored === undefined || stored === null
+      ? Boolean(field.default)
+      : (stored === true || stored === 'true' || stored === 1 || stored === '1')
+  })
   const storedAssessment = documentData.assessment || documentData.evaluacion || {}
   documentAssessment.evaluable = Boolean(storedAssessment.evaluable)
   documentAssessment.groupId = storedAssessment.groupId || null
@@ -2911,7 +2979,7 @@ async function saveDocument() {
         nombre: selectedTemplate.value.metadata.name || selectedTemplate.value.nombre,
       },
       plantillas: selectedTemplates.value.map((template) => ({ archivo: template.archivo, nombre: template.nombre || template.metadata.name })),
-      campos: Object.fromEntries(unifiedFields.value.map((field) => [field.key, String(fieldValues[field.key] || '').trim()])),
+      campos: Object.fromEntries(unifiedFields.value.map((field) => [field.key, documentFieldStoredValue(field)])),
       groupContext: selectedGroupOption.value ? {
         id: selectedGroupOption.value.id,
         name: selectedGroupOption.value.title,
@@ -3226,8 +3294,18 @@ defineExpose({
                 hide-details
                 @update:model-value="onFieldInput(field)"
               />
+              <v-checkbox
+                v-for="field in unifiedFields.filter((item) => item.type === 'checkbox')"
+                :key="field.key"
+                v-model="fieldValues[field.key]"
+                :label="field.label"
+                hide-details
+                density="comfortable"
+                color="primary"
+                @update:model-value="onFieldInput(field)"
+              />
               <v-text-field
-                v-for="field in unifiedFields.filter((item) => !['group', 'course', 'subject', 'date'].includes(item.type))"
+                v-for="field in unifiedFields.filter((item) => !['group', 'course', 'subject', 'date', 'checkbox'].includes(item.type))"
                 :key="field.key"
                 v-model="fieldValues[field.key]"
                 :label="field.label"
@@ -3309,7 +3387,14 @@ defineExpose({
               hide-details
               :disabled="isGeneratingContent || isCompiling"
               class="document-ai-model"
-            />
+            >
+              <template #item="{ props: itemProps, item }">
+                <v-list-item v-bind="itemProps">
+                  <v-list-item-title class="ai-model-option-title">{{ item.raw.title }}</v-list-item-title>
+                  <v-list-item-subtitle>{{ item.raw.subtitle }}</v-list-item-subtitle>
+                </v-list-item>
+              </template>
+            </v-select>
             <v-btn
               prepend-icon="mdi-auto-fix"
               size="small"

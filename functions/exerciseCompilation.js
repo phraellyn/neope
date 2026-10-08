@@ -21,6 +21,56 @@ function metadataCommand(command, value) {
   return Number(value) > 0 ? `\\${command}{${numberText(value)}}` : ''
 }
 
+function criteriaCellText(value) {
+  const source = String(value || '').trim().replace(/\r?\n/g, ' ')
+  let inMath = false
+  let result = ''
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]
+    let slashes = 0
+    for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) slashes += 1
+    const escaped = slashes % 2 === 1
+    if (character === '$' && !escaped) inMath = !inMath
+    if (!inMath && !escaped && character === '&') result += '\\&'
+    else if (!inMath && !escaped && character === '%') result += '\\%'
+    else if (!inMath && !escaped && character === '#') result += '\\#'
+    else if (!inMath && !escaped && character === '_') result += '\\_'
+    else result += character
+  }
+  return result
+}
+
+function criteriaPartLabel(index) {
+  return index < 26 ? String.fromCharCode(97 + index) : String(index + 1)
+}
+
+function criteriaTableBody(exercise) {
+  const rows = []
+  const appendRows = (label, criteria) => {
+    const list = Array.isArray(criteria) ? criteria : []
+    list.forEach((criterion, index) => {
+      const description = criteriaCellText(criterion?.description)
+      if (!description) return
+      const points = numberText(criterion?.points)
+      const suffix = index === list.length - 1 ? ' \\\\ \\\\hline' : ' \\\\ '
+      rows.push(`${index === 0 ? label : ''} & ${description} & ${points}${suffix}`)
+    })
+  }
+  const parts = Array.isArray(exercise.parts) ? exercise.parts : []
+  if (parts.length) {
+    appendRows('', exercise.gradingCriteria)
+    parts.forEach((part, index) => appendRows(criteriaPartLabel(index), part.gradingCriteria))
+  } else {
+    appendRows('', exercise.gradingCriteria)
+  }
+  return rows.join('\n')
+}
+
+function criteriaCommand(exercise) {
+  const body = criteriaTableBody(exercise)
+  return body ? `\\criterios{\n${body}\n}` : ''
+}
+
 function mainLatex(exercise, { includeSolutions, includeAnswers, includeScore = true }) {
   const chunks = ['\\ej']
   const metadata = includeScore ? [
@@ -36,7 +86,7 @@ function mainLatex(exercise, { includeSolutions, includeAnswers, includeScore = 
   return chunks.filter(Boolean).join('\n\n')
 }
 
-export function buildExerciseLatex(exercise, { includeSolutions = true, includeAnswers = true, preservePartsEnvironment = true } = {}) {
+export function buildExerciseLatex(exercise, { includeSolutions = true, includeAnswers = true, preservePartsEnvironment = true, includeCriteria = includeSolutions } = {}) {
   const chunks = [mainLatex(exercise, { includeSolutions, includeAnswers, includeScore: true })]
   const parts = Array.isArray(exercise.parts) ? exercise.parts : []
   if (parts.length) {
@@ -57,6 +107,10 @@ export function buildExerciseLatex(exercise, { includeSolutions = true, includeA
     chunks.push(`\\begin{${environment}}\n${body}\n\\end{${environment}}`)
   }
   if (exercise.final?.trim()) chunks.push(exercise.final.trim())
+  if (includeCriteria) {
+    const criteria = criteriaCommand(exercise)
+    if (criteria) chunks.push(criteria)
+  }
   if (exercise.info?.trim()) chunks.push(`\\info{${exercise.info.trim()}}`)
   return chunks.filter(Boolean).join('\n\n')
 }
@@ -120,7 +174,21 @@ export function codeForCompiler(code = '', profile = exerciseRenderProfiles.stat
   const body = profile === exerciseRenderProfiles.segment
     ? segmentTemplate(normalized)
     : completeExerciseTemplate(normalized)
-  return `\\shorthandoff{<>}\n${body}`
+  const criteriaFallback = String.raw`\providecommand{\criterios}[1]{%
+\par\vspace{2mm}%
+\setlength{\tabcolsep}{8pt}%
+\renewcommand{\arraystretch}{1.35}%
+\ifdefined\tabularx
+\begin{tabularx}{\linewidth}{|c|X|c|}\hline
+#1
+\end{tabularx}%
+\else
+\begin{tabular}{|p{.12\linewidth}|p{.72\linewidth}|c|}\hline
+#1
+\end{tabular}%
+\fi
+}`
+  return `\\shorthandoff{<>}\n${criteriaFallback}\n${body}`
 }
 
 export function sourceHash(code, context = '') {
