@@ -60,9 +60,20 @@ assert.match(rebuilt, /\\T\{12\}/)
 assert.match(rebuilt, /\\t\{5\}/)
 assert.match(rebuilt, /\\t\{7\}/)
 assert.match(rebuilt, /\\criterios\{[\s\S]*Plantea correctamente[\s\S]*0,5/)
+assert.equal(rebuilt.includes('\\\\ \\hline'), true)
+assert.equal(rebuilt.includes('\\\\hline'), false)
+assert.doesNotMatch(buildExerciseLatex({
+  ...restored,
+  gradingCriteria: [{ description: 'Trabaja en ℝ y verifica x ≥ 0.', points: 1 }],
+}, { includeSolutions: true }), /[ℝ≥]/)
+assert.match(buildExerciseLatex({
+  ...restored,
+  gradingCriteria: [{ description: 'Trabaja en ℝ y verifica x ≥ 0.', points: 1 }],
+}, { includeSolutions: true }), /\\ensuremath\{\\mathbb\{R\}\}/)
 assert.doesNotMatch(rebuilt, /\\ej[^\n]*\\\\\n\s*\n/)
 assert.deepEqual(restored.apartados[0].gradingCriteria, structure.apartados[0].gradingCriteria)
 assert.doesNotMatch(buildExerciseLatex(restored, { includeSolutions: false, includeAnswers: false }), /\\criterios\{/)
+assert.doesNotMatch(buildExerciseLatex(restored, { includeInfo: false }), /\\info\{Origen\}/)
 const achievementOnlyEdit = exerciseDocumentStructure({
   ...restored,
   apartados: restored.apartados.map((part, index) => index === 0

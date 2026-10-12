@@ -1000,7 +1000,42 @@ function choiceContent(choice) {
     ? rawContent
     : Array.isArray(rawContent)
       ? rawContent.map((part) => typeof part === 'string' ? part : part?.text || '').join('')
-      : ''
+      : choice?.message?.parsed && typeof choice.message.parsed === 'object'
+        ? JSON.stringify(choice.message.parsed)
+        : rawContent && typeof rawContent === 'object'
+          ? JSON.stringify(rawContent)
+          : ''
+}
+
+// MiMo 2.6 puede devolver la salida como texto aunque el proveedor acepte la
+// interfaz compatible con OpenAI. Mantener el identificador en un único sitio
+// permite usar JSON mode cuando está disponible y, a la vez, aceptar una
+// respuesta LaTeX directa sin convertirla en un falso «resultado vacío».
+function isMiMo26Model(model = '') {
+  return /^xiaomi\/mimo-v2\.6-(?:flash|pro|pro-ultraspeed)$/i.test(String(model).trim())
+}
+
+function responseFormatForModel(model, schema) {
+  return isMiMo26Model(model) ? { type: 'json_object' } : schema
+}
+
+function structuredText(content, key = 'enunciado') {
+  const value = String(content || '').trim()
+  if (!value) return ''
+  try {
+    const parsed = JSON.parse(value)
+    if (typeof parsed === 'string') return parsed.trim()
+    if (parsed && typeof parsed[key] === 'string') return parsed[key].trim()
+  } catch {
+    // Algunos proveedores de MiMo ignoran JSON mode y devuelven directamente
+    // el LaTeX solicitado. En ese caso el texto ya es la respuesta útil.
+  }
+  return value
+}
+
+function jsonModeInstruction(model, key = 'enunciado') {
+  if (!isMiMo26Model(model)) return ''
+  return `\n\nFORMATO DE TRANSPORTE OBLIGATORIO: responde únicamente con un objeto JSON válido, sin Markdown ni texto fuera del JSON, con una sola propiedad «${key}» cuyo valor sea el contenido solicitado.`
 }
 
 const transientOpenRouterStatuses = new Set([408, 409, 425, 429, 500, 502, 503, 504])
@@ -1571,13 +1606,13 @@ export const generateExerciseSolution = onCall({
         model,
         reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
         messages: [
-          { role: 'system', content: solutionSystemPrompt },
+          { role: 'system', content: `${solutionSystemPrompt}${jsonModeInstruction(model)}` },
           {
             role: 'user',
             content: `${curriculumContext ? `${curriculumContext}\n\n` : ''}REGLA OBLIGATORIA PARA \\info: usa exactamente \\info{${expectedInfo}} y sitúalo como último comando del ejercicio.\n\nEJERCICIO A RESOLVER:\n\n${exerciseForSolution}${previousAttempt ? `\n\nINTENTO ANTERIOR NO COMPILABLE: corrige este intento, conservando el enunciado y su solución matemática, pero reescribiendo el LaTeX defectuoso. No expliques el error; devuelve solamente el ejercicio completo compilable.\nERROR DEL COMPILADOR:\n${compileError || 'Error de sintaxis LaTeX.'}\n\nINTENTO A REPARAR:\n${previousAttempt}` : ''}`,
           },
         ],
-        response_format: solutionResponseFormat,
+        response_format: responseFormatForModel(model, solutionResponseFormat),
         provider: {
           require_parameters: true,
           data_collection: 'deny',
@@ -1599,10 +1634,19 @@ export const generateExerciseSolution = onCall({
     }
 
     const content = choiceContent(payload.choices?.[0])
-    let solvedExercise = content
-      ? splitOverloadedCompactRows(normalizeDisplayMathDelimiters(compactAlignedChains(stripLegacySolutionCommands(JSON.parse(content)?.enunciado?.trim() || ''))))
+    let solvedExercise = structuredText(content)
+      ? splitOverloadedCompactRows(normalizeDisplayMathDelimiters(compactAlignedChains(stripLegacySolutionCommands(structuredText(content)))))
       : ''
     if (!solvedExercise) {
+      console.error('OpenRouter solution response had no usable content', {
+        model,
+        elapsedMs: Date.now() - startedAt,
+        finishReason: payload.choices?.[0]?.finish_reason,
+        contentType: Array.isArray(payload.choices?.[0]?.message?.content) ? 'array' : typeof payload.choices?.[0]?.message?.content,
+        refusal: payload.choices?.[0]?.message?.refusal || null,
+        reasoningTokens: payload.usage?.completion_tokens_details?.reasoning_tokens,
+        completionTokens: payload.usage?.completion_tokens,
+      })
       throw new HttpsError('internal', 'La IA terminó sin generar el ejercicio resuelto.')
     }
     let latexIssues = [...new Set([
@@ -1631,11 +1675,11 @@ export const generateExerciseSolution = onCall({
           messages: [
             {
               role: 'system',
-              content: String.raw`Eres el corrector final y maquetador profesional de ejercicios de Matemáticas. Devuelve el ejercicio LaTeX completo que recibes, preservando literalmente el enunciado, sus datos, dibujos, resultados y la orden final \info.
+              content: `${String.raw`Eres el corrector final y maquetador profesional de ejercicios de Matemáticas. Devuelve el ejercicio LaTeX completo que recibes, preservando literalmente el enunciado, sus datos, dibujos, resultados y la orden final \info.
 
 Corrige también la estructura obligatoria de las soluciones: cuenta los comandos \ap del enunciado y coloca exactamente un entorno \begin{solucion}...\end{solucion} después de cada apartado, antes del siguiente \ap o del cierre del entorno de apartados. No agrupes soluciones al final, no omitas apartados y no dejes un apartado sin solución. Conserva exactamente \begin{apartadosc}...\end{apartadosc} si aparece en el original; la aplicación hará una sustitución temporal solo al compilar el PDF resuelto. Conserva literalmente, en su posición y sin recalcular, todos los comandos \M{...}, \P{...}, \p{...}, \T{...}, \t{...} y comentarios «% neope:part id=...»: son metadatos estructurados gestionados por Neope.
 
-Solo corrige la composición para una columna útil de 8 cm: dentro de aligned nunca pueden aparecer dos matrices, determinantes o sistemas en una misma fila; reescribe los productos largos mediante nombres intermedios y una sola matriz resultado por fila. Conserva los entornos compactos matrizp, detp y sistemap. Dentro de solucion no uses center, figure ni flotantes: si hay tikzpicture, céntralo con \noindent\hfill antes y \hfill\mbox{}\par después. Todo comando matemático debe estar dentro de $...$ o $$...$$ y cada $ debe estar emparejado, también dentro de TikZ. Devuelve solo LaTeX, sin Markdown.`,
+Solo corrige la composición para una columna útil de 8 cm: dentro de aligned nunca pueden aparecer dos matrices, determinantes o sistemas en una misma fila; reescribe los productos largos mediante nombres intermedios y una sola matriz resultado por fila. Conserva los entornos compactos matrizp, detp y sistemap. Dentro de solucion no uses center, figure ni flotantes: si hay tikzpicture, céntralo con \noindent\hfill antes y \hfill\mbox{}\par después. Todo comando matemático debe estar dentro de $...$ o $$...$$ y cada $ debe estar emparejado, también dentro de TikZ. Devuelve solo LaTeX, sin Markdown.`}${jsonModeInstruction(model)}`,
             },
             { role: 'user', content: `RECOMPÓN ESTE EJERCICIO. Defectos detectados: ${latexIssues.join(' ')}
 
@@ -1645,7 +1689,7 @@ ${exerciseForSolution}
 Borrador generado que debes corregir:
 ${solvedExercise}` },
           ],
-          response_format: solutionResponseFormat,
+          response_format: responseFormatForModel(model, solutionResponseFormat),
           provider: { require_parameters: true, data_collection: 'deny' },
           max_tokens: 12_000,
         }),
@@ -1653,8 +1697,8 @@ ${solvedExercise}` },
       })
       const repairPayload = await repairResponse.json().catch(() => ({}))
       const repairContent = repairResponse.ok ? choiceContent(repairPayload.choices?.[0]) : ''
-      const repairedExercise = repairContent
-        ? splitOverloadedCompactRows(normalizeDisplayMathDelimiters(compactAlignedChains(stripLegacySolutionCommands(JSON.parse(repairContent)?.enunciado?.trim() || ''))))
+      const repairedExercise = structuredText(repairContent)
+        ? splitOverloadedCompactRows(normalizeDisplayMathDelimiters(compactAlignedChains(stripLegacySolutionCommands(structuredText(repairContent)))))
         : ''
       if (repairedExercise) {
         solvedExercise = repairedExercise

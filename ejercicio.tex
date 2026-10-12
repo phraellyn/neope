@@ -825,11 +825,14 @@
 % tabla sin cambiar la estructura de los ejercicios.
 \newcommand{\criterios}[1]{%
 \par\vspace{2mm}%
+\begingroup
+\small%
 \setlength{\tabcolsep}{8pt}%
 \renewcommand{\arraystretch}{1.35}%
 \begin{tabularx}{\linewidth}{|c|X|c|}\hline
 #1
 \end{tabularx}%
+\endgroup
 }
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

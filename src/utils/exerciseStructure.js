@@ -505,8 +505,38 @@ function scoreCommand(command, value) {
 // las expresiones matemáticas y los comandos LaTeX que pueda haber redactado
 // el profesor, pero protegemos los caracteres que romperían una celda o el
 // argumento de la macro.
+export function normalizeCriteriaUnicode(value) {
+  const source = text(value).replace(/√\s*(\{[^{}]*\}|\([^()]*\)|[A-Za-z0-9](?:²|³)?)/g, (match, radicand) => {
+    const normalizedRadicand = radicand.replace(/²/g, '^{2}').replace(/³/g, '^{3}')
+    return `\\ensuremath{\\sqrt{${normalizedRadicand}}}`
+  })
+  return source.replace(/[ℝℤℚℕℂ∞→←↔≤≥≠∈∉±×·−≈²³]/g, (character) => ({
+    'ℝ': '\\ensuremath{\\mathbb{R}}',
+    'ℤ': '\\ensuremath{\\mathbb{Z}}',
+    'ℚ': '\\ensuremath{\\mathbb{Q}}',
+    'ℕ': '\\ensuremath{\\mathbb{N}}',
+    'ℂ': '\\ensuremath{\\mathbb{C}}',
+    '∞': '\\ensuremath{\\infty}',
+    '→': '\\ensuremath{\\to}',
+    '←': '\\ensuremath{\\leftarrow}',
+    '↔': '\\ensuremath{\\leftrightarrow}',
+    '≤': '\\ensuremath{\\leq}',
+    '≥': '\\ensuremath{\\geq}',
+    '≠': '\\ensuremath{\\ne}',
+    '∈': '\\ensuremath{\\in}',
+    '∉': '\\ensuremath{\\notin}',
+    '±': '\\ensuremath{\\pm}',
+    '×': '\\ensuremath{\\times}',
+    '·': '\\ensuremath{\\cdot}',
+    '−': '-',
+    '≈': '\\ensuremath{\\approx}',
+    '²': '\\ensuremath{^{2}}',
+    '³': '\\ensuremath{^{3}}',
+  })[character] || character)
+}
+
 function criteriaCellText(value) {
-  const source = text(value).trim().replace(/\r?\n/g, ' ')
+  const source = normalizeCriteriaUnicode(value).trim().replace(/\r?\n/g, ' ')
   let inMath = false
   let result = ''
   for (let index = 0; index < source.length; index += 1) {
@@ -529,11 +559,15 @@ function criteriaTableBody(structure) {
   const rows = []
   const appendRows = (label, criteria) => {
     const list = normalizeExerciseGradingCriteria(criteria)
-    list.forEach((criterion, index) => {
+    const groupRows = []
+    list.forEach((criterion) => {
       const description = criteriaCellText(criterion.description)
       if (!description) return
-      const suffix = index === list.length - 1 ? ' \\\\ \\\\hline' : ' \\\\ '
-      rows.push(`${index === 0 ? label : ''} & ${description} & ${numberText(criterion.points)}${suffix}`)
+      groupRows.push({ label: groupRows.length === 0 ? label : '', description, points: numberText(criterion.points) })
+    })
+    groupRows.forEach((row, index) => {
+      const suffix = index === groupRows.length - 1 ? ' \\\\ \\hline' : ' \\\\ '
+      rows.push(`${row.label} & ${row.description} & ${row.points}${suffix}`)
     })
   }
 
@@ -557,6 +591,7 @@ export function buildExerciseLatex(value = {}, options = {}) {
   const includeAnswers = options.includeAnswers !== false
   const includeDurationMetadata = options.includeDurationMetadata !== false
   const includeCriteria = options.includeCriteria ?? includeSolutions
+  const includeInfo = options.includeInfo !== false
   const preserveEnvironment = options.preserveApartadosEnvironment !== false && options.preservePartsEnvironment !== false
   const exerciseMetadata = [
     scoreCommand('M', structure.puntuacion),
@@ -593,7 +628,7 @@ export function buildExerciseLatex(value = {}, options = {}) {
     const criteria = criteriaCommand(structure)
     if (criteria) chunks.push(criteria)
   }
-  if (text(structure.info).trim()) chunks.push(`\\info{${structure.info.trim()}}`)
+  if (includeInfo && text(structure.info).trim()) chunks.push(`\\info{${structure.info.trim()}}`)
   return chunks.filter(Boolean).join('\n\n')
 }
 

@@ -1988,6 +1988,11 @@ function loadNextExerciseBatch() {
   void loadExercises()
 }
 
+function loadNextDocumentExerciseBatch() {
+  if (!currentTeacherId.value) return
+  void loadExercises()
+}
+
 function handleExerciseScroll() {
   if (exerciseScrollFrame) return
   exerciseScrollFrame = window.requestAnimationFrame(() => {
@@ -5865,11 +5870,14 @@ onBeforeUnmount(() => {
             :groups="groups"
             :compiler-base-url="compilerBaseUrl"
             :library-query="documentSearchQuery"
+            :has-more-exercises="hasMoreExercises"
+            :loading-more-exercises="isLoadingMoreExercises"
             v-model:ai-model="selectedAiModel"
             :ai-model-options="aiModelOptions"
             @busy-change="isCompilingDocument = $event"
             @state-change="documentWorkflow = $event"
             @assessment-saved="applyDocumentAssessmentToLoadedGroups"
+            @load-more-exercises="loadNextDocumentExerciseBatch"
           />
         </section>
 

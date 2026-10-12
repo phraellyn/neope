@@ -22,7 +22,34 @@ function metadataCommand(command, value) {
 }
 
 function criteriaCellText(value) {
-  const source = String(value || '').trim().replace(/\r?\n/g, ' ')
+  const source = String(value || '').trim()
+    .replace(/√\s*(\{[^{}]*\}|\([^()]*\)|[A-Za-z0-9](?:²|³)?)/g, (match, radicand) => {
+      const normalizedRadicand = radicand.replace(/²/g, '^{2}').replace(/³/g, '^{3}')
+      return `\\ensuremath{\\sqrt{${normalizedRadicand}}}`
+    })
+    .replace(/[ℝℤℚℕℂ∞→←↔≤≥≠∈∉±×·−≈²³]/g, (character) => ({
+    'ℝ': '\\ensuremath{\\mathbb{R}}',
+    'ℤ': '\\ensuremath{\\mathbb{Z}}',
+    'ℚ': '\\ensuremath{\\mathbb{Q}}',
+    'ℕ': '\\ensuremath{\\mathbb{N}}',
+    'ℂ': '\\ensuremath{\\mathbb{C}}',
+    '∞': '\\ensuremath{\\infty}',
+    '→': '\\ensuremath{\\to}',
+    '←': '\\ensuremath{\\leftarrow}',
+    '↔': '\\ensuremath{\\leftrightarrow}',
+    '≤': '\\ensuremath{\\leq}',
+    '≥': '\\ensuremath{\\geq}',
+    '≠': '\\ensuremath{\\ne}',
+    '∈': '\\ensuremath{\\in}',
+    '∉': '\\ensuremath{\\notin}',
+    '±': '\\ensuremath{\\pm}',
+    '×': '\\ensuremath{\\times}',
+    '·': '\\ensuremath{\\cdot}',
+    '−': '-',
+    '≈': '\\ensuremath{\\approx}',
+    '²': '\\ensuremath{^{2}}',
+    '³': '\\ensuremath{^{3}}',
+  })[character] || character).replace(/\r?\n/g, ' ')
   let inMath = false
   let result = ''
   for (let index = 0; index < source.length; index += 1) {
@@ -48,12 +75,16 @@ function criteriaTableBody(exercise) {
   const rows = []
   const appendRows = (label, criteria) => {
     const list = Array.isArray(criteria) ? criteria : []
-    list.forEach((criterion, index) => {
+    const groupRows = []
+    list.forEach((criterion) => {
       const description = criteriaCellText(criterion?.description)
       if (!description) return
       const points = numberText(criterion?.points)
-      const suffix = index === list.length - 1 ? ' \\\\ \\\\hline' : ' \\\\ '
-      rows.push(`${index === 0 ? label : ''} & ${description} & ${points}${suffix}`)
+      groupRows.push({ label: groupRows.length === 0 ? label : '', description, points })
+    })
+    groupRows.forEach((row, index) => {
+      const suffix = index === groupRows.length - 1 ? ' \\\\ \\hline' : ' \\\\ '
+      rows.push(`${row.label} & ${row.description} & ${row.points}${suffix}`)
     })
   }
   const parts = Array.isArray(exercise.parts) ? exercise.parts : []
@@ -86,7 +117,7 @@ function mainLatex(exercise, { includeSolutions, includeAnswers, includeScore = 
   return chunks.filter(Boolean).join('\n\n')
 }
 
-export function buildExerciseLatex(exercise, { includeSolutions = true, includeAnswers = true, preservePartsEnvironment = true, includeCriteria = includeSolutions } = {}) {
+export function buildExerciseLatex(exercise, { includeSolutions = true, includeAnswers = true, preservePartsEnvironment = true, includeCriteria = includeSolutions, includeInfo = true } = {}) {
   const chunks = [mainLatex(exercise, { includeSolutions, includeAnswers, includeScore: true })]
   const parts = Array.isArray(exercise.parts) ? exercise.parts : []
   if (parts.length) {
@@ -111,7 +142,7 @@ export function buildExerciseLatex(exercise, { includeSolutions = true, includeA
     const criteria = criteriaCommand(exercise)
     if (criteria) chunks.push(criteria)
   }
-  if (exercise.info?.trim()) chunks.push(`\\info{${exercise.info.trim()}}`)
+  if (includeInfo && exercise.info?.trim()) chunks.push(`\\info{${exercise.info.trim()}}`)
   return chunks.filter(Boolean).join('\n\n')
 }
 
@@ -174,8 +205,11 @@ export function codeForCompiler(code = '', profile = exerciseRenderProfiles.stat
   const body = profile === exerciseRenderProfiles.segment
     ? segmentTemplate(normalized)
     : completeExerciseTemplate(normalized)
-  const criteriaFallback = String.raw`\providecommand{\criterios}[1]{%
+  const criteriaFallback = String.raw`\providecommand{\mathbb}[1]{\mathbf{#1}}%
+\providecommand{\criterios}[1]{%
 \par\vspace{2mm}%
+\begingroup
+\small%
 \setlength{\tabcolsep}{8pt}%
 \renewcommand{\arraystretch}{1.35}%
 \ifdefined\tabularx
@@ -187,6 +221,7 @@ export function codeForCompiler(code = '', profile = exerciseRenderProfiles.stat
 #1
 \end{tabular}%
 \fi
+\endgroup
 }`
   return `\\shorthandoff{<>}\n${criteriaFallback}\n${body}`
 }

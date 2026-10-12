@@ -14,7 +14,7 @@ import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
 import DocumentAssessmentAlignmentEditor from './DocumentAssessmentAlignmentEditor.vue'
 import DocumentQueueChildren from './DocumentQueueChildren.vue'
 import MasonryGrid from './MasonryGrid.vue'
-import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, mergeExerciseStructure, parseExerciseLatex } from '../utils/exerciseStructure'
+import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, mergeExerciseStructure, normalizeCriteriaUnicode, parseExerciseLatex } from '../utils/exerciseStructure'
 import { compactExerciseConceptLabel, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
 import { normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
@@ -45,9 +45,11 @@ const props = defineProps({
   libraryQuery: { type: String, default: '' },
   aiModel: { type: String, default: 'google/gemini-3-flash-preview' },
   aiModelOptions: { type: Array, default: () => [] },
+  hasMoreExercises: { type: Boolean, default: false },
+  loadingMoreExercises: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['busy-change', 'state-change', 'assessment-saved', 'update:ai-model'])
+const emit = defineEmits(['busy-change', 'state-change', 'assessment-saved', 'update:ai-model', 'load-more-exercises'])
 const documentAiModel = computed({
   get: () => props.aiModel,
   set: (value) => emit('update:ai-model', value),
@@ -159,6 +161,8 @@ const assessmentAlignmentDialog = ref(false)
 const queueStructureCache = new WeakMap()
 const grayscaleLogoCache = new Map()
 const generatedSegmentArtifacts = new Map()
+const matchingExercisesScroll = ref(null)
+let matchingExerciseLoadFrame = 0
 
 function emptyCurriculum() {
   return { course: null, subjectId: null, conceptIds: [], competencial: false }
@@ -444,19 +448,41 @@ function isExerciseCollectionTemplate(template = null) {
 
 function addTemplateSpecialFields(template, metadata) {
   if (!isExerciseCollectionTemplate(template)) return metadata
-  if (metadata.fields.some((field) => field.key === 'includeCriteria')) return metadata
+  const fields = [...metadata.fields]
+  if (!fields.some((field) => field.key === 'includeCriteria')) {
+    fields.push({
+      key: 'includeCriteria',
+      label: 'Criterios de calificación',
+      type: 'checkbox',
+      default: true,
+      formOnly: true,
+    })
+  }
+  if (!fields.some((field) => field.key === 'includeInfo')) {
+    fields.push({
+      key: 'includeInfo',
+      label: 'Información de los ejercicios',
+      type: 'checkbox',
+      default: true,
+      formOnly: true,
+    })
+  }
+  const tools = metadata.tools.some((tool) => tool.id === 'salto-columna')
+    ? metadata.tools
+    : [
+        ...metadata.tools,
+        {
+          id: 'salto-columna',
+          label: 'Salto',
+          description: 'Inicia una nueva columna',
+          kind: 'command',
+          code: '\\newcolumn',
+        },
+      ]
   return {
     ...metadata,
-    fields: [
-      ...metadata.fields,
-      {
-        key: 'includeCriteria',
-        label: 'Criterios de calificación',
-        type: 'checkbox',
-        default: true,
-        formOnly: true,
-      },
-    ],
+    fields,
+    tools,
   }
 }
 
@@ -466,6 +492,47 @@ function markerFieldDefinition(name, argument) {
   if (known) return { ...known, argument }
   const key = normalized.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `field_${argument}`
   return { key, label: String(name || key).trim(), type: 'text', placeholder: '', argument }
+}
+
+// Compatibilidad con plantillas creadas antes de que las herramientas se
+// declarasen mediante comentarios `% neope:tool`. Si la plantilla define uno
+// de estos comandos pero aún no contiene su declaración explícita, lo
+// inferimos de forma local; la plantilla sigue siendo la fuente de la verdad.
+function inferTemplateTools(code = '') {
+  const defines = (command) => new RegExp(
+    `\\\\(?:newcommand|renewcommand|providecommand)\\*?\\s*(?:\\{\\s*)?\\\\${command}\\s*(?:\\})?|\\\\def\\s*\\\\${command}\\b`,
+  ).test(code)
+  const tools = []
+  if (defines('obligatorios')) tools.push({
+    id: 'obligatorios',
+    label: 'Obligatorios',
+    description: 'Inicia una sección de ejercicios obligatorios',
+    behavior: 'required-section',
+    code: '\\obligatorios',
+  })
+  if (defines('optativos')) tools.push({
+    id: 'optativos',
+    label: 'Optatividad',
+    description: 'Inicia una sección de ejercicios optativos',
+    behavior: 'optional-section',
+    code: '\\optativos{{{countWord}}}{{{availableWord}}}',
+    arguments: [{ key: 'count', label: 'Ejercicios a elegir', type: 'number', default: 1, min: 1 }],
+  })
+  if (defines('salto')) tools.push({
+    id: 'salto-pagina',
+    label: 'Salto de página',
+    description: 'Inserta un salto de página',
+    behavior: 'page-break',
+    code: '\\salto',
+  })
+  if (defines('tipo')) tools.push({
+    id: 'seccion',
+    label: 'Sección',
+    description: 'Añade un separador a la colección de ejercicios',
+    code: '\\tipo{{{title}}}',
+    arguments: [{ key: 'title', label: 'Título', type: 'text', default: '' }],
+  })
+  return tools
 }
 
 function parseTemplateMarkers(code = '') {
@@ -533,7 +600,11 @@ function parseTemplateMetadata(code = '') {
         arguments: argumentsList,
       }]
     })
-    const declaredTools = [...explicitTools, ...compactTools]
+    const declaredTools = [
+      ...explicitTools,
+      ...compactTools,
+      ...inferTemplateTools(code).filter((tool) => !explicitTools.some((declared) => declared?.id === tool.id)),
+    ]
     const tools = declaredTools
       .filter((tool) => tool?.id && (tool.code || tool.command || tool.begin || tool.environment))
       .map((tool) => ({
@@ -747,11 +818,18 @@ const selectedExercises = computed(() => flattenDocumentBlocks(exerciseQueue.val
 const documentTools = computed(() => {
   if (!selectedTemplates.value.length) return []
   const definitions = selectedTemplates.value.map((template) => new Map((template.metadata.tools || []).map((tool) => [tool.id, tool])))
-  const commonIds = [...definitions[0].keys()].filter((id) => definitions.every((tools) => tools.has(id)))
-  return commonIds.map((id) => ({
-    ...definitions[0].get(id),
-    templateDefinitions: Object.fromEntries(selectedTemplates.value.map((template, index) => [template.key, definitions[index].get(id)])),
-  }))
+  // Las herramientas pertenecen a cada plantilla. Al combinar varias plantillas
+  // no debemos ocultarlas por exigir que todas declaren exactamente el mismo
+  // conjunto: basta con que una plantilla seleccionada la defina. `toolCode`
+  // ya utiliza la definición específica de cada plantilla cuando existe.
+  const ids = [...new Set(definitions.flatMap((tools) => [...tools.keys()]))]
+  return ids.map((id) => {
+    const base = definitions.find((tools) => tools.has(id))?.get(id)
+    return {
+      ...base,
+      templateDefinitions: Object.fromEntries(selectedTemplates.value.map((template, index) => [template.key, definitions[index].get(id)])),
+    }
+  }).filter((tool) => tool?.id)
 })
 const assessmentFieldsComplete = computed(() => !documentAssessment.evaluable
   || Boolean(effectiveAssessmentGroupId.value && documentAssessment.shortName.trim()))
@@ -1238,6 +1316,40 @@ const matchingExercises = computed(() => {
   })
 })
 
+function requestMoreMatchingExercises() {
+  if (!props.hasMoreExercises || props.loadingMoreExercises) return
+  emit('load-more-exercises')
+}
+
+function handleMatchingExercisesScroll(event) {
+  const element = event.currentTarget
+  if (!element) return
+  if (element.scrollHeight - element.scrollTop - element.clientHeight > 420) return
+  requestMoreMatchingExercises()
+}
+
+function loadMatchingExercisesUntilScrollable() {
+  cancelAnimationFrame(matchingExerciseLoadFrame)
+  matchingExerciseLoadFrame = requestAnimationFrame(() => {
+    matchingExerciseLoadFrame = 0
+    const element = matchingExercisesScroll.value
+    if (!props.hasMoreExercises || props.loadingMoreExercises) return
+    if (!element) {
+      if (matchingExercises.value.length === 0) requestMoreMatchingExercises()
+      return
+    }
+    if (matchingExercises.value.length === 0 || element.scrollHeight <= element.clientHeight + 80) {
+      requestMoreMatchingExercises()
+    }
+  })
+}
+
+watch(
+  [matchingExercises, () => props.hasMoreExercises, () => props.loadingMoreExercises, () => documentCurriculum.value.course, () => documentCurriculum.value.subjectId, () => (documentCurriculum.value.conceptIds || []).join('|'), exerciseQuery],
+  loadMatchingExercisesUntilScrollable,
+  { flush: 'post' },
+)
+
 function selectedVersionFor(exercise) {
   return exercise ? selectedVersions[exercise.id] || 0 : 0
 }
@@ -1449,6 +1561,7 @@ function queueExerciseCode(item, template = selectedTemplate.value) {
     // documentos no necesitan definir \T ni \t para poder usar ejercicios.
     includeDurationMetadata: false,
     includeCriteria: criteriaEnabledForTemplate(template),
+    includeInfo: infoEnabledForTemplate(template),
   }) || statementCode(sourceVersion?.enunciado || '')
   const exerciseCode = rewriteExerciseImageReferences(adaptExerciseEnvironmentsToTemplate(code, template), exercise)
   if (!item.pageBreakBefore) return exerciseCode
@@ -1858,8 +1971,11 @@ function exercisePreambleRequirements(exercisesCode = '') {
 // plantilla que sí lo defina conserva el control total sobre su presentación
 // porque \\providecommand no sustituye una definición existente.
 function criteriaCommandFallback() {
-  return String.raw`\providecommand{\criterios}[1]{%
+  return String.raw`\providecommand{\mathbb}[1]{\mathbf{#1}}%
+\providecommand{\criterios}[1]{%
 \par\vspace{2mm}%
+\begingroup
+\small%
 \setlength{\tabcolsep}{8pt}%
 \renewcommand{\arraystretch}{1.35}%
 \ifdefined\tabularx
@@ -1871,6 +1987,7 @@ function criteriaCommandFallback() {
 #1
 \end{tabular}%
 \fi
+\endgroup
 }`
 }
 
@@ -2089,8 +2206,8 @@ async function copyCompileError() {
 
 function activeDocumentCode(template = previewTemplate.value || selectedTemplate.value) {
   const generated = generatedCodeForTemplate(template)
-  if (currentStep.value !== lastStep.value || !documentCode.value.trim() || template?.key !== selectedPreviewTemplateKey.value) return generated
-  return hasLegacyOptionalCommand(documentCode.value) ? generated : documentCode.value
+  if (currentStep.value !== lastStep.value || !documentCode.value.trim() || template?.key !== selectedPreviewTemplateKey.value) return normalizeCriteriaUnicode(generated)
+  return normalizeCriteriaUnicode(hasLegacyOptionalCommand(documentCode.value) ? generated : documentCode.value)
 }
 
 function revokePreview() {
@@ -2216,6 +2333,10 @@ function documentFieldStoredValue(field) {
 
 function criteriaEnabledForTemplate(template) {
   return !isExerciseCollectionTemplate(template) || Boolean(fieldValues.includeCriteria)
+}
+
+function infoEnabledForTemplate(template) {
+  return !isExerciseCollectionTemplate(template) || Boolean(fieldValues.includeInfo)
 }
 
 function dateInputValue(value) {
@@ -2633,7 +2754,13 @@ async function compileDocument(force = false, options = {}) {
       try {
         code = codeForTemplate(template)
         const preambleRequirements = exercisePreambleRequirements(code)
-        compilerPreamble = [template.codigo, preambleRequirements].filter(Boolean).join('\n\n')
+        const criteriaMathRequirement = /\\mathbb\s*\{/.test(code)
+          ? String.raw`\providecommand{\mathbb}[1]{\mathbf{#1}}`
+          : ''
+        const criteriaRequirement = /\\criterios\s*\{/.test(code) && !templateDefinesCommand(template, 'criterios')
+          ? criteriaCommandFallback()
+          : ''
+        compilerPreamble = [template.codigo, preambleRequirements, criteriaMathRequirement, criteriaRequirement].filter(Boolean).join('\n\n')
         compilerBody = bodyForCompiler(code)
         if (template.key === selectedPreviewTemplateKey.value && hasLegacyOptionalCommand(documentCode.value)) documentCode.value = code
         await compilerRequest('/preambles', {
@@ -3472,7 +3599,7 @@ defineExpose({
               />
               <span>{{ matchingExercises.length }} disponibles</span>
             </div>
-            <div v-if="matchingExercises.length" class="document-matches-scroll">
+            <div v-if="matchingExercises.length" ref="matchingExercisesScroll" class="document-matches-scroll" @scroll="handleMatchingExercisesScroll">
               <MasonryGrid :items="matchingExercises" :item-key="(exercise) => exercise.id" :gap="9" :max-columns="2" class="document-matches-grid">
                 <template #default="{ item: exercise }">
                   <article
@@ -3521,8 +3648,16 @@ defineExpose({
                   </article>
                 </template>
               </MasonryGrid>
+              <div v-if="hasMoreExercises" class="document-matches-load-more" aria-live="polite">
+                <v-progress-circular v-if="loadingMoreExercises" indeterminate color="primary" size="22" width="2" />
+                <span v-else>Desplázate para cargar más ejercicios</span>
+              </div>
             </div>
-            <div v-else class="document-exercises-empty"><v-icon icon="mdi-file-search-outline" size="42" /><span>No hay ejercicios coincidentes.</span></div>
+            <div v-else class="document-exercises-empty">
+              <v-progress-circular v-if="hasMoreExercises" indeterminate color="primary" size="30" width="3" />
+              <v-icon v-else icon="mdi-file-search-outline" size="42" />
+              <span>{{ hasMoreExercises ? 'Buscando ejercicios coincidentes…' : 'No hay ejercicios coincidentes.' }}</span>
+            </div>
           </section>
 
           <section class="document-queue-pane">
@@ -3919,6 +4054,7 @@ defineExpose({
 .document-exercise-toolbar > span { color: #74879e; font-size: .7rem; font-weight: 700; white-space: nowrap; }
 .document-matches-scroll { flex: 1 1 auto; min-height: 0; padding: 9px; overflow: auto; }
 .document-matches-grid { width: 100%; }
+.document-matches-load-more { display: flex; min-height: 38px; align-items: center; justify-content: center; gap: 8px; padding: 8px; color: #71849b; font-size: .68rem; }
 .document-exercise-card { width: 100%; min-width: 0; overflow: hidden; border: 1px solid #d3deeb; border-radius: 13px; background: #fff; cursor: grab; }
 .document-exercise-card:active { cursor: grabbing; }
 .document-exercise-card > .document-exercise-card-header { display: flex; min-height: 29px; flex-direction: column; padding: 0; background: #eaf1fa; color: #3b5779; font-size: .64rem; font-weight: 800; }
