@@ -9,6 +9,42 @@ export function normalizeDisplayMathDelimiters(text) {
   )
 }
 
+export function normalizeAlignedLineBreaks(value) {
+  const source = String(value || '')
+  let result = ''
+  let copied = 0
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === '%' && !escapedAt(source, index)) {
+      const end = source.indexOf('\n', index)
+      index = end < 0 ? source.length : end
+      continue
+    }
+    if (source[index] !== '\\' || escapedAt(source, index)) continue
+    const literal = /^\\begin\s*\{(verbatim\*?|Verbatim|lstlisting|minted)\}/.exec(source.slice(index))
+    const verb = /^\\verb\*?([^A-Za-z\s])/.exec(source.slice(index))
+    if (literal) {
+      const end = new RegExp(`\\\\end\\s*\\{${literal[1].replace('*', '\\*')}\\}`).exec(source.slice(index + literal[0].length))
+      index = end ? index + literal[0].length + end.index + end[0].length - 1 : source.length
+      continue
+    }
+    if (verb) {
+      const end = source.indexOf(verb[1], index + verb[0].length)
+      index = end < 0 ? source.length : end
+      continue
+    }
+    const opening = /^\\begin\s*\{(aligned|alignedat)\}/.exec(source.slice(index))
+    if (!opening) continue
+    const bodyStart = index + opening[0].length
+    const closing = new RegExp(`\\\\end\\s*\\{${opening[1]}\\}`).exec(source.slice(bodyStart))
+    if (!closing) continue
+    const bodyEnd = bodyStart + closing.index
+    result += source.slice(copied, bodyStart) + source.slice(bodyStart, bodyEnd).replace(/\r?\n[ \t]*(?:\r?\n[ \t]*)+/g, '\n')
+    copied = bodyEnd
+    index = bodyEnd + closing[0].length - 1
+  }
+  return result + source.slice(copied)
+}
+
 export function hasLegacyDisplayMathDelimiters(text) {
   return /(?<!\\)\\\[|(?<!\\)\\\]/.test(String(text || ''))
 }

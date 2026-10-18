@@ -4,6 +4,7 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   plugins: [vue()],
   server: {
+    host: '0.0.0.0',
     proxy: {
       '/compiler-api': {
         // En redes institucionales se bloquean las conexiones HTTP directas

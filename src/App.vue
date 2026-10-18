@@ -1,5 +1,6 @@
 <script setup>
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { isInternalTemplate, migrateDocumentTemplate, readDocumentTemplate } from './utils/documentTemplate'
 import {
   collection,
   deleteDoc,
@@ -60,6 +61,7 @@ import {
   needsAdministratorBootstrap,
 } from './utils/authSession'
 import { normalizeDisplayMathDelimiters } from './utils/latexNormalization'
+import { validateExerciseSolutionSource } from '../functions/exerciseSolutionSource.js'
 import { showAppErrorToast } from './composables/useAppErrorToast'
 import {
   currentAcademicYear,
@@ -455,7 +457,8 @@ const exerciseCompilationLabel = computed(() => ({
   error: 'Error de compilación',
 }[exerciseCompilationStatus.value] || 'PDF actualizado'))
 const selectedTemplate = computed(() => templates.value.find((template) => template.id === selectedTemplateId.value) || null)
-const preambleOptions = computed(() => templates.value.filter((template) => template.archivo))
+const preambleOptions = computed(() => templates.value.filter((template) => template.archivo && !isInternalTemplate(template)))
+const visibleTemplates = computed(() => templates.value.filter((template) => !isInternalTemplate(template)))
 
 const scheduleSubjectOptions = Object.freeze(scheduleMathSubjects.map((subject) => ({
   title: `${subject.course} — ${subject.title}`,
@@ -1552,11 +1555,20 @@ async function toggleTeacherProfileEditing() {
   if (!teacherProfileError.value) teacherProfileEditing.value = false
 }
 
-const documentTemplateMetadataGuide = `% Añade los marcadores al final de las líneas donde se usan los argumentos:
+const documentTemplateMetadataGuide = `% neope:document {"version":2,"content":"exercises","assessment":true,"command":"logo","exerciseEnvironment":"ejercicios"}
+% neope:field {"key":"level","label":"Nivel","type":"level","formOnly":true}
+% Añade los marcadores al final de las líneas donde se usan los argumentos:
 % \\newcommand{\\logo}[4]{
 %   \\textbf{#1} %% asignatura %%
 %   \\hfill #4 / #2 / #3 %% grupo, título, fecha %%
 % }
+% content: "exercises" para un banco de ejercicios, "code" para apuntes.
+% Las opciones se declaran como campos checkbox con formOnly:true.
+% El preámbulo y los comandos de la plantilla se escriben aquí.
+
+%%% previo: \\begin{document}
+%%% previo: {{header}}
+%%% final: \\end{document}
 
 `
 
@@ -2260,7 +2272,13 @@ async function loadTemplates() {
     // por lo que sincronizamos de forma ordenada y reintentamos errores transitorios.
     const failures = []
     for (const template of templates.value) {
+      if (isInternalTemplate(template)) continue
       try {
+        const upgraded = migrateDocumentTemplate(template)
+        if (upgraded.migrated) {
+          await setDoc(doc(db, 'plantillas', template.id), { codigo: upgraded.codigo, templateFormatVersion: 2 }, { merge: true })
+          template.codigo = upgraded.codigo
+        }
         const archivo = await syncTemplateWithCompiler(template)
         if (template.archivo !== archivo) template.archivo = archivo
       } catch (error) {
@@ -2518,6 +2536,18 @@ function selectTemplate(template) {
 
 async function saveTemplate() {
   if (!templateEditor.value.nombre.trim() || !templateEditor.value.codigo.trim()) return
+  if (isInternalTemplate(templateEditor.value)) {
+    templatesError.value = 'ejercicio.tex es una plantilla interna y no se puede editar aquí.'
+    return
+  }
+  try {
+    const upgraded = migrateDocumentTemplate(templateEditor.value)
+    readDocumentTemplate(upgraded.codigo)
+    templateEditor.value.codigo = upgraded.codigo
+  } catch (error) {
+    templatesError.value = error.message
+    return
+  }
   const toolCommandError = validateDocumentToolCommands(templateEditor.value.codigo)
   if (toolCommandError) {
     templatesError.value = toolCommandError
@@ -2559,6 +2589,7 @@ async function saveTemplate() {
 }
 
 async function removeTemplate() {
+  if (isInternalTemplate(templateEditor.value)) return
   if (!selectedTemplate.value) return
   isSavingTemplate.value = true
   templatesError.value = ''
@@ -3210,7 +3241,13 @@ async function generateOriginalExerciseSolution() {
   exercisesError.value = ''
   try {
     const generateSolution = httpsCallable(functions, 'generateExerciseSolution', { timeout: 120_000 })
-    const sourceExercise = activeExerciseCode.value
+    const sourceAnalysis = analyzeExerciseLatex(activeExerciseCode.value, activeExerciseVersion.value.structure || {})
+    if (!sourceAnalysis.valid) throw new Error('El código LaTeX está incompleto. Corrige las llaves o entornos antes de generar soluciones.')
+    const sourceStructure = mergeExerciseStructure(sourceAnalysis.structure, activeExerciseVersion.value.structure || {})
+    const sourceExercise = sourceAnalysis.ambiguous
+      ? buildExerciseLatex(sourceStructure, { preserveApartadosEnvironment: true })
+      : activeExerciseCode.value
+    if (sourceAnalysis.ambiguous) replaceActiveExerciseCode(sourceExercise, sourceStructure)
     const preambleName = exercisePreambleName()
     let previousAttempt = ''
     let compileError = ''
@@ -3230,6 +3267,8 @@ async function generateOriginalExerciseSolution() {
       if (!candidate) throw new Error('La IA no ha devuelto un ejercicio resuelto válido.')
 
       try {
+        const sourceIssues = validateExerciseSolutionSource(normalizeDisplayMathDelimiters(sourceExercise), normalizeDisplayMathDelimiters(candidate))
+        if (sourceIssues.length) throw new Error(sourceIssues.join(' '))
         solutionPdf = await compilePdfBlob(resolvedLatex(candidate), preambleName, undefined, exerciseRenderProfiles.solved)
         statementPdf = await compilePdfBlob(statementLatex(candidate), preambleName, undefined, exerciseRenderProfiles.statement)
         solvedExercise = candidate
@@ -3241,7 +3280,7 @@ async function generateOriginalExerciseSolution() {
     }
 
     if (!solvedExercise || !statementPdf || !solutionPdf) {
-      throw new Error(`La IA ha generado LaTeX no compilable tras tres intentos. ${compileError}`)
+      throw new Error(`La IA no ha generado una solución válida que conserve el enunciado tras tres intentos. ${compileError}`)
     }
 
     const generatedStructure = mergeExerciseStructure(
@@ -3332,6 +3371,8 @@ async function generateExercisePartSolution(apartadoIndex) {
     })
     const candidate = removeBlankLinesInsideAligned(response.data?.enunciado?.trim() || '')
     if (!candidate) throw new Error('La IA no ha devuelto una solución válida.')
+    const sourceIssues = validateExerciseSolutionSource(normalizeDisplayMathDelimiters(sourceExercise), normalizeDisplayMathDelimiters(candidate))
+    if (sourceIssues.length) throw new Error(sourceIssues.join(' '))
     await compilePdfBlob(resolvedLatex(candidate), exercisePreambleName(), undefined, exerciseRenderProfiles.solved)
     const generated = parseExerciseLatex(candidate)
     const generatedPart = generated.apartados[0]
@@ -5885,8 +5926,8 @@ onBeforeUnmount(() => {
           <input ref="templateFileInput" type="file" accept=".tex,text/x-tex,text/plain" hidden @change="importTemplateFile">
           <div class="templates-workspace">
             <aside class="template-list-pane" aria-label="Plantillas disponibles">
-              <v-list v-if="!isLoadingTemplates && templates.length" nav density="comfortable" class="templates-list">
-                <v-list-item v-for="template in templates" :key="template.id" :active="selectedTemplateId === template.id" color="primary" @click="selectTemplate(template)">
+              <v-list v-if="!isLoadingTemplates && visibleTemplates.length" nav density="comfortable" class="templates-list">
+                <v-list-item v-for="template in visibleTemplates" :key="template.id" :active="selectedTemplateId === template.id" color="primary" @click="selectTemplate(template)">
                   <v-list-item-title>{{ template.nombre }}</v-list-item-title>
                   <v-list-item-subtitle>{{ template.descripcion || 'Sin descripción' }}</v-list-item-subtitle>
                 </v-list-item>

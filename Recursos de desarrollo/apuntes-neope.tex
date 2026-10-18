@@ -1,8 +1,9 @@
-% neope:document {"name":"Apuntes - Matemáticas","command":"logo"}
-% neope:field {"key":"subject","label":"Asignatura","argument":1,"type":"subject","placeholder":"Matemáticas II"}
-% neope:field {"key":"title","label":"Título","argument":2,"type":"text","placeholder":"Bloque o tema"}
-% neope:field {"key":"date","label":"Fecha","argument":3,"type":"date"}
-% neope:field {"key":"course","label":"Curso y grupo","argument":4,"type":"course","placeholder":"2ºBTO B"}
+% neope:document {"name":"Apuntes - Matemáticas","command":"logo","version":2,"content":"code","assessment":false,"exerciseEnvironment":"ejercicios","render":{"includeSolutions":false,"includeAnswers":false}}
+% neope:field {"key":"subject","label":"Asignatura","argument":1,"type":"subject","placeholder":"Matemáticas II","required":true}
+% neope:field {"key":"title","label":"Título","argument":2,"type":"text","placeholder":"Bloque o tema","required":true}
+% neope:field {"key":"date","label":"Fecha","argument":3,"type":"date","required":false,"hidden":true}
+% neope:field {"key":"level","label":"Nivel","argument":4,"type":"level","placeholder":"2ºBTO B","required":false}
+% neope:field {"key":"level","label":"Nivel","command":"logo","argument":4,"type":"level","required":true}
 
 \documentclass[a4paper,twoside,fleqn,dvipsnames]{book}
 \pagestyle{empty}
@@ -596,3 +597,6 @@
 
 \def\si{\text{si}}
 
+%%% previo: \begin{document}
+%%% previo: {{header}}
+%%% final: \end{document}

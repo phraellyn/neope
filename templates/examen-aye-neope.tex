@@ -1,0 +1,385 @@
+% neope:document {"name":"Examen - Matemáticas AyE","version":2,"content":"exercises","assessment":true,"command":"logo","exerciseEnvironment":"ejercicios"}
+% neope:field {"key":"level","label":"Nivel","type":"level","formOnly":true,"required":true}
+% neope:field {"key":"subject","label":"Asignatura","type":"subject","command":"logo","argument":1,"required":true}
+% neope:field {"key":"title","label":"Título","type":"text","command":"logo","argument":2,"required":true}
+% neope:field {"key":"date","label":"Fecha","type":"date","command":"logo","argument":3,"required":true}
+% neope:field {"key":"course","label":"Grupo","type":"group","command":"logo","argument":4,"required":true}
+% neope:field {"key":"includeInfo","label":"Información de los ejercicios","type":"checkbox","default":false,"formOnly":true,"required":false}
+% neope:field {"key":"includeAnswers","label":"Respuestas breves","type":"checkbox","default":false,"formOnly":true,"required":false}
+% neope:field {"key":"includeSolutions","label":"Soluciones detalladas","type":"checkbox","default":false,"formOnly":true,"required":false}
+% neope:field {"key":"includeCriteria","label":"Criterios de calificación","type":"checkbox","default":false,"formOnly":true,"required":false}
+% neope:tool {"id":"aye-seccion","label":"Sección","description":"Añade una sección con su puntuación máxima.","code":"\\item[]\\seccion{{{section}}}{{{points}}}","arguments":[{"key":"section","label":"Sección","type":"text","default":"A"},{"key":"points","label":"Puntuación máxima","type":"number","default":10,"min":0}]}
+% neope:tool {"id":"aye-instrucciones-sc","label":"Instrucciones sin calculadora","description":"Incluye las instrucciones de la prueba y pasa a la página siguiente.","code":"\\item[]\\instruccionessc{{{minutes}}}{{{points}}}","arguments":[{"key":"minutes","label":"Minutos","type":"number","default":90,"min":1},{"key":"points","label":"Puntuación máxima","type":"number","default":80,"min":0}]}
+% neope:tool {"id":"aye-instrucciones-cc","label":"Instrucciones con calculadora","description":"Incluye las instrucciones para usar calculadora gráfica y pasa a la página siguiente.","code":"\\item[]\\instruccionescc{{{minutes}}}{{{points}}}","arguments":[{"key":"minutes","label":"Minutos","type":"number","default":90,"min":1},{"key":"points","label":"Puntuación máxima","type":"number","default":80,"min":0}]}
+% neope:tool {"id":"aye-cuadricula","label":"Respuesta con cuadrícula","description":"Añade un espacio de respuesta cuadriculado tras el ejercicio.","code":"\\item[]\\whiteanswer{{{rows}}}","arguments":[{"key":"rows","label":"Filas","type":"number","default":8,"min":1,"max":50}]}
+% neope:tool {"id":"aye-puntos","label":"Respuesta con puntos","description":"Añade un espacio de respuesta con puntos tras el ejercicio.","code":"\\item[]\\answer{{{rows}}}","arguments":[{"key":"rows","label":"Filas","type":"number","default":5,"min":1,"max":25}]}
+% neope:tool {"id":"aye-grafica","label":"Cuadrícula para gráfica","description":"Añade una cuadrícula de las dimensiones indicadas.","code":"\\item[]\\graphanswerxy{{{width}}}{{{height}}}","arguments":[{"key":"width","label":"Columnas","type":"number","default":10,"min":1,"max":30},{"key":"height","label":"Filas","type":"number","default":10,"min":1,"max":30}]}
+% neope:tool {"id":"salto-pagina","label":"Salto de página","description":"Comienza el siguiente ejercicio en una página nueva.","behavior":"page-break","code":"\\newpage"}
+% neope:tool {"id":"aye-tiempo-extra","label":"Tiempo extra","description":"Añade la declaración sobre el uso del tiempo extra.","code":"\\item[]{\\tiempoextra}"}
+% neope:tool {"id":"aye-evaluacion-ensenanza","label":"Evaluación de la enseñanza","description":"Añade el formulario de valoración de la enseñanza.","code":"\\item[]\\evalteaching"}
+
+% Plantilla de examen: carga este archivo completo en Neope.
+% El logotipo del centro se recibe como logo.png; se conserva el encabezado original.
+
+\documentclass[a4paper,twoside,fleqn,12pt]{article}
+
+\usepackage[inline]{asymptote}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish,es-noquoting]{babel}
+\usepackage{amsmath}
+\usepackage{pxfonts}
+\usepackage{graphicx}
+\usepackage{lipsum}
+\usepackage{calc,fp}
+\usepackage{color}
+\usepackage{tabularx}
+\usepackage{pgf}
+\usepackage{tikz}
+\usepackage{array,colortbl,multirow,multicol,booktabs,ctable}
+\usepackage{eurosym}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{positioning,arrows,shapes,calc,3d}
+\usepackage{multirow,array}
+\usepackage{helvet}
+\usepackage{setspace}
+\usepackage{bm}
+\renewcommand{\rmdefault}{\sfdefault}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% MEDIDAS DE PAGINA %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\pagestyle{empty}
+
+\hoffset=-2.6cm %
+\voffset=-3cm %
+
+\oddsidemargin=1.5cm %
+\evensidemargin=1.5cm %
+\topmargin=2cm %
+\headheight=0cm %
+\headsep=0cm %
+
+\textwidth=17.8cm %
+\textheight=26cm %
+
+\mathindent=1.5cm %
+
+\onehalfspacing %
+
+\DeclareMathOperator{\dist}{dist}
+\DeclareMathOperator{\rango}{rango}
+\DeclareMathOperator{\Dom}{Dom}
+\DeclareMathOperator{\cotan}{cotan}
+\DeclareMathOperator{\si}{si}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% DEFINICION DE COLORES %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\definecolor{gris}{gray}{0.6}
+\definecolor{blanco}{gray}{1}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% COMANDOS Y ENTORNOS  %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\punto}{\hfill\mbox{\emph{(1 punto)}}}
+\newcommand{\Punto}{\hfill\mbox{\textbf{\emph{(1 punto)}}}}
+\newcommand{\lpunto}{\par\vspace{-2mm}\punto\vspace{-6mm}}
+\newcommand{\puntos}[1]{\hfill\emph{(#1 puntos)}}
+\newcommand{\pbi}[1]{\hfill\emph{[#1]}}
+\newcommand{\Pbi}[1]{\hfill\textbf{\emph{[Puntuación máxima: #1]}}}
+\newcommand{\Puntos}[1]{\hfill\textbf{\emph{(#1 puntos)}}}
+\newcommand{\lpuntos}[1]{\par\vspace{-2mm}\puntos{#1}\vspace{-6mm}}
+\newcommand{\esp}[1]{\vspace{#1}}
+\newcommand{\marca}{\hspace{-1cm}$\ast$\hspace{0.8cm}}
+\newcommand{\vijk}[7]{$\vec{#1}=#2#3\vec{\imath}#4#5\vec{\jmath}#6#7\vec{k}$}
+\newcommand{\smatrix}[1]{\left(\begin{smallmatrix}#1\end{smallmatrix}\right)}
+\newcommand{\sdet}[1]{\left|\begin{smallmatrix}#1\end{smallmatrix}\right|}
+
+\newcommand{\p}[1]{\textsf{\textbf{\textcolor{gray}{[#1 puntos]:}}}}
+\newcommand{\pa}[1]{\textsf{\textbf{\textcolor{gray}{\small [#1 puntos]:}}}}
+
+\newcommand{\whiteanswer}[1]{
+    \par
+    \vspace{3mm}
+    \hspace{-1cm}
+    \tikz{
+        \draw[step=0.4,thin,lightgray] (0,-0.2) grid (17.2,#1*0.4);
+        \draw (0,-0.2) rectangle (17.2,#1*0.4);
+    }
+    \par
+    \vspace{3mm}
+}
+\newcommand{\ejwhiteanswer}[1]{
+    \par
+    \vspace{3mm}
+    \hspace{-1cm}
+    \tikz{
+        \draw[step=0.4,thin,lightgray] (0,-0.2) grid (18,#1*0.4);
+        \draw (0,-0.2) rectangle (18,#1*0.4);
+    }
+    \par
+    \vspace{3mm}
+}
+
+%\newcommand{\whiteanswer}[1]{
+%    \par
+%    \vspace{3mm}
+%    \hspace{-1cm}
+%    \tikz{
+%        \draw (0,-0.2) rectangle (17.2,#1*0.4)
+%    }
+%    \par
+%    \vspace{3mm}
+%}
+%\newcommand{\ejwhiteanswer}[1]{
+%    \par
+%    \vspace{3mm}
+%    \hspace{-1cm}
+%    \tikz{
+%        \draw (0,-0.2) rectangle (18,#1*0.4)
+%    }
+%    \par
+%    \vspace{3mm}
+%}
+
+%\newcommand{\answerbox}{
+%    \par
+%    \vspace{3mm}
+%    \hspace{-1cm}
+%    \tikz{
+%        \draw[step=0.4,thin,lightgray] (0,0) grid (18.1,66*0.4);
+%        \draw (0,0) rectangle (18.1,66*0.4)
+%    }
+%    \par
+%    \vspace{3mm}
+%}
+
+\newcommand{\cabeceranAyE}[1]{
+    \newpage
+    \setcounter{ejercicio}{0}
+    \textsf{\Huge\textbf{Matemáticas AyE (#1)}}\par
+    \vspace{-3mm}\rule{17cm}{0.5mm}\par
+    \textsf{Nombre y Apellidos: \hfil\hfil\hfil\hfil\hfil\hfil\hfil\hfil\hfil\hfil 
+		Nº: \hfil\hfil Grupo:\hfil}\par
+    \vspace{-3mm}\rule{17cm}{0.3mm}\par
+    \rightline{\Large\textbf{\emph{\prueba\ -- \evaluacion\ -- \fecha}}}\par
+    \vspace{1cm}}
+    
+\newcounter{ejercicio}
+
+\newenvironment{ejercicios}
+        {\begin{list}{\theejerciciopablo}{}}
+        {\end{list}}
+
+\def\ej{\refstepcounter{ejercicio}\item}
+\def\ejs{\refstepcounter{ejercicio}\item\hbox{*}}
+
+\def\theejerciciopablo{
+ \raisebox{-1mm}{\tikz{
+    \fill[rounded corners=2,black!10] (0,0) rectangle (.6,.4);
+    \draw[rounded corners=2, very thin] (0,0) rectangle (.6,.4);
+    \node at (.3,.2) {\textsf{\textbf{\arabic{ejercicio}}}}
+ }}\hspace{-1mm}
+}
+
+\newcounter{apartado}[ejercicio]
+\def\theapartado{\textsf{\textcolor{gris}{\normalsize\bfseries\alph{apartado}.}}}
+
+\newenvironment{apartados}
+        {\begin{list}{\theapartado}{}}
+        {\end{list}}
+
+\newenvironment{apartadosc}[1]
+        {\begin{multicols}{2}[#1]\begin{list}{\theapartado}{}}
+        {\end{list}\end{multicols}}
+
+\def\ap{\refstepcounter{apartado}\item}
+\def\aps{\refstepcounter{apartado}*\item}
+
+\newcommand{\sol}[1]{\hfill\textit{\textbf{Solución: }#1}}
+
+\newcommand{\answer}[1]{
+    \vspace{5mm}
+    \hspace{-20mm}
+    \fbox{\hspace{5mm}
+        \vbox{
+        \vspace{8mm}\noindent
+        \tikz{
+            \foreach \x in {0.25,0.5,...,17} {
+                \foreach \y in {1,2,...,#1} {
+                    \fill (\x,0.8*\y) circle (0.5pt);
+                }
+            }
+        }
+        \vspace{3mm}
+        }
+    }
+}
+
+\newcommand{\graphanswer}{
+    \vspace{3mm}\hspace{-8mm}\vspace{3mm}\tikz[scale=0.5]{
+        \draw[color=black!50] (0,0) grid (10,10);
+        \draw[thick] (0,0) rectangle (10,10);
+        \draw (-0.5,-0.5) rectangle (33,10.5);
+        \foreach \x in {1,...,4} {
+            \node at (21.5,-0.5+2*\x)
+            {. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . }
+        }
+    }
+}
+
+\newcommand{\graphanswerxy}[2]{
+    \vspace{3mm}\hspace{-8mm}\vspace{3mm}\tikz[scale=0.5]{
+        \draw[color=black!50] (0,0) grid (#1,#2);
+        \draw[thick] (0,0) rectangle (#1,#2);
+    }
+}
+
+\newcommand{\tiempoextra}{\small
+\textit{Teniendo tiempo extra para realizar el examen, he decidido:}
+ \vspace{2mm}\\
+ .\hspace{5mm}\raisebox{0.5mm}{\fbox{\phantom{a}}}\hspace{2mm}\textit{Utilizarlo}
+ \hspace{2cm}
+ \raisebox{0.5mm}{\fbox{\phantom{a}}}\hspace{2mm}\textit{No utilizarlo}
+ \hspace{4cm}
+ \textit{Firma:}
+}
+
+\newcommand{\instruccionessc}[2]{
+    \textsf{
+     #1 minutos\\
+     \vspace{-3mm}\hrule
+     \textbf{Instrucciones para los alumnos}\\
+     \begin{itemize}
+         \item No abra esta prueba hasta que se lo autoricen.
+         \item En esta prueba no se permite el uso de ninguna calculadora.
+         \item Se debe responder a cada pregunta en el cuadro reservado para ello.
+         \item Salvo que se indique lo contrario en la pregunta, todas las respuestas deben estar simplificadas.
+         \item Se necesita una copia sin anotaciones del cuadernillo de fórmulas de \textbf{Matemáticas: Análisis y Enfoques} para esta prueba.
+         \item Si se ve obligado a rectificar una respuesta, o no tiene suficiente con el espacio asignado, puede contestar en el cuadernillo adjunto, indicando el número de ejercicio y apartado. Deberá tachar obligatoriamente la respuesta incorrecta.
+         \item La puntuación máxima para esta prueba de examen es \textbf{[#2 puntos]}.
+     \end{itemize}}
+    \newpage
+}
+
+\newcommand{\instruccionescc}[2]{
+    \textsf{
+     #1 minutos\\
+     \vspace{-3mm}\hrule
+     \textbf{Instrucciones para los alumnos}\\
+     \begin{itemize}
+         \item No abra esta prueba hasta que se lo autoricen.
+         \item En esta prueba es necesario utilizar una calculadora de pantalla gráfica.
+         \item Se debe responder a cada pregunta en el cuadro reservado para ello.
+         \item Salvo que se indique lo contrario en la pregunta, todas las respuestas numéricas deberán ser exactas o aproximadas con tres cifras significativas.
+         \item Se necesita una copia sin anotaciones del cuadernillo de fórmulas de \textbf{Matemáticas: Análisis y Enfoques} para esta prueba.
+         \item Si se ve obligado a rectificar una respuesta, o no tiene suficiente con el espacio asignado, puede contestar en el cuadernillo adjunto, indicando el número de ejercicio y apartado. Deberá tachar obligatoriamente la respuesta incorrecta.
+         \item La puntuación máxima para esta prueba de examen es \textbf{[#2 puntos]}.
+     \end{itemize}}
+    \newpage
+}
+
+\newcommand{\logo}[4]{
+    \tikz{
+        \node at (1.5,1.6)  
+            {\IfFileExists{logo.png}{\includegraphics[width=2.5cm]{logo.png}}{\fbox{\parbox[c][1.4cm][c]{2.2cm}{\centering\sffamily\small IES Cortes\\de Cádiz}}}};
+        \draw(3,0) rectangle (7,0.8);
+        \draw(3,0.8) rectangle (15.8,1.8);
+        \draw (3,1.8) rectangle (10.5,2.4);
+        \draw (3,2.4) rectangle (10.5,3);
+        \draw (10.5,1.8) rectangle (15.8,2.4);
+        \draw (10.5,2.4) rectangle (15.8,3);
+        \draw (10.5,1.8) rectangle (12.2,2.4);
+        \draw (10.5,2.4) rectangle (12.2,3);
+        \draw[thick] (15.8,0.8) rectangle (18,3);
+        \draw[very thick] (0,0) rectangle (18,3);
+        \node at (6.75,2.7) {\textsf{\small DEPARTAMENTO DE MATEMATICAS}};
+        \node at (11.35,2.7) {\textsf{Curso:}};
+        \node at (11.35,2.1) {\textsf{Fecha:}};
+        \node at (16.9,2.75) {\textsf{\small Calificación}};
+        \node at (3,0.35) [right=2mm] {\textsf{\small Nombre y apellidos:}};
+        \node at (1.5,0.225) {\sffamily{\tiny IES Cortes de Cádiz}};
+        \node at (6.75,2.1) {\textsf{\small #1}}; %% asignatura %%
+        \node at (9.4,1.2) {\textsf{\large{#2}}}; %% título %%
+        \node at (14,2.1) {\textsf{#3}}; %% fecha %%
+        \node at (14,2.7) {\textsf{#4}}; %% grupo %%
+    }
+    \vspace{2mm}
+}
+
+\newcommand{\seccion}[2]{
+    \par
+        \vspace{1cm}\noindent\textbf{\large\textsf{Sección #1 [#2 puntos]}}
+    \par
+}
+
+\def\v#1#2{\vec{#1}=\begin{pmatrix}#2\end{pmatrix}}
+
+\def\sp#1{\left(\begin{smallmatrix}#1\end{smallmatrix}\right)}
+
+\newcommand{\evalteaching}{
+    \hspace{-10mm}\tikz{
+        \node at (-0.6,1.1) [right] {\textsf{\large Evaluación de la enseñanza}};
+        \node at (0,0) [right] {\textsf{Explicaciones}};
+        \foreach \x in {1,...,5} {
+            \draw (\x+11.8,-0.1) circle (0.4) node {\x};
+        }
+        \draw (-0.5,-2) rectangle (17.5,0.5);
+        \node at (0,-2.7) [right] {\textsf{Actividades}};
+        \foreach \x in {1,...,5} {
+            \draw (\x+11.8,-2.8) circle (0.4) node {\x};
+        }
+        \draw (-0.5,-4.7) rectangle (17.5,-2.2);
+        \node at (0,-5.4) [right] {\textsf{Evaluación}};
+        \foreach \x in {1,...,5} {
+            \draw (\x+11.8,-5.5) circle (0.4) node {\x};
+        }
+        \draw (-0.5,-7.4) rectangle (17.5,-4.9);
+        \node at (0,-8.1) [right] {\textsf{Adaptaciones}};
+        \foreach \x in {1,...,5} {
+            \draw (\x+11.8,-8.2) circle (0.4) node {\x};
+        }
+        \draw (-0.5,-10.1) rectangle (17.5,-7.6);
+    }
+}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% COMPATIBILIDAD CON EJERCICIOS DE NEOPE %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\providecommand{\M}[1]{\Pbi{#1}}
+\renewcommand{\P}[1]{\Puntos{#1}}
+\providecommand{\T}[1]{}
+\renewcommand{\t}[1]{}
+\providecommand{\lsol}[1]{\sol{#1}}
+\providecommand{\info}[1]{\par\smallskip\hfill{\sffamily\tiny\textcolor{gray}{#1}}\par}
+\providecommand{\Vec}[1]{\overrightarrow{#1}}
+\providecommand{\R}{\mathbb{R}}
+\providecommand{\N}{\mathbb{N}}
+\providecommand{\Z}{\mathbb{Z}}
+\providecommand{\Q}{\mathbb{Q}}
+\providecommand{\C}{\mathbb{C}}
+\renewcommand{\c}[2]{\begin{pmatrix}#1\\#2\end{pmatrix}}
+
+\newenvironment{matrizp}{\left(\begin{smallmatrix}}{\end{smallmatrix}\right)}
+\newenvironment{detp}{\left|\begin{smallmatrix}}{\end{smallmatrix}\right|}
+\newenvironment{sistemap}{\left\{\begin{smallmatrix}}{\end{smallmatrix}\right.}
+
+\newenvironment{solucion}{%
+  \par\medskip\begingroup\small%
+  \noindent\textsf{\textbf{Solución:}}\par\smallskip%
+}{\par\endgroup\medskip}
+
+% Variables que utiliza la cabecera alternativa \cabeceranAyE.
+\providecommand{\prueba}{}
+\providecommand{\evaluacion}{}
+\providecommand{\fecha}{}
+
+%%% previo: \begin{document}
+%%% previo: \renewcommand{\prueba}{ {{title}} }
+%%% previo: \renewcommand{\fecha}{ {{date}} }
+%%% previo: {{header}}
+%%% final: \end{document}

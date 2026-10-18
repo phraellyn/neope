@@ -1,3 +1,5 @@
+export { normalizeAlignedLineBreaks } from '../../functions/solutionLayout.js'
+
 // Convierte los antiguos delimitadores de display sin tocar saltos de fila
 // con separación opcional, por ejemplo `\\[5pt]` dentro de matrices.
 export function normalizeDisplayMathDelimiters(text) {

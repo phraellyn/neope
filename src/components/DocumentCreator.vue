@@ -14,9 +14,11 @@ import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
 import DocumentAssessmentAlignmentEditor from './DocumentAssessmentAlignmentEditor.vue'
 import DocumentQueueChildren from './DocumentQueueChildren.vue'
 import MasonryGrid from './MasonryGrid.vue'
-import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, mergeExerciseStructure, normalizeCriteriaUnicode, parseExerciseLatex } from '../utils/exerciseStructure'
+import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, exerciseStructureFromDocument, mergeExerciseStructure, normalizeCriteriaUnicode, parseExerciseLatex } from '../utils/exerciseStructure'
 import { compactExerciseConceptLabel, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
-import { normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
+import { normalizeAlignedLineBreaks, normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
+import { canonicalFieldKey, isInternalTemplate, migrateDocumentTemplate, readDocumentTemplate, renderTemplateWrapper, splitFinalDocumentCode, templateHeader } from '../utils/documentTemplate'
+import { documentSourceContent, repairNestedLegacyDocument } from '../utils/latexDocumentSource'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import { syncDocumentAssessment } from '../services/documentAssessmentRepository'
 import { assessmentExerciseModel } from '../utils/documentAssessmentMatrix'
@@ -148,6 +150,10 @@ const previewAssetSignature = ref('')
 const previewDocuments = ref([])
 const documentCode = ref('')
 const documentCodeNeedsRegeneration = ref(true)
+const finalCodes = reactive({})
+const codeEditorKey = ref('')
+const codeEditorVisible = ref(false)
+const codeCompilationId = globalThis.crypto.randomUUID()
 const compileError = ref('')
 const compileErrorVisible = ref(false)
 const isCompiling = ref(false)
@@ -155,6 +161,7 @@ const isGeneratingContent = ref(false)
 const isSaving = ref(false)
 const dragPayload = ref(null)
 const viewedDocument = ref(null)
+const storedTemplateSnapshots = ref([])
 const viewerAssessmentExercises = ref([])
 const viewerAssessmentLoading = ref(false)
 const assessmentAlignmentDialog = ref(false)
@@ -440,52 +447,6 @@ const markerFieldDefinitions = Object.freeze({
   course: { key: 'course', label: 'Grupo', type: 'group', placeholder: '2ºBTO B' },
 })
 
-const exerciseCollectionTemplatePattern = /(?:^|\/)ejercicios\.tex$/i
-
-function isExerciseCollectionTemplate(template = null) {
-  return exerciseCollectionTemplatePattern.test(String(template?.archivo || '').trim())
-}
-
-function addTemplateSpecialFields(template, metadata) {
-  if (!isExerciseCollectionTemplate(template)) return metadata
-  const fields = [...metadata.fields]
-  if (!fields.some((field) => field.key === 'includeCriteria')) {
-    fields.push({
-      key: 'includeCriteria',
-      label: 'Criterios de calificación',
-      type: 'checkbox',
-      default: true,
-      formOnly: true,
-    })
-  }
-  if (!fields.some((field) => field.key === 'includeInfo')) {
-    fields.push({
-      key: 'includeInfo',
-      label: 'Información de los ejercicios',
-      type: 'checkbox',
-      default: true,
-      formOnly: true,
-    })
-  }
-  const tools = metadata.tools.some((tool) => tool.id === 'salto-columna')
-    ? metadata.tools
-    : [
-        ...metadata.tools,
-        {
-          id: 'salto-columna',
-          label: 'Salto',
-          description: 'Inicia una nueva columna',
-          kind: 'command',
-          code: '\\newcolumn',
-        },
-      ]
-  return {
-    ...metadata,
-    fields,
-    tools,
-  }
-}
-
 function markerFieldDefinition(name, argument) {
   const normalized = normalizeName(name)
   const known = markerFieldDefinitions[normalized]
@@ -570,7 +531,7 @@ function parseTemplateMarkers(code = '') {
   return { command, fields: uniqueFields }
 }
 
-function parseTemplateMetadata(code = '') {
+function parseLegacyTemplateMetadata(code = '') {
   try {
     const markerMetadata = parseTemplateMarkers(code)
     const fields = markerMetadata.fields
@@ -640,14 +601,25 @@ function parseTemplateMetadata(code = '') {
 }
 
 const documentTemplates = computed(() => {
-  return props.templates.flatMap((template) => {
-    const metadata = parseTemplateMetadata(template.codigo)
-    if (!metadata) return []
+  const sources = [...props.templates]
+  storedTemplateSnapshots.value.forEach((stored) => {
+    if (!sources.some((template) => template.archivo === stored.archivo)) sources.push({ ...stored, id: stored.key || stored.archivo })
+  })
+  return sources.flatMap((template) => {
+    if (isInternalTemplate(template)) return []
+    let metadata
+    try {
+      const converted = migrateDocumentTemplate(template)
+      metadata = readDocumentTemplate(converted.codigo, parseLegacyTemplateMetadata(converted.codigo))
+    } catch (error) {
+      console.warn(`Plantilla ${template.nombre}:`, error)
+      return []
+    }
     return [{
       ...template,
       key: template.id || template.archivo,
       metadata: {
-        ...addTemplateSpecialFields(template, metadata),
+        ...metadata,
         name: template.nombre || 'Documento',
       },
     }]
@@ -659,6 +631,9 @@ const selectedMetadata = computed(() => selectedTemplate.value?.metadata || defa
 const selectedTemplates = computed(() => selectedTemplateKeys.value
   .map((key) => documentTemplates.value.find((template) => template.key === key))
   .filter(Boolean))
+const requiresExercises = computed(() => selectedTemplates.value.some((template) => template.metadata.content === 'exercises'))
+const supportsAssessment = computed(() => selectedTemplates.value.some((template) => template.metadata.assessment))
+const levelOptions = [...new Set(mathSubjects.map((subject) => subject.course))]
 
 function generationLatexCapabilities() {
   const packages = new Set()
@@ -701,8 +676,13 @@ const unifiedFields = computed(() => {
   const result = []
   const seen = new Set()
   selectedTemplates.value.forEach((template) => template.metadata.fields.forEach((field) => {
-    const identity = normalizeName(field.label || field.key)
-    if (seen.has(identity)) return
+    if (field.hidden) return
+    const identity = canonicalFieldKey(field.key)
+    if (seen.has(identity)) {
+      const existing = result.find((item) => item.key === identity)
+      existing.required ||= field.required
+      return
+    }
     seen.add(identity)
     result.push({ ...field, unifiedKey: field.key })
   }))
@@ -728,7 +708,7 @@ const groupOptions = computed(() => {
     }]
   }).sort((left, right) => left.title.localeCompare(right.title, 'es', { numeric: true }))
 })
-const subjectOptions = computed(() => [...new Set(groupOptions.value.map((group) => group.subject).filter(Boolean))])
+const subjectOptions = computed(() => [...new Set(mathSubjects.filter((subject) => !fieldValues.level || subject.course === fieldValues.level).map((subject) => subject.title))])
 const selectedGroupOption = computed(() => {
   const groupField = unifiedFields.value.find((field) => field.type === 'group' || field.type === 'course' || field.key === 'course')
   return groupOptions.value.find((group) => group.value === fieldValues[groupField?.key]) || null
@@ -835,7 +815,7 @@ const assessmentFieldsComplete = computed(() => !documentAssessment.evaluable
   || Boolean(effectiveAssessmentGroupId.value && documentAssessment.shortName.trim()))
 const requiredFieldsComplete = computed(() => Boolean(selectedTemplate.value)
   && selectedTemplates.value.length > 0
-  && unifiedFields.value.every((field) => field.type === 'checkbox' || String(fieldValues[field.key] || '').trim())
+  && unifiedFields.value.every((field) => field.required === false || field.type === 'checkbox' || String(fieldValues[field.key] ?? '').trim())
   && assessmentFieldsComplete.value)
 const canContinue = computed(() => {
   if (currentStep.value === 1) return requiredFieldsComplete.value
@@ -867,7 +847,7 @@ const workflowState = computed(() => ({
   isSaving: isSaving.value,
   totalSteps: lastStep.value,
   canSave: currentStep.value === lastStep.value && Boolean(previewUrl.value) && !isCompiling.value,
-  dirty: mode.value === 'editor' && Boolean(documentEditorBaseline.value) && documentFingerprint() !== documentEditorBaseline.value,
+  dirty: ['editor', 'viewer'].includes(mode.value) && Boolean(documentEditorBaseline.value) && documentFingerprint() !== documentEditorBaseline.value,
 }))
 
 function documentFingerprint() {
@@ -878,6 +858,7 @@ function documentFingerprint() {
     curriculum: documentCurriculum.value,
     content: serializeDocumentContent(documentContent.value),
     sourceLatex: sourceLatexDraft.value,
+    finalCodes: { ...finalCodes },
   })
 }
 
@@ -1022,7 +1003,7 @@ async function compileGeneratedSegment(code, preambleName, assets) {
   const response = await compilerRequest('/compile', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: segmentCompilerCode(code), preamble_name: preambleName, assets }),
+    body: JSON.stringify({ code: segmentCompilerCode(normalizeAlignedLineBreaks(code)), preamble_name: preambleName, assets }),
   })
   return response.blob()
 }
@@ -1362,7 +1343,20 @@ function activeVersion(exercise, version = selectedVersionFor(exercise)) {
 function versionStructure(exercise, version = selectedVersionFor(exercise)) {
   const active = activeVersion(exercise, version)
   if (!active) return parseExerciseLatex('')
-  return mergeExerciseStructure(parseExerciseLatex(active.enunciado || active.codigo || ''), active.structure || active)
+  if (active.structure) {
+    const structure = aggregateExerciseStructure(active.structure)
+    // Recupera snapshots antiguos cuyo análisis dejó fuera de \criterios un
+    // fragmento de la tabla. El final original del ejercicio sigue disponible.
+    if (Number(active.schemaVersion) >= 3 && typeof active.final === 'string'
+      && !active.final.trim() && /\\hline/.test(structure.final || '')
+      && /&\s*\d+(?:[,.]\d+)?\s*\\\\/.test(structure.final || '')
+      && structure.apartados.some((part) => part.gradingCriteria?.length)) {
+      structure.final = active.final
+    }
+    return structure
+  }
+  if (Number(active.schemaVersion) >= 3 && active.statement) return aggregateExerciseStructure(exerciseStructureFromDocument(active))
+  return mergeExerciseStructure(parseExerciseLatex(active.enunciado || active.codigo || ''), active)
 }
 
 function metricsForVersion(exercise, version = selectedVersionFor(exercise)) {
@@ -1524,15 +1518,20 @@ function templateDefinesCommand(template, commandName) {
 }
 
 function directSourceCodeForTemplate(code, template) {
-  let result = normalizeDisplayMathDelimiters(String(code || '').trim())
-  if (!templateDefinesEnvironment(template, 'solucion')) {
+  const stripPreview = /\\begin\s*\{preview\}/.test(template.metadata.before)
+    && /\\end\s*\{preview\}/.test(template.metadata.after)
+  let result = normalizeDisplayMathDelimiters(documentSourceContent(code, { stripPreview }))
+  const exerciseOptions = template.metadata.content === 'exercises'
+  if (!templateDefinesEnvironment(template, 'solucion') || (exerciseOptions && !templateOption(template, 'includeSolutions', false))) {
     result = result.replace(/\\begin\s*\{solucion\}[\s\S]*?\\end\s*\{solucion\}/g, '\n')
   }
   const availableAnswerCommands = ['lsol', 'sol', 'esol', 'csol']
     .filter((command) => templateDefinesCommand(template, command))
   const unavailableAnswerCommands = ['lsol', 'sol', 'esol', 'csol']
-    .filter((command) => !availableAnswerCommands.includes(command))
+    .filter((command) => !availableAnswerCommands.includes(command) || (exerciseOptions && !templateOption(template, 'includeAnswers', false)))
   if (unavailableAnswerCommands.length) result = stripBalancedCommands(result, unavailableAnswerCommands)
+  if (exerciseOptions && !infoEnabledForTemplate(template)) result = stripBalancedCommands(result, ['info'])
+  if (exerciseOptions && !criteriaEnabledForTemplate(template)) result = stripBalancedCommands(result, ['criterios'])
   return result.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n').trim()
 }
 
@@ -1551,9 +1550,10 @@ function queueExerciseCode(item, template = selectedTemplate.value) {
     structure.puntuacion = Number(metrics.puntuacion) || 0
     structure.tiempo = Number(metrics.tiempo) || 0
   }
-  const includeSolutions = templateDefinesEnvironment(template, 'solucion')
+  const includeSolutions = templateDefinesEnvironment(template, 'solucion') && templateOption(template, 'includeSolutions', false)
   const includeAnswers = templateDefinesCommand(template, 'lsol')
     && (!structure.apartados.length || structure.apartados.length === 1 || templateDefinesCommand(template, 'sol'))
+    && templateOption(template, 'includeAnswers', false)
   const code = buildExerciseLatex(aggregateExerciseStructure(structure), {
     includeSolutions,
     includeAnswers,
@@ -1948,10 +1948,7 @@ function dropOnQueueSection(event, section, targetBlockId = null, containerBlock
 
 function headerCode(template = selectedTemplate.value) {
   const metadata = template?.metadata || defaultMetadata
-  const fields = [...metadata.fields]
-    .filter((field) => Number.isFinite(field.argument))
-    .sort((a, b) => a.argument - b.argument)
-  return `\\${metadata.command}\n${fields.map((field) => `    {${documentFieldValue(field, template)}}`).join('\n')}`
+  return templateHeader(metadata, (field) => documentFieldValue(field, template))
 }
 
 function templateInputName(template) {
@@ -2006,24 +2003,18 @@ function generatedCodeForTemplate(template, options = {}) {
   const bodyContent = usesStructuredBlocks
     ? [
       beforeExercises,
-      exercises ? ['\\begin{ejercicios}', exercises, '\\end{ejercicios}'].join('\n') : '',
+      exercises ? (template.metadata.exerciseEnvironment ? [`\\begin{${template.metadata.exerciseEnvironment}}`, exercises, `\\end{${template.metadata.exerciseEnvironment}}`].join('\n') : exercises) : '',
       afterExercises,
     ].filter((entry) => entry.trim()).join('\n\n')
     : directSourceCodeForTemplate(hasDirectSource ? options.directSourceCode : sourceLatexCode.value, template)
   const preambleRequirements = exercisePreambleRequirements(bodyContent)
-  return `\\input{../${templateInputName(template)}}
-
-${preambleRequirements}
-
-${criteriaCommandFallback()}
-
-\\begin{document}
-
-${headerCode(template)}
-
-${bodyContent}
-
-\\end{document}`
+  const valueFor = (field) => documentFieldValue(field, template)
+  return normalizeAlignedLineBreaks([template.codigo, preambleRequirements,
+    templateDefinesCommand(template, 'criterios') ? '' : criteriaCommandFallback(),
+    renderTemplateWrapper(template.metadata.before, template.metadata, valueFor),
+    bodyContent,
+    renderTemplateWrapper(template.metadata.after, template.metadata, valueFor),
+  ].filter(Boolean).join('\n\n'))
 }
 
 function generatedCode() {
@@ -2170,7 +2161,6 @@ function invalidatePreview() {
 function invalidateContentPreview() {
   documentContent.value = touchDocumentContent(documentContent.value)
   documentCodeNeedsRegeneration.value = true
-  documentCode.value = ''
   invalidatePreview()
 }
 
@@ -2205,9 +2195,7 @@ async function copyCompileError() {
 }
 
 function activeDocumentCode(template = previewTemplate.value || selectedTemplate.value) {
-  const generated = generatedCodeForTemplate(template)
-  if (currentStep.value !== lastStep.value || !documentCode.value.trim() || template?.key !== selectedPreviewTemplateKey.value) return normalizeCriteriaUnicode(generated)
-  return normalizeCriteriaUnicode(hasLegacyOptionalCommand(documentCode.value) ? generated : documentCode.value)
+  return finalCodes[template?.key] ?? normalizeCriteriaUnicode(generatedCodeForTemplate(template))
 }
 
 function revokePreview() {
@@ -2224,7 +2212,7 @@ function revokePreview() {
 
 function resetFields() {
   Object.keys(fieldValues).forEach((key) => delete fieldValues[key])
-  unifiedFields.value.forEach((field) => { fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : '' })
+  unifiedFields.value.forEach((field) => { fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : (field.default ?? '') })
 }
 
 function applyCreationContext() {
@@ -2233,6 +2221,7 @@ function applyCreationContext() {
   const group = groupOptions.value.find((option) => option.id === context.groupId)
   if (!group) return
   unifiedFields.value.forEach((field) => {
+    if (field.type === 'level') fieldValues[field.key] = group.course
     if (field.type === 'group' || field.type === 'course' || field.key === 'course') fieldValues[field.key] = group.value
     if (field.type === 'subject' || field.key === 'subject') fieldValues[field.key] = group.subject
     if ((field.type === 'date' || field.key === 'date') && context.date) fieldValues[field.key] = context.date
@@ -2247,7 +2236,7 @@ function applyCreationContext() {
 
 function ensureFields() {
   unifiedFields.value.forEach((field) => {
-    if (fieldValues[field.key] === undefined) fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : ''
+    if (fieldValues[field.key] === undefined) fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : (field.default ?? '')
   })
 }
 
@@ -2266,6 +2255,8 @@ function selectTemplate(template) {
   documentCurriculum.value = emptyCurriculum()
   applyCreationContext()
   documentContent.value = createDocumentContent()
+  if (!requiresExercises.value) selectContentWorkspace('latex')
+  if (!supportsAssessment.value) documentAssessment.evaluable = false
   optionalRequiredCount.value = 1
   Object.keys(selectedVersions).forEach((key) => delete selectedVersions[key])
   invalidatePreview()
@@ -2283,6 +2274,7 @@ function addTemplateToQueue(template) {
   selectedTemplateKey.value = selectedTemplateKeys.value[0]
   selectedPreviewTemplateKey.value = selectedPreviewTemplateKey.value || template.key
   ensureFields()
+  if (requiresExercises.value && documentContent.value.source.type === DOCUMENT_CONTENT_SOURCE_TYPES.LATEX && !sourceLatexCode.value.trim()) selectContentWorkspace('exercise-bank')
   invalidatePreview()
 }
 
@@ -2291,7 +2283,9 @@ function removeTemplateFromQueue(templateKey) {
   selectedTemplateKeys.value = selectedTemplateKeys.value.filter((key) => key !== templateKey)
   selectedTemplateKey.value = selectedTemplateKeys.value[0]
   if (!selectedTemplateKeys.value.includes(selectedPreviewTemplateKey.value)) selectedPreviewTemplateKey.value = selectedTemplateKeys.value[0]
-  resetFields()
+  ensureFields()
+  if (!requiresExercises.value) selectContentWorkspace('latex')
+  if (!supportsAssessment.value) documentAssessment.evaluable = false
   invalidatePreview()
 }
 
@@ -2310,7 +2304,7 @@ function fieldValueFor(field, template = null) {
     const sameLabel = template.metadata.fields.find((candidate) => normalizeName(candidate.label) === normalizeName(field.label))
     if (sameLabel && fieldValues[sameLabel.key] !== undefined) return fieldValues[sameLabel.key]
   }
-  return ''
+  return field.default ?? ''
 }
 
 function formatDocumentDate(value) {
@@ -2322,7 +2316,7 @@ function formatDocumentDate(value) {
 function documentFieldValue(field, template = null) {
   const value = fieldValueFor(field, template)
   if (field.type === 'checkbox') return ''
-  return field.type === 'date' || field.key === 'date' ? formatDocumentDate(value) : String(value || '').trim()
+  return field.type === 'date' || field.key === 'date' ? formatDocumentDate(value) : String(value ?? '').trim()
 }
 
 function documentFieldStoredValue(field) {
@@ -2332,11 +2326,16 @@ function documentFieldStoredValue(field) {
 }
 
 function criteriaEnabledForTemplate(template) {
-  return !isExerciseCollectionTemplate(template) || Boolean(fieldValues.includeCriteria)
+  return templateOption(template, 'includeCriteria', false)
 }
 
 function infoEnabledForTemplate(template) {
-  return !isExerciseCollectionTemplate(template) || Boolean(fieldValues.includeInfo)
+  return templateOption(template, 'includeInfo', false)
+}
+
+function templateOption(template, key, fallback) {
+  const field = template?.metadata.fields.find((candidate) => candidate.key === key)
+  return field ? Boolean(fieldValues[key] ?? field.default) : (template?.metadata.render?.[key] ?? fallback)
 }
 
 function dateInputValue(value) {
@@ -2364,7 +2363,7 @@ function syncCurriculumFromFields() {
   const courseField = unifiedFields.value.find((field) => field.type === 'group' || field.type === 'course' || field.key === 'course')
   const subjectField = unifiedFields.value.find((field) => field.type === 'subject' || field.key === 'subject')
   const selectedGroup = groupOptions.value.find((group) => group.value === fieldValues[courseField?.key])
-  const course = selectedGroup?.course || matchCourse(courseField ? fieldValues[courseField.key] : '')
+  const course = selectedGroup?.course || fieldValues.level || matchCourse(courseField ? fieldValues[courseField.key] : '')
   const subject = mathSubjects.find((item) => item.id === selectedGroup?.subjectId)
     || matchSubject(selectedGroup?.subject || (subjectField ? fieldValues[subjectField.key] : ''), course)
   const currentSubject = mathSubjects.find((item) => item.id === documentCurriculum.value.subjectId)
@@ -2379,9 +2378,18 @@ function syncCurriculumFromFields() {
 }
 
 function onFieldInput(field = null) {
+  if (field?.type === 'level') {
+    const groupField = unifiedFields.value.find((candidate) => candidate.type === 'group' || candidate.type === 'course')
+    const group = groupOptions.value.find((option) => option.value === fieldValues[groupField?.key])
+    if (group && group.course !== fieldValues[field.key]) {
+      fieldValues[groupField.key] = ''
+      documentAssessment.groupId = null
+    }
+  }
   if (field && (field.type === 'group' || field.type === 'course' || field.key === 'course')) {
     const group = groupOptions.value.find((option) => option.value === fieldValues[field.key])
     if (group) {
+      if (unifiedFields.value.some((candidate) => candidate.key === 'level')) fieldValues.level = group.course
       if (documentAssessment.evaluable) documentAssessment.groupId = group.id
       unifiedFields.value
         .filter((candidate) => candidate.type === 'subject' || candidate.key === 'subject')
@@ -2430,8 +2438,12 @@ function resetWorkflow() {
   compileError.value = ''
   compileErrorVisible.value = false
   documentCode.value = ''
+  Object.keys(finalCodes).forEach((key) => delete finalCodes[key])
+  codeEditorVisible.value = false
+  codeEditorKey.value = ''
   documentCodeNeedsRegeneration.value = true
   viewedDocument.value = null
+  storedTemplateSnapshots.value = []
   viewerAssessmentExercises.value = []
   viewerAssessmentLoading.value = false
   revokePreview()
@@ -2489,7 +2501,7 @@ async function assessmentModelsForDocument(documentData) {
 
 async function viewDocument(documentData) {
   if (!documentData?.pdf?.url) return
-  resetWorkflow()
+  editDocument(documentData)
   viewedDocument.value = documentData
   const storedTemplates = Array.isArray(documentData.plantillas) && documentData.plantillas.length
     ? documentData.plantillas
@@ -2498,13 +2510,13 @@ async function viewDocument(documentData) {
     ? documentData.pdfs
     : [documentData.pdf]
   previewDocuments.value = storedPdfs.map((pdf, index) => ({
-    templateKey: pdf.templateKey || storedTemplates[index]?.archivo || `pdf-${index}`,
+    templateKey: selectedTemplates.value[index]?.key || pdf.templateKey || storedTemplates[index]?.archivo || `pdf-${index}`,
     name: storedTemplates[index]?.nombre || storedTemplates[index]?.archivo || `Documento ${index + 1}`,
     url: pdf.url,
     path: pdf.path || '',
     blob: null,
-    code: '',
-    assetSignature: '',
+    code: storedFinalCode(documentData, selectedTemplates.value[index], index),
+    assetSignature: documentAssetSignature(),
   })).filter((entry) => entry.url)
   selectedPreviewTemplateKey.value = previewDocuments.value[0]?.templateKey || ''
   previewUrl.value = previewDocuments.value[0]?.url || documentData.pdf.url
@@ -2732,7 +2744,7 @@ async function compilerRequest(path, options = {}) {
 
 async function compileDocument(force = false, options = {}) {
   if (!selectedTemplates.value.length || isCompiling.value) return
-  const templatesToCompile = selectedTemplates.value
+  const templatesToCompile = options.templateKey ? selectedTemplates.value.filter((template) => template.key === options.templateKey) : selectedTemplates.value
   const assetSignature = documentAssetSignature()
   const directSourceCode = typeof options.directSourceCode === 'string' ? options.directSourceCode : null
   const codeForTemplate = (template) => directSourceCode === null
@@ -2753,25 +2765,24 @@ async function compileDocument(force = false, options = {}) {
       let compilerBody = ''
       try {
         code = codeForTemplate(template)
-        const preambleRequirements = exercisePreambleRequirements(code)
-        const criteriaMathRequirement = /\\mathbb\s*\{/.test(code)
-          ? String.raw`\providecommand{\mathbb}[1]{\mathbf{#1}}`
-          : ''
-        const criteriaRequirement = /\\criterios\s*\{/.test(code) && !templateDefinesCommand(template, 'criterios')
-          ? criteriaCommandFallback()
-          : ''
-        compilerPreamble = [template.codigo, preambleRequirements, criteriaMathRequirement, criteriaRequirement].filter(Boolean).join('\n\n')
-        compilerBody = bodyForCompiler(code)
-        if (template.key === selectedPreviewTemplateKey.value && hasLegacyOptionalCommand(documentCode.value)) documentCode.value = code
+        const repairedCode = normalizeAlignedLineBreaks(repairNestedLegacyDocument(code))
+        if (repairedCode !== code) {
+          finalCodes[template.key] = repairedCode
+          code = repairedCode
+        }
+        const split = splitFinalDocumentCode(code, template.codigo)
+        compilerPreamble = split.preamble
+        compilerBody = split.body
+        const compilerName = `document-${codeCompilationId}-${template.key.replace(/[^A-Za-z0-9_-]/g, '-')}.tex`
         await compilerRequest('/preambles', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: template.archivo, content: compilerPreamble }),
+          body: JSON.stringify({ name: compilerName, content: compilerPreamble }),
         })
         const response = await compilerRequest('/compile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: compilerBody, preamble_name: template.archivo, assets }),
+          body: JSON.stringify({ code: compilerBody, preamble_name: compilerName, assets }),
         })
         const blob = await response.blob()
         entries.push({ templateKey: template.key, name: template.nombre || template.metadata.name, code, blob, url: URL.createObjectURL(blob), assetSignature })
@@ -2781,7 +2792,11 @@ async function compileDocument(force = false, options = {}) {
       }
     }
     if (!entries.length) throw new Error(compilationErrors.join('\n\n') || 'No se ha podido compilar ningún documento.')
-    revokePreview()
+    const oldEntries = previewDocuments.value
+    const retainedEntries = options.templateKey ? oldEntries.filter((entry) => entry.templateKey !== options.templateKey) : []
+    oldEntries.filter((entry) => !retainedEntries.includes(entry)).forEach((entry) => { if (entry.url?.startsWith('blob:')) URL.revokeObjectURL(entry.url) })
+    entries.unshift(...retainedEntries)
+    entries.sort((left, right) => selectedTemplates.value.findIndex((template) => template.key === left.templateKey) - selectedTemplates.value.findIndex((template) => template.key === right.templateKey))
     previewDocuments.value = entries
     const active = entries.find((entry) => entry.templateKey === selectedPreviewTemplateKey.value) || entries[0]
     if (active) {
@@ -2820,11 +2835,46 @@ function selectPreviewTemplate(templateKey) {
   const entry = previewDocuments.value.find((candidate) => candidate.templateKey === templateKey)
   if (!entry) return
   selectedPreviewTemplateKey.value = templateKey
-  documentCode.value = entry.code
+  documentCode.value = finalCodes[templateKey] ?? entry.code
   previewBlob.value = entry.blob
   previewCode.value = entry.code
   previewAssetSignature.value = entry.assetSignature
   previewUrl.value = entry.url
+}
+
+const editingTemplate = computed(() => selectedTemplates.value.find((template) => template.key === codeEditorKey.value))
+const editingFinalCode = computed({
+  get: () => finalCodes[codeEditorKey.value] ?? (previewEntryForTemplate(codeEditorKey.value)?.code || activeDocumentCode(editingTemplate.value)),
+  set: (value) => { finalCodes[codeEditorKey.value] = value },
+})
+const editingCodeIsCompiled = computed(() => previewEntryForTemplate(codeEditorKey.value)?.code === editingFinalCode.value)
+function openFinalCode(templateKey) {
+  if (!selectedTemplates.value.some((template) => template.key === templateKey)) {
+    showAppErrorToast('No se ha encontrado la plantilla ni una copia guardada de su preámbulo.')
+    return
+  }
+  codeEditorKey.value = templateKey
+  const code = editingFinalCode.value
+  const repaired = repairNestedLegacyDocument(code)
+  if (repaired !== code) finalCodes[templateKey] = repaired
+  selectedPreviewTemplateKey.value = templateKey
+  codeEditorVisible.value = true
+}
+function regenerateFinalCode() {
+  if (!editingTemplate.value) return
+  if (!window.confirm('Se sustituirá el código de este documento por el generado desde sus campos, contenido y plantilla. ¿Continuar?')) return
+  delete finalCodes[codeEditorKey.value]
+  // Keep the regenerated code stable until another explicit regeneration.
+  finalCodes[codeEditorKey.value] = generatedCodeForTemplate(editingTemplate.value)
+}
+async function compileEditingFinalCode() {
+  if (!editingFinalCode.value.trim() || isCompiling.value) return
+  finalCodes[codeEditorKey.value] = editingFinalCode.value
+  await compileDocument(true, { templateKey: codeEditorKey.value })
+}
+async function saveEditingFinalCode() {
+  currentStep.value = lastStep.value
+  await saveDocument()
 }
 
 function documentCardTitle(documentData) {
@@ -2857,8 +2907,14 @@ async function loadDocuments() {
   }
 }
 
+function storedFinalCode(documentData, template, index) {
+  const storedKey = documentData.pdfs?.[index]?.templateKey || documentData.plantillas?.[index]?.key
+  return documentData.codigos?.[template?.key] || documentData.codigos?.[storedKey] || documentData.codigos?.[template?.archivo] || (index === 0 ? documentData.codigo || '' : '')
+}
+
 function editDocument(documentData) {
   resetWorkflow()
+  storedTemplateSnapshots.value = (documentData.plantillas || []).filter((template) => template.codigo)
   const storedTemplates = Array.isArray(documentData.plantillas) && documentData.plantillas.length
     ? documentData.plantillas
     : (documentData.plantilla ? [documentData.plantilla] : [])
@@ -2876,6 +2932,10 @@ function editDocument(documentData) {
   selectedTemplateKeys.value = templates.map((item) => item.key)
   selectedTemplateKey.value = template.key
   selectedPreviewTemplateKey.value = template.key
+  templates.forEach((item, index) => {
+    const code = storedFinalCode(documentData, item, index)
+    if (code) finalCodes[item.key] = repairNestedLegacyDocument(code)
+  })
   resetFields()
   Object.assign(fieldValues, documentData.campos || {})
   unifiedFields.value.filter((field) => field.type === 'checkbox').forEach((field) => {
@@ -2901,6 +2961,7 @@ function editDocument(documentData) {
   const savedSubject = mathSubjects.find((subject) => subject.id === savedSubjectId)
     || matchSubject(savedCurriculum.subject || documentData.subject || documentData.campos?.subject, matchCourse(savedCourse))
     || matchSubject(documentData.campos?.subject, matchCourse(savedCourse))
+  if (unifiedFields.value.some((field) => field.key === 'level') && !fieldValues.level) fieldValues.level = selectedGroupOption.value?.course || matchCourse(savedCourse) || savedSubject?.course || ''
   const legacyConceptIds = documentData.conceptIds || documentData.conceptos || documentData.curriculum?.concepts
   documentCurriculum.value = {
     ...emptyCurriculum(),
@@ -2936,7 +2997,8 @@ function editDocument(documentData) {
       name: templates[index]?.nombre || templates[index]?.metadata.name,
       url: pdf.url,
       blob: null,
-      code: documentData.codigos?.[templates[index]?.key] || documentData.codigo || '',
+      code: storedFinalCode(documentData, templates[index], index),
+      path: pdf.path || '',
       assetSignature: documentAssetSignature(),
     })).filter((entry) => entry.templateKey && entry.url)
   }
@@ -2996,8 +3058,11 @@ function documentAssessmentItem(documentId) {
 
 async function saveDocument() {
   if (currentStep.value !== lastStep.value || isSaving.value) return
-  if (!previewBlob.value || previewCode.value !== activeDocumentCode()) await compileDocument()
-  if (!previewDocuments.value.length) return
+  await compileDocument()
+  if (previewDocuments.value.length !== selectedTemplates.value.length || selectedTemplates.value.some((template) => previewEntryForTemplate(template.key)?.code !== activeDocumentCode(template))) {
+    showAppErrorToast('Compila correctamente todos los documentos antes de guardar. Hay código pendiente o errores de compilación.')
+    return
+  }
   isSaving.value = true
   emit('busy-change', true)
   documentsError.value = ''
@@ -3105,7 +3170,7 @@ async function saveDocument() {
         archivo: selectedTemplate.value.archivo,
         nombre: selectedTemplate.value.metadata.name || selectedTemplate.value.nombre,
       },
-      plantillas: selectedTemplates.value.map((template) => ({ archivo: template.archivo, nombre: template.nombre || template.metadata.name })),
+      plantillas: selectedTemplates.value.map((template) => ({ key: template.key, archivo: template.archivo, nombre: template.nombre || template.metadata.name, codigo: template.codigo })),
       campos: Object.fromEntries(unifiedFields.value.map((field) => [field.key, documentFieldStoredValue(field)])),
       groupContext: selectedGroupOption.value ? {
         id: selectedGroupOption.value.id,
@@ -3302,8 +3367,9 @@ defineExpose({
               <span>{{ entry.name }}</span>
             </button>
             <span class="document-preview-actions">
-              <v-btn icon="mdi-download" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Descargar documento" @click.stop="downloadGeneratedDocument(entry)" />
-              <v-btn icon="mdi-printer-outline" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Imprimir documento" @click.stop="printGeneratedDocument(entry)" />
+              <v-btn icon="mdi-code-tags" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Mostrar código" @click.stop="openFinalCode(entry.templateKey)" />
+              <v-btn icon="mdi-download" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Descargar documento" :disabled="finalCodes[entry.templateKey] !== undefined && finalCodes[entry.templateKey] !== entry.code" @click.stop="downloadGeneratedDocument(entry)" />
+              <v-btn icon="mdi-printer-outline" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Imprimir documento" :disabled="finalCodes[entry.templateKey] !== undefined && finalCodes[entry.templateKey] !== entry.code" @click.stop="printGeneratedDocument(entry)" />
             </span>
           </div>
           <div
@@ -3384,6 +3450,17 @@ defineExpose({
                 <div><strong>Datos de los documentos</strong><span>Los campos comunes aparecen una sola vez.</span></div>
               </div>
               <v-select
+                v-for="field in unifiedFields.filter((item) => item.type === 'level')"
+                :key="field.key"
+                v-model="fieldValues[field.key]"
+                :items="levelOptions"
+                :label="field.label"
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                @update:model-value="onFieldInput(field)"
+              />
+              <v-select
                 v-for="field in unifiedFields.filter((item) => item.type === 'group' || item.type === 'course')"
                 :key="field.key"
                 v-model="fieldValues[field.key]"
@@ -3432,7 +3509,7 @@ defineExpose({
                 @update:model-value="onFieldInput(field)"
               />
               <v-text-field
-                v-for="field in unifiedFields.filter((item) => !['group', 'course', 'subject', 'date', 'checkbox'].includes(item.type))"
+                v-for="field in unifiedFields.filter((item) => !['group', 'course', 'subject', 'level', 'date', 'checkbox'].includes(item.type))"
                 :key="field.key"
                 v-model="fieldValues[field.key]"
                 :label="field.label"
@@ -3442,7 +3519,7 @@ defineExpose({
                 hide-details
                 @update:model-value="onFieldInput(field)"
               />
-              <section class="document-assessment-fields">
+              <section v-if="supportsAssessment" class="document-assessment-fields">
                 <button
                   type="button"
                   class="document-evaluable-toggle"
@@ -3487,9 +3564,9 @@ defineExpose({
         <div v-else-if="currentStep === 2" class="document-content-step">
           <header class="document-content-toolbar">
             <v-btn-toggle v-model="contentWorkspaceMode" mandatory density="compact" rounded="pill" class="document-content-modes" aria-label="Origen del contenido">
-              <v-btn value="exercise-bank" prepend-icon="mdi-view-grid-outline">Ejercicios</v-btn>
+              <v-btn v-if="requiresExercises" value="exercise-bank" prepend-icon="mdi-view-grid-outline">Ejercicios</v-btn>
               <v-btn value="latex" prepend-icon="mdi-code-tags">LaTeX o archivo</v-btn>
-              <v-btn value="curriculum" prepend-icon="mdi-chart-donut-variant">Conceptos</v-btn>
+              <v-btn v-if="requiresExercises" value="curriculum" prepend-icon="mdi-chart-donut-variant">Conceptos</v-btn>
             </v-btn-toggle>
             <v-btn
               v-if="contentWorkspaceMode === 'exercise-bank'"
@@ -3841,6 +3918,7 @@ defineExpose({
                   <span>{{ template.nombre || template.metadata.name }}</span>
                 </button>
                 <span class="document-preview-actions">
+                  <v-btn icon="mdi-code-tags" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Mostrar código" @click.stop="openFinalCode(template.key)" />
                   <v-btn
                     icon="mdi-download"
                     size="x-small"
@@ -3848,7 +3926,7 @@ defineExpose({
                     variant="text"
                     rounded="circle"
                     aria-label="Descargar documento"
-                    :disabled="!previewEntryForTemplate(template.key)"
+                    :disabled="!previewEntryForTemplate(template.key) || previewEntryForTemplate(template.key).code !== activeDocumentCode(template)"
                     @click.stop="downloadGeneratedDocument(previewEntryForTemplate(template.key))"
                   />
                   <v-btn
@@ -3858,7 +3936,7 @@ defineExpose({
                     variant="text"
                     rounded="circle"
                     aria-label="Imprimir documento"
-                    :disabled="!previewEntryForTemplate(template.key)"
+                    :disabled="!previewEntryForTemplate(template.key) || previewEntryForTemplate(template.key).code !== activeDocumentCode(template)"
                     @click.stop="printGeneratedDocument(previewEntryForTemplate(template.key))"
                   />
                 </span>
@@ -3902,6 +3980,25 @@ defineExpose({
       </v-snackbar>
     </section>
   </div>
+  <v-dialog v-model="codeEditorVisible" fullscreen :persistent="isCompiling || isSaving">
+    <v-card class="final-code-dialog">
+      <v-card-title class="final-code-toolbar">
+        <span>{{ editingTemplate?.nombre }} · Código final</span>
+        <v-spacer />
+        <v-btn prepend-icon="mdi-restore" variant="text" size="small" :disabled="isCompiling || isSaving" @click="regenerateFinalCode">Regenerar desde los datos</v-btn>
+        <v-btn prepend-icon="mdi-content-save-outline" variant="tonal" size="small" :loading="isSaving" :disabled="isCompiling" @click="saveEditingFinalCode">Guardar documento</v-btn>
+        <v-btn icon="mdi-close" variant="text" aria-label="Cerrar código" :disabled="isCompiling || isSaving" @click="codeEditorVisible = false" />
+      </v-card-title>
+      <div class="final-code-layout">
+        <DocumentCodeEditor v-model="editingFinalCode" :compiling="isCompiling" @compile="compileEditingFinalCode" />
+        <div class="final-code-result">
+          <div v-if="!editingCodeIsCompiled" class="final-code-pending">Código pendiente de compilar. El visor muestra el último resultado válido.</div>
+          <div v-if="compileError" class="final-code-error"><pre>{{ compileError }}</pre><v-btn variant="text" size="small" @click="copyCompileError">Copiar error</v-btn></div>
+          <DocumentPdfPreview :src="previewEntryForTemplate(codeEditorKey)?.url || ''" />
+        </div>
+      </div>
+    </v-card>
+  </v-dialog>
   <v-dialog v-model="curriculumDialog" max-width="1180" height="min(88dvh, 860px)">
     <v-card class="document-curriculum-dialog">
       <v-card-title>
@@ -3951,6 +4048,15 @@ defineExpose({
 </template>
 
 <style scoped>
+.final-code-dialog { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+.final-code-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 0 0 auto; }
+.final-code-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
+.final-code-result { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.final-code-result > :deep(.document-pdf-preview) { flex: 1; min-height: 0; }
+.final-code-pending { padding: 8px 12px; font-size: .8rem; background: #fff3d7; }
+.final-code-error { max-height: 180px; overflow: auto; padding: 8px 12px; background: #fff0f0; }
+.final-code-error pre { white-space: pre-wrap; font-size: .75rem; }
+@media (max-width: 760px) { .final-code-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); } }
 .document-creator { width: 100%; height: 100%; min-height: 0; overflow: hidden; background: #f4f7fb; }
 .document-library { position: relative; width: 100%; height: 100%; overflow: auto; padding: 10px; }
 .document-library-error { position: sticky; z-index: 3; top: 0; margin-bottom: 10px; }

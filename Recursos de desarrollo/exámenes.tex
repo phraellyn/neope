@@ -1,8 +1,9 @@
-% neope:document {"name":"Examen","command":"logo","optionalCommand":"optativos"}
-% neope:field {"key":"subject","label":"Asignatura","argument":1,"type":"subject","placeholder":"Matemáticas II"}
-% neope:field {"key":"title","label":"Título","argument":2,"type":"text","placeholder":"Recuperación -- 2ª Evaluación"}
-% neope:field {"key":"date","label":"Fecha","argument":3,"type":"text","placeholder":"09 / 03 / 26"}
-% neope:field {"key":"course","label":"Curso y grupo","argument":4,"type":"course","placeholder":"2ºBTO VA"}
+% neope:document {"name":"Examen","command":"logo","optionalCommand":"optativos","version":2,"content":"exercises","assessment":true,"exerciseEnvironment":"ejercicios","render":{"includeSolutions":false,"includeAnswers":false}}
+% neope:field {"key":"level","label":"Nivel","formOnly":true,"type":"level","required":true}
+% neope:field {"key":"subject","label":"Asignatura","argument":1,"type":"subject","placeholder":"Matemáticas II","required":true}
+% neope:field {"key":"title","label":"Título","argument":2,"type":"text","placeholder":"Recuperación -- 2ª Evaluación","required":true}
+% neope:field {"key":"date","label":"Fecha","argument":3,"type":"text","placeholder":"09 / 03 / 26","required":true}
+% neope:field {"key":"course","label":"Curso y grupo","argument":4,"type":"course","placeholder":"2ºBTO VA","required":true}
 
 \documentclass[a4paper,11pt,fleqn,oneside]{book}
 \usepackage[spanish,activeacute,es-noquoting]{babel}
@@ -247,3 +248,7 @@
 % ESTRUCTURA %
 %% CONTENIDO
 %%
+
+%%% previo: \begin{document}
+%%% previo: {{header}}
+%%% final: \end{document}

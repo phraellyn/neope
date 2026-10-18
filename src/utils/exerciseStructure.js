@@ -1,3 +1,8 @@
+import { normalizeExercisePartIds } from '../../functions/exercisePartIdentity.js'
+import { criteriaCellText, normalizeCriteriaUnicode } from '../../functions/criteriaLatex.js'
+
+export { normalizeCriteriaUnicode }
+
 const PART_MARKER_PATTERN = /%\s*neope:part\s+id=([A-Za-z0-9_-]+)/i
 
 function text(value) {
@@ -309,10 +314,10 @@ export function parseExerciseLatex(value = '') {
   const final = partsEnvironment ? leading.working.slice(partsEnvironment.end).trim() : ''
   const main = parseSegment(mainSource)
   const descriptors = partsEnvironment ? partDescriptors(partsEnvironment.content) : []
-  const apartados = descriptors.map((descriptor, index) => {
+  const apartados = normalizeExercisePartIds(descriptors.map((descriptor, index) => {
     const end = descriptors[index + 1]?.start ?? partsEnvironment.content.length
     return parsePart(partsEnvironment.content.slice(descriptor.start, end), descriptor.id)
-  })
+  }))
   return {
     ...main,
     puntuacion: leading.puntuacion,
@@ -388,7 +393,7 @@ export function exerciseStructureFromDocument(document = {}) {
     tiempo: number(document.durationMinutes),
     apartadosEnv: document.partsEnvironment || null,
     partsEnvironment: document.partsEnvironment || null,
-    apartados: (Array.isArray(document.parts) ? document.parts : []).map((part) => {
+    apartados: normalizeExercisePartIds(Array.isArray(document.parts) ? document.parts : []).map((part) => {
       const partStatement = modernBlock(part.statement)
       const partAnswer = modernBlock(part.answer)
       const partSolution = modernBlock(part.workedSolution)
@@ -440,10 +445,10 @@ function mergePart(parsed, previous = {}, keepPreviousId = false) {
 export function mergeExerciseStructure(parsedValue = {}, previousValue = {}) {
   const parsed = parsedValue || parseExerciseLatex('')
   const previous = previousStructure(previousValue)
-  const previousParts = Array.isArray(previous.apartados) ? previous.apartados : []
+  const previousParts = normalizeExercisePartIds(Array.isArray(previous.apartados) ? previous.apartados : [])
   const byId = new Map(previousParts.filter((part) => part.id).map((part) => [part.id, part]))
   const allowPositionFallback = !parsed._hasPartMarkers
-  const apartados = (parsed.apartados || []).map((part, index) => {
+  const apartados = normalizeExercisePartIds(parsed.apartados || []).map((part, index) => {
     const matchedById = byId.get(part.id)
     const matchedByPosition = allowPositionFallback ? previousParts[index] : null
     const matched = matchedById || matchedByPosition || {}
@@ -467,7 +472,7 @@ export function mergeExerciseStructure(parsedValue = {}, previousValue = {}) {
 
 export function aggregateExerciseStructure(value = {}) {
   const structure = { ...value }
-  structure.apartados = Array.isArray(value.apartados) ? value.apartados.map((part) => ({ ...part })) : []
+  structure.apartados = normalizeExercisePartIds(Array.isArray(value.apartados) ? value.apartados : [])
   structure.gradingCriteria = normalizeExerciseGradingCriteria(value.gradingCriteria)
   structure.contenidosGenerales = unique(value.contenidosGenerales)
   structure.apartados.forEach((part) => {
@@ -499,56 +504,6 @@ function solutionEnvironment(solution) {
 
 function scoreCommand(command, value) {
   return number(value) > 0 ? `\\${command}{${numberText(value)}}` : ''
-}
-
-// Los criterios se escriben dentro del argumento de \criterios. Conservamos
-// las expresiones matemáticas y los comandos LaTeX que pueda haber redactado
-// el profesor, pero protegemos los caracteres que romperían una celda o el
-// argumento de la macro.
-export function normalizeCriteriaUnicode(value) {
-  const source = text(value).replace(/√\s*(\{[^{}]*\}|\([^()]*\)|[A-Za-z0-9](?:²|³)?)/g, (match, radicand) => {
-    const normalizedRadicand = radicand.replace(/²/g, '^{2}').replace(/³/g, '^{3}')
-    return `\\ensuremath{\\sqrt{${normalizedRadicand}}}`
-  })
-  return source.replace(/[ℝℤℚℕℂ∞→←↔≤≥≠∈∉±×·−≈²³]/g, (character) => ({
-    'ℝ': '\\ensuremath{\\mathbb{R}}',
-    'ℤ': '\\ensuremath{\\mathbb{Z}}',
-    'ℚ': '\\ensuremath{\\mathbb{Q}}',
-    'ℕ': '\\ensuremath{\\mathbb{N}}',
-    'ℂ': '\\ensuremath{\\mathbb{C}}',
-    '∞': '\\ensuremath{\\infty}',
-    '→': '\\ensuremath{\\to}',
-    '←': '\\ensuremath{\\leftarrow}',
-    '↔': '\\ensuremath{\\leftrightarrow}',
-    '≤': '\\ensuremath{\\leq}',
-    '≥': '\\ensuremath{\\geq}',
-    '≠': '\\ensuremath{\\ne}',
-    '∈': '\\ensuremath{\\in}',
-    '∉': '\\ensuremath{\\notin}',
-    '±': '\\ensuremath{\\pm}',
-    '×': '\\ensuremath{\\times}',
-    '·': '\\ensuremath{\\cdot}',
-    '−': '-',
-    '≈': '\\ensuremath{\\approx}',
-    '²': '\\ensuremath{^{2}}',
-    '³': '\\ensuremath{^{3}}',
-  })[character] || character)
-}
-
-function criteriaCellText(value) {
-  const source = normalizeCriteriaUnicode(value).trim().replace(/\r?\n/g, ' ')
-  let inMath = false
-  let result = ''
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index]
-    if (character === '$' && !escaped(source, index)) inMath = !inMath
-    if (!inMath && character === '&' && !escaped(source, index)) result += '\\&'
-    else if (!inMath && character === '%' && !escaped(source, index)) result += '\\%'
-    else if (!inMath && character === '#' && !escaped(source, index)) result += '\\#'
-    else if (!inMath && character === '_' && !escaped(source, index)) result += '\\_'
-    else result += character
-  }
-  return result
 }
 
 function criteriaPartLabel(index) {
@@ -675,7 +630,7 @@ export function exerciseDocumentStructure(value = {}, previousDocument = {}, rev
   const previous = Number(previousDocument.schemaVersion) >= 3
     ? previousDocument
     : { ...previousDocument, ...exerciseDocumentStructureFromLegacy(previousDocument) }
-  const previousParts = new Map((previous.parts || []).map((part) => [part.id, part]))
+  const previousParts = new Map(normalizeExercisePartIds(previous.parts || []).map((part) => [part.id, part]))
   const hasSolutions = Boolean(text(structure.solucion).trim() || structure.apartados.some((part) => text(part.solucion).trim()))
   return {
     schemaVersion: 4,

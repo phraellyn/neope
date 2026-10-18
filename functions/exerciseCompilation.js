@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
-import { normalizeDisplayMathDelimiters } from './solutionLayout.js'
+import { normalizeAlignedLineBreaks, normalizeDisplayMathDelimiters } from './solutionLayout.js'
+import { assertUniqueExercisePartIds } from './exercisePartIdentity.js'
+import { criteriaCellText } from './criteriaLatex.js'
 
 function numberText(value) {
   const number = Number(value) || 0
@@ -19,52 +21,6 @@ function answerBlock(value, index) {
 
 function metadataCommand(command, value) {
   return Number(value) > 0 ? `\\${command}{${numberText(value)}}` : ''
-}
-
-function criteriaCellText(value) {
-  const source = String(value || '').trim()
-    .replace(/√\s*(\{[^{}]*\}|\([^()]*\)|[A-Za-z0-9](?:²|³)?)/g, (match, radicand) => {
-      const normalizedRadicand = radicand.replace(/²/g, '^{2}').replace(/³/g, '^{3}')
-      return `\\ensuremath{\\sqrt{${normalizedRadicand}}}`
-    })
-    .replace(/[ℝℤℚℕℂ∞→←↔≤≥≠∈∉±×·−≈²³]/g, (character) => ({
-    'ℝ': '\\ensuremath{\\mathbb{R}}',
-    'ℤ': '\\ensuremath{\\mathbb{Z}}',
-    'ℚ': '\\ensuremath{\\mathbb{Q}}',
-    'ℕ': '\\ensuremath{\\mathbb{N}}',
-    'ℂ': '\\ensuremath{\\mathbb{C}}',
-    '∞': '\\ensuremath{\\infty}',
-    '→': '\\ensuremath{\\to}',
-    '←': '\\ensuremath{\\leftarrow}',
-    '↔': '\\ensuremath{\\leftrightarrow}',
-    '≤': '\\ensuremath{\\leq}',
-    '≥': '\\ensuremath{\\geq}',
-    '≠': '\\ensuremath{\\ne}',
-    '∈': '\\ensuremath{\\in}',
-    '∉': '\\ensuremath{\\notin}',
-    '±': '\\ensuremath{\\pm}',
-    '×': '\\ensuremath{\\times}',
-    '·': '\\ensuremath{\\cdot}',
-    '−': '-',
-    '≈': '\\ensuremath{\\approx}',
-    '²': '\\ensuremath{^{2}}',
-    '³': '\\ensuremath{^{3}}',
-  })[character] || character).replace(/\r?\n/g, ' ')
-  let inMath = false
-  let result = ''
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index]
-    let slashes = 0
-    for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) slashes += 1
-    const escaped = slashes % 2 === 1
-    if (character === '$' && !escaped) inMath = !inMath
-    if (!inMath && !escaped && character === '&') result += '\\&'
-    else if (!inMath && !escaped && character === '%') result += '\\%'
-    else if (!inMath && !escaped && character === '#') result += '\\#'
-    else if (!inMath && !escaped && character === '_') result += '\\_'
-    else result += character
-  }
-  return result
 }
 
 function criteriaPartLabel(index) {
@@ -196,12 +152,9 @@ function completeExerciseTemplate(code) {
 }
 
 export function codeForCompiler(code = '', profile = exerciseRenderProfiles.statement) {
-  const normalized = normalizeDisplayMathDelimiters(code)
+  const normalized = normalizeAlignedLineBreaks(normalizeDisplayMathDelimiters(code))
     .replace(/(\\ej\b(?:\s*\\(?:M|P)\s*\{[^{}]*\})?\s*)\\T\s*\{[^{}]*\}/g, '$1')
     .replace(/(\\ap\b(?:\s*\\p\s*\{[^{}]*\})?\s*)\\t\s*\{[^{}]*\}/g, '$1')
-    .replace(/\\begin\s*\{aligned\}([\s\S]*?)\\end\s*\{aligned\}/g, (match, body) => (
-      `\\begin{aligned}${body.replace(/\r?\n[ \t]*(?:\r?\n[ \t]*)+/g, '\n')}\\end{aligned}`
-    ))
   const body = profile === exerciseRenderProfiles.segment
     ? segmentTemplate(normalized)
     : completeExerciseTemplate(normalized)
@@ -231,6 +184,7 @@ export function sourceHash(code, context = '') {
 }
 
 export function compilationArtifacts(exercise, exerciseId, revision) {
+  assertUniqueExercisePartIds(exercise.parts || [])
   const root = `ejercicios/${exerciseId}/revisions/${revision}`
   const artifacts = []
   const add = (key, storagePath, code, current, profile) => artifacts.push({

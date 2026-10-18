@@ -1,0 +1,373 @@
+% neope:document {"version":2,"content":"exercises","assessment":true,"command":"logo","exerciseEnvironment":"ejercicios","render":{"includeSolutions":false,"includeAnswers":false}}
+% neope:field {"key":"level","label":"Nivel","formOnly":true,"type":"level","required":true}
+% neope:field {"key":"subject","label":"Asignatura","command":"logo","argument":1,"type":"subject","required":true}
+% neope:field {"key":"title","label":"Título","command":"logo","argument":2,"type":"text","required":true}
+% neope:field {"key":"date","label":"Fecha","command":"logo","argument":3,"type":"date","required":true}
+% neope:field {"key":"course","label":"Grupo","command":"logo","argument":4,"type":"group","required":true}
+
+% neope:tool {"id":"obligatorios","label":"Obligatorios","description":"Inicia una sección de ejercicios obligatorios","behavior":"required-section","code":"\\obligatorios"}
+% neope:tool {"id":"optativos","label":"Optatividad","description":"Inicia una sección de ejercicios optativos","behavior":"optional-section","code":"\\optativos{{{countWord}}}{{{availableWord}}}","arguments":[{"key":"count","label":"Ejercicios a elegir","type":"number","default":1,"min":1}]}
+% neope:tool {"id":"salto-pagina","label":"Salto de página","description":"Inserta un salto de página","behavior":"page-break","code":"\\salto"}
+% neope:document
+
+\documentclass[a4paper,11pt,fleqn,oneside]{book}
+\usepackage[spanish,activeacute,es-noquoting]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{graphicx,capt-of,fancyhdr,titlesec,multicol,amsfonts,amssymb}
+\usepackage{latexsym}
+\usepackage{tabularx,array,multirow,hhline}
+\usepackage{makeidx}
+\usepackage{pxfonts}
+\usepackage{asymptote}
+\usepackage{tikz}
+\usetikzlibrary{ calc, arrows,shapes,backgrounds}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.15}
+\usepackage{eurosym}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{mathpazo}
+\DeclareGraphicsRule{*}{eps}{*}{}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% MEDIDAS DE PAGINA %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\pagestyle{empty}
+
+\hoffset=-2.6cm %
+\voffset=-2.6cm %
+
+\oddsidemargin=1.5cm %
+\topmargin=1cm %
+\headheight=0cm %
+\headsep=0cm %
+
+\textwidth=17.5cm %
+\textheight=28cm %
+
+\mathindent=1.5cm %
+
+\DeclareMathOperator{\si}{si}
+\DeclareMathOperator{\cotan}{cotan}
+\DeclareMathOperator{\dist}{dist}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% COMANDOS OBLIGATORIOS %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\obligatorios}{
+  \item[] \textbf{Responde obligatoriamente a estos ejercicios}
+}
+
+\newcommand{\optativos}[2]{
+  \item[] \textbf{Elige #1 de los siguientes #2 ejercicios}
+}
+
+\newcommand{\salto}{
+  \newpage
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% DEFINICION DE COLORES %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\definecolor{gris}{gray}{0.6}
+\definecolor{blanco}{gray}{1}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% COMANDOS Y ENTORNOS  %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\punto}{\hfill\mbox{\emph{(1 punto)}}}
+\newcommand{\puntos}[1]{\hfill\emph{(#1 puntos)}}
+\newcommand{\Punto}{\hfill\mbox{\emph{\textbf{(1 punto)}}}}
+\newcommand{\Puntos}[1]{\hfill\emph{\textbf{(#1 puntos)}}}
+\newcommand{\puntosp}[1]{\par\vspace{-2mm}\hfill(#1 puntos)\vspace{-3mm}}
+\newcommand{\pbi}[1]{\hfill\emph{[#1]}}
+\newcommand{\Pbi}[1]{\hfill\textbf{\emph{[#1]}}}
+\newcommand{\esp}[1]{\vspace{#1}}
+\newcommand{\marca}{\hspace{-1cm}$\ast$\hspace{0.8cm}}
+
+\newcommand{\logo}[4]{
+    \hspace{-6mm}
+    \tikz{
+        \node at (1.4,1.6)  
+            {\includegraphics[width=2.8cm]{./logo.png}};
+        \draw(2.8,0.2) rectangle (7,1);
+        \draw(2.8,1) rectangle (15.8,1.8);
+        \draw (2.8,1.8) rectangle (10.5,2.4);
+        \draw (2.8,2.4) rectangle (10.5,3);
+        \draw (10.5,1.8) rectangle (15.8,2.4);
+        \draw (10.5,2.4) rectangle (15.8,3);
+        \draw (10.5,1.8) rectangle (12.2,2.4);
+        \draw (10.5,2.4) rectangle (12.2,3);
+        \draw[thick] (15.8,1) rectangle (18,3);
+        \draw[very thick] (0,0.2) rectangle (18,3);
+        \node at (6.75,2.7) {\textsf{DEPARTAMENTO DE MATEMATICAS}};
+        \node at (11.35,2.7) {\textsf{Curso:}};
+        \node at (11.35,2.1) {\textsf{Fecha:}};
+        \node at (16.9,2.75) {\textsf{\small Calificación}};
+        \node at (2.8,0.55) [right=2mm]
+            {\textsf{Nombre y apellidos:}};
+        \node at (6.75,2.1) {\textsf{#1}}; %% asignatura %%
+        \node at (9.4,1.4) {\textsf{\large{#2}}}; %% título %%
+        \node at (14,2.1) {\textsf{#3}}; %% fecha %%
+        \node at (14,2.7) {\textsf{#4}}; %% grupo %%
+    }
+    \vspace{-5mm}
+}
+ 
+\newcounter{ejercicio}
+\def\theejercicio{\textsf{\textcolor{gris}{\large\bfseries\arabic{ejercicio}.}}}
+
+\newenvironment{ejercicios}
+        {\begin{list}{\theejercicio}{}}
+        {\end{list}}
+
+\def\ej{\refstepcounter{ejercicio}\item}
+
+\newcounter{apartado}[ejercicio]
+\def\theapartado{\textsf{\textcolor{gris}{\normalsize\bfseries\alph{apartado}.}}}
+
+\def\app#1{\item[\textsf{\textcolor{gris}{\normalsize\bfseries{#1}.}}]}
+
+\newenvironment{apartados}
+        {\begin{list}{\theapartado}{}}
+        {\end{list}}
+
+\newenvironment{apartadosc}[1]
+        {\begin{multicols}{2}{#1}\begin{list}{\theapartado}{}}
+        {\end{list}\end{multicols}}
+
+\def\ap{\refstepcounter{apartado}\item}
+
+
+\def\lin{\par\rule{20cm}{0.1mm}}
+
+\newcommand{\sol}[1]{\hfill\textit{\textbf{Solución: }#1}}
+
+\newcommand{\answer}[1]{
+    \vspace{5mm}
+    \hspace{-11mm}
+    \fbox{\hspace{5mm}
+        \vbox{
+        \vspace{8mm}\\
+        \tikz{
+            \foreach \x in {0.25,0.5,...,17} {
+                \foreach \y in {1,2,...,#1} {
+                    \fill (\x,0.8*\y) circle (0.5pt);
+                }
+            }
+        }
+        \vspace{3mm}
+        }
+    }
+}
+
+% EL SIGUIENTE COMANDO ACTUA COMO SEPARADOR DE LA PARTE OBLIGATORIA DE LA OPTATIVA
+%
+% \begin{ejercicios}
+%   \ej Obligatorio 1
+%   \ej Obligatorio 2
+%   \optativos{2}
+%   \ej Optativo 1
+%   \ej Optativo 2
+%   \ej Optativo 3
+% \end{ejercicios}
+
+\newcommand{\logoB}[2]{
+ \vspace{-16mm}\hspace{-8mm}\tikz[scale=0.5,every node/.style={scale=0.6}]{
+    \fill[black!10] (2,1) arc (180:450:1) -- (3,1) -- cycle;
+    \draw (4,3) arc (0:270:1) arc (90:-180:1) arc (0:-270:1) arc (-90:-270:1) -- (1,4) -- (1,1) -- (3,1) -- (3,3) -- (4,3) -- cycle;
+    \node[color=black!50] at (0,2) [rotate=-90,below] {\large \textsf{DEPARTAMENTO}};
+    \node[color=black!60,scale=0.75] at (-0.7,0.10) [below right, end] {\huge \textsf{\bold{MATEMÁTICAS}}};
+    \node[color=black!50,scale=0.75] at (-0.2,0.38) [below right, end] { \bold{de}};
+    \node at (0.95,0.30) [scale=0.15] {\includegraphics{gatodepie}};
+    \node at (0.7,4.1) [scale=0.15] {\includegraphics{gatosentadoarriba}};
+    \node at (3,0.17) [scale=0.15] {\includegraphics{gatosentado}};
+    \node at (3,4.31) [scale=0.15] {\includegraphics{gatodepie}};
+    \draw[very thin,color=black!50, dashed] (1.1,0.65) -- (1.7,0.65);
+    \draw[very thin,color=black!50, dashed] (0.8,4.35) -- (1.7,4.35);
+    \draw[<->,>=latex,color=black!50,very thin] (1.5,0.65) -- (1.5,4.35) node [midway,sloped,fill=white,inner sep=1mm] {$7\,cm$};
+    \draw[very thin,color=black!50, dashed] (3,0.4) -- (3.8,0.4);
+    \draw[very thin,color=black!50, dashed] (3,4.65) -- (3.8,4.65);
+    \draw[<->,>=latex,color=black!50,very thin] (3.55,0.4) -- (3.55,4.65) node [midway,sloped,fill=white,inner sep=0.4mm] {$9\,cm$};
+    \draw[thick] (2,1) -- (3,1) node[midway,above] {$r=?$};
+    \node[color=black!50] at (0,2) [rotate=-90,below] {\large \textsf{DEPARTAMENTO}};
+    \node[color=black!60,scale=0.75] at (-0.7,0.10) [below right, end] {\huge \textsf{\bold{MATEMÁTICAS}}};
+    \node[color=black!50,scale=0.75] at (-0.2,0.38) [below right, end] { \bold{de}};
+    \draw[rounded corners, thick] (4.5,-0.7) rectangle (36,4);
+    \draw[rounded corners] (30,-0.3) rectangle (35.6,3.6);
+    \node at (30.9,3.2) [right] {CALIFICACIÓN};
+    \node at (4.8,3.2) [right,scale=1.2] {\Huge \textbf{\scshape Matemáticas II}};
+    \node at (4.8,2.05) [right,scale=1.3] {\textsf{\Large #1}};
+    \node at (4.8,1.2) [right,scale=1.2] {\textsf{\textit{\Large #2}}};
+    \node at (4.8,-0.2) [right,scale=1.2] {\textbf\textsf{\Large Nombre:\hspace{10cm}Grupo:\hspace{1.5cm}Nº:}};
+}\vspace{5mm}}
+
+\def\y{\hspace{3mm}\text{y}\hspace{3mm}}
+\def\para{\hspace{5mm}\text{para}\hspace{5mm}}
+\def\si{\text{si}}
+
+\newcommand{\answerbox}[1]{
+    \par
+    \vspace{3mm}
+    \hspace{-1cm}
+    \tikz{
+        \draw[step=0.4,thin,lightgray] (0,0) grid (16.8,#1*0.4);
+        \draw (0,0) rectangle (16.8,#1*0.4)
+    }
+    \par
+    \vspace{3mm}
+}
+\newcommand{\ejanswerbox}[1]{
+    \par
+    \vspace{3mm}
+    \hspace{-1cm}
+    \tikz{
+        \draw[step=0.4,thin,lightgray] (0,0) grid (18,#1*0.4);
+        \draw (0,0) rectangle (18,#1*0.4)
+    }
+    \par
+    \vspace{3mm}
+}
+
+\def\M#1{
+    \vspace{6mm}
+    {\small \sffamily\textbf{[Puntuación total: #1]}}
+}
+
+\def\p#1{
+    \if#11
+        \textsf{\small(1 punto)}
+    \else
+        \textsf{\small(#1 puntos)}
+    \fi
+}
+\def\P#1{\textbf{\p{#1}}}
+\def\info#1{
+    \par\vspace{-2mm}\hfill\textcolor{gray}{\tiny{\textsf{\uppercase{#1}}}}
+}
+
+\def\instrucciones#1{
+    \definecolor{grisClaro}{rgb}{0.9, 0.9, 0.9}
+    \hspace{-5.75mm}
+    \colorbox{grisClaro}{
+        \begin{minipage}[t]{17.6cm}
+            \vspace{1mm}
+            \sffamily{
+                \textbf{Instrucciones}
+                #1
+            }\vspace{0mm}
+        \end{minipage}
+    }
+}
+
+\def\Vec#1{\overrightarrow{#1}}
+
+\def\normal{
+    \vspace*{-2.35cm}
+    \hspace{-3.15cm}
+    \includegraphics[width=22.5cm]{./normal}
+}
+
+\newenvironment{matrizp}{\left(\begin{smallmatrix}}{\end{smallmatrix}\right)}
+\newenvironment{detp}{\left|\begin{smallmatrix}}{\end{smallmatrix}\right|}
+\newenvironment{sistemap}{\left\{\begin{smallmatrix}}{\end{smallmatrix}\right.}
+
+\def\Vec#1{\overrightarrow{#1}}
+
+% COMANDOS TIKZ
+
+\def\punto#1#2#3#4{
+  \coordinate (#1) at (#2);
+  \draw[fill] (#1) circle (0.05);
+  \node at (#1) [#4] {#3}
+} 
+
+\def\p#1{
+    \if#11
+        \textsf{\small(1 punto)}
+    \else
+        \textsf{\small(#1 puntos)}
+    \fi
+}
+\def\P#1{\textbf{\p{#1}}}
+\def\info#1{ }
+
+\def\c#1#2{\left(\begin{smallmatrix}#1\\#2\end{smallmatrix}\right)}
+
+\def\completar#1{
+    \vspace{#1}
+    \phantom{.}
+}
+
+\newcommand{\miniplot}[6]{
+    \tikz[scale=#1]{
+        \begin{axis}[
+            domain=#2:#3,
+            samples=25,
+            axis lines=middle,
+            xmin=#2, xmax=#3,
+            ymin=#4, ymax=#5,
+        ]
+            \addplot[thick, black, name path=curve] {#6};
+        \end{axis}
+    }
+}
+
+\definecolor{solcolor}{RGB}{113, 109, 130}
+
+\newcommand{\beq}[1]{
+    \ensuremath{\underset{\sffamily{\text{\textbf{\tiny #1}}}}{=}}
+}
+
+\newcommand{\aeq}[1]{
+    \ensuremath{\overset{\sffamily{\text{\textbf{\tiny #1}}}}{=}}
+}
+
+\newcommand{\lheq}{
+    \ensuremath{\underset{\sffamily{\text{\textbf{\tiny L'H}}}}{=}}
+}
+
+\newcommand{\ccu}[2]{
+  \begin{tikzpicture}[baseline=(termino.base)]
+    \node[inner sep=0pt] (termino) {\ensuremath{#2}};
+    \pgfresetboundingbox
+    \useasboundingbox (termino.south east) rectangle (termino.north west);
+    \coordinate (A) at ([shift={(1pt,-1pt)}]termino.south east);
+    \coordinate (B) at ([shift={(-2pt,2pt)}]termino.north west);
+    \draw[-{Stealth}, opacity=0.8] (A) -- (B);
+    \node[anchor=center, font=\tiny, scale=0.8] 
+      at ($(A)!1.2!(B)$) {\ensuremath{#1}};
+  \end{tikzpicture}
+}
+
+\newcommand{\ccd}[2]{
+  \begin{tikzpicture}[baseline=(termino.base)]
+    \node[inner sep=0pt] (termino) {\ensuremath{#2}};
+    \pgfresetboundingbox
+    \useasboundingbox (termino.north west) rectangle (termino.south east);
+    \coordinate (A) at ([shift={(-1pt,1pt)}]termino.north west);
+    \coordinate (B) at ([shift={(2pt,-2pt)}]termino.south east);
+    \draw[-{Stealth}, opacity=0.8] (A) -- (B);
+    \node[anchor=center, font=\tiny, scale=0.8] 
+      at ($(A)!1.2!(B)$) {\ensuremath{#1}};
+  \end{tikzpicture}
+}
+
+\newcommand{\fcomment}[1]{
+  \makebox[0pt][l]{
+    \scalebox{0.6}{
+      \ensuremath{#1}
+    }%
+  }%
+}
+
+\def\si{\text{si}}
+
+%%% previo: \begin{document}
+%%% previo: {{header}}
+%%% final: \end{document}

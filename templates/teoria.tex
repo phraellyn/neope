@@ -1,0 +1,681 @@
+% neope:document {"version":2,"content":"code","assessment":false,"command":"","exerciseEnvironment":"ejercicios","render":{"includeSolutions":false,"includeAnswers":false}}
+% neope:field {"key":"level","label":"Nivel","formOnly":true,"type":"level","required":true}
+% neope:field {"key":"subject","formOnly":true,"label":"Asignatura","type":"subject","required":true}
+% neope:field {"key":"title","formOnly":true,"label":"Título","type":"text","required":true}
+
+%% TIPO DE DOCUMENTO
+
+\documentclass[fleqn]{book}
+
+%% PAQUETES
+
+\usepackage[spanish,activeacute,es-noquoting]{babel}
+\usepackage{hyperref}
+\hypersetup{
+    pdfborder={0 0 0},
+    colorlinks=false,
+    allcolors=black
+}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsfonts}
+\usepackage[fleqn]{amsmath}
+\usepackage{multicol}
+\usepackage{graphicx}
+\usepackage{pxfonts}
+\usepackage{asymptote}
+\usepackage{calc}
+\usepackage{color}
+\usepackage{tabularx}
+\usepackage{tikz}
+\usepackage{colortbl}
+\usepackage{verbatim}
+\usepackage{slashed}
+\usepackage{centernot}
+\usepackage{capt-of}
+\usepackage{nicematrix}
+%\usepackage{everypage}
+
+\usepackage{pgfplots}
+\usetikzlibrary{3d,positioning,arrows,shapes}
+\usepackage{multirow,array}
+\usepackage{apacite}
+\usepackage{fontawesome5}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{fillbetween}
+
+
+\usepackage{mathrsfs}
+%\usepackage{hyperref}
+\usepackage[paperwidth=11cm,centering]{geometry}
+\usepackage[active,tightpage,psfixbb]{preview}
+%\usepackage[3D]{movie15}
+
+%% FUNCIONES
+\DeclareMathOperator{\dom}{dom}
+%% MEDIDAS DE PÁGINA
+
+
+\hoffset=-1in
+\voffset=-1in
+\oddsidemargin=0.5cm
+\marginparsep=0mm
+\marginparwidth=0cm
+\evensidemargin=0.5cm
+\headheight=0cm
+\headsep=0cm
+\topmargin=0.5cm
+\textwidth=10cm
+\PreviewBorder=0.5cm
+
+
+%% ESTILO DE PÁGINA
+
+
+\pagestyle{empty}
+\setlength\mathindent{1cm}
+\parindent=0pt
+
+
+%% PALETA DE COLORES
+
+
+\definecolor{teoria}{cmyk}{0.98,0.5,0,0.35}
+\definecolor{tecuacion}{cmyk}{0.98,0.5,0,0.5}
+\definecolor{tadorno}{cmyk}{0.60,0.17,0,0.05}
+\definecolor{tfondo}{cmyk}{0.30,0.08,0,0.02}
+\definecolor{ejercicio}{cmyk}{0.98,0,0.72,0.61}
+\definecolor{eadorno}{cmyk}{0.36,0,0.49,0}
+\definecolor{efondo}{cmyk}{0.12,0,0.18,0}
+
+
+\def\te#1{\textcolor{teoria}{#1}}
+\def\ta#1{\textcolor{tadorno}{#1}}
+\def\tf#1{\textcolor{tfondo}{#1}}
+\def\ex#1{\textcolor{ejercicio}{#1}}
+\def\ea#1{\textcolor{eadorno}{#1}}
+\def\ef#1{\colorbox{efondo}{#1}}
+
+
+
+
+%% CONTADORES
+
+
+\newcounter{pej}
+\newcounter{tema}
+\newcounter{punto}
+\newcounter{ejercicio}[punto]
+\newcounter{teorema}[punto]
+\newcounter{apartado}[ejercicio]
+
+
+\def\thetema{\arabic{tema}}
+\def\thepunto{\arabic{punto}.}
+\def\theejercicio{\arabic{ejercicio}.}
+\def\theapartado{\theejercicio\alph{apartado}.}
+\def\theteorema{\arabic{teorema}}
+
+
+%% LONGITUDES
+
+
+\newdimen\linea
+
+
+%% OPERADORES MATEMÁTICOS
+
+
+\DeclareMathOperator{\rango}{rango}
+\DeclareMathOperator{\resto}{resto}
+
+
+%% COMANDOS Y ENTORNOS
+
+
+\def\pagina{\end{preview}\begin{preview}}
+
+
+\def\ecuacion#1#2{\par\vspace{2mm}\fcolorbox{tadorno}{white}{\hspace{0.8cm}
+	\hbox to 11.9cm{\textcolor{tecuacion}{#1\hfill \textit{#2}}}}\vspace{2mm}\par}
+	
+\def\cecuacion#1#2{\par\vspace{2mm}\fcolorbox{tadorno}{white}{\hspace{0.8cm}
+	\hbox to 11cm{\textcolor{tecuacion}{#1\hfill \textit{#2}}}}\vspace{2mm}\par}
+		
+\def\ecuaciond#1#2{
+	\par
+	\vspace{2mm}
+	\fcolorbox{tadorno}{white}{
+		\hbox{
+			\vbox{
+				\hbox{\hspace{0.7cm}\textcolor{tecuacion}{#1}}\par
+				\hbox to 12.43cm{\hfill\textcolor{tecuacion}{\textit{#2}}}
+			}
+		}
+	}
+	\vspace{2mm}
+	\par
+}
+
+
+\long\def\importante#1{\par\vspace{2mm}\fcolorbox{teoria}{tfondo}
+	{\parbox{\textwidth-1cm}{\textbf{\textit{\textcolor{teoria}{#1}}}}}\par\vspace{2mm}}
+
+
+
+
+\long\def\recuerda#1{\settowidth{\linea}{\textbf{\textsf{}} }
+                     \textcolor{teoria}{\textbf{\textsf{}} }
+                     \parbox[t]{\textwidth-\linea}{\textbf{\textit{#1}}}
+                     \par
+}
+
+
+\def\Vec#1{\overrightarrow{#1}}
+\def\m#1{|\vec{#1}\,|}
+\def\M#1{|\overrightarrow{#1}|}
+
+
+\makeatletter 
+
+
+% ENTORNO SMALLMATRIX PARA TABLAS COLOREADAS
+\newenvironment{mysmallmatrix}{%
+    \let\saved@CT@row@color\CT@row@color
+    \begin{smallmatrix}%
+}{%
+    \end{smallmatrix}%
+    \global\let\CT@row@color\saved@CT@row@color
+}
+\makeatother
+ 
+\long\def\ttabla#1{\te{\textbf{\textsf{\large #1}}}}
+
+
+\def\tcelda#1{\te{\textbf{\textsf{#1}}}}
+
+
+\newcommand{\tema}[1]{
+	\addtocounter{tema}{1}
+	\setcounter{punto}{0}
+}
+
+
+\def\Punto#1{
+	\tikz\node [rounded corners=2pt,fill=teoria,inner sep=5pt,text=tfondo,minimum width=10cm] {\textsf{\Large \textbf{#1}}};
+}
+
+
+\newcommand{\punto}[1]{
+	\newpage
+	\addtocounter{punto}{1}
+	\setcounter{ejercicio}{0}
+	\setcounter{teorema}{0}
+	\fcolorbox{tadorno}{white}{
+		\parbox{\textwidth}{
+			\raisebox{1mm}{
+				\colorbox{teoria}{
+					\textcolor{white}{
+						\textbf{\textsf{\large Punto \arabic{punto}:}}
+					}
+				}
+			}
+			\settowidth{\linea}{\textbf{\textsf{\large Concepto \arabic{punto}:}}}
+			\parbox[t]{\textwidth-\linea-8mm}{
+				\huge
+				\te{\textsf{#1}}
+			}
+		}
+	}
+	\par\vspace{5mm}
+}
+
+
+\def\titej#1{
+	\addtocounter{pej}{1}
+	\vspace{3mm}
+	\par
+	\item[]
+	\begin{tikzpicture}[node distance=1pt,text height=1.5ex,text depth=.25ex]
+		\node (numero) [rectangle,
+						draw=ejercicio,
+						fill=ejercicio,
+						inner sep=2pt,
+						rounded corners=2pt] 
+			{\textcolor{white}{\textbf{\textsf{P\arabic{pej}.}}}};
+		\node (titulo) [rectangle,
+						draw=ejercicio,
+						right=of numero,
+						inner sep=2pt,
+						rounded corners=2pt] 
+			{\hbox to 6.5cm{\textcolor{ejercicio}{\textbf{\textsf{#1}}}\hfill}};
+	\end{tikzpicture}
+	\par
+}
+
+
+\newenvironment{definicion}[1]%
+	{\par
+	 \vspace{3mm}
+	 \large
+	 \ta{\rule{3mm}{3mm}}
+	 \te{\textbf{\textsf{#1}}}
+	 \settowidth{\linea}{\ \rule{3mm}{3mm}\textbf{\textsf{#1}}\ }
+	 \ta{\rule{\columnwidth-\linea}{2mm}}\par
+	 \normalsize
+	 \vspace{2mm}}
+	{\hfill
+	 \ta{\rule{2mm}{2mm}}\ \textcolor{tadorno}{\rule{2mm}{2mm}}
+	 \vspace{2mm}
+	 \par}
+
+\newenvironment{rdefinicion}[2]%
+{\par
+	 \vspace{3mm}
+	 \large
+	 \ta{\rule{3mm}{3mm}}
+	 \te{\textbf{\textsf{#1}}}
+	 \settowidth{\linea}{\ \rule{3mm}{3mm}\textbf{\textsf{#1}}\ }
+	 \ta{\rule{\columnwidth-\linea}{2mm}}\normalsize\hbox to 8cm{%
+        \smash{%
+            \begin{minipage}[t][][]{8cm}
+                #2
+            \end{minipage}
+        }
+     }
+     \par
+	 \vspace{2mm}
+}
+{\hfill
+	 \ta{\rule{2mm}{2mm}}\ \textcolor{tadorno}{\rule{2mm}{2mm}}
+	 \vspace{2mm}
+	 \par}
+
+\newenvironment{rejemplo}[2]
+	{\addtocounter{ejercicio}{1}
+	 \setcounter{apartado}{0}
+	 \par
+	 \vspace{3mm}
+	 \large
+	 \ea{\rule{3mm}{3mm}}
+	 \ex{\textbf{\textsf{Ejercicio Resuelto \theejercicio}}}
+	 \settowidth{\linea}{\ \rule{3mm}{3mm}\textbf{\textsf{Ejercicio Resuelto \theejercicio}}\ }
+	 \ea{\rule{\columnwidth-\linea}{2mm}}\normalsize\par\hbox to 8cm{%
+        \hspace{3mm}\smash{%
+            \begin{minipage}[t][][]{9cm}
+                #2
+            \end{minipage}
+        }
+     }
+     
+  \par	  
+	 \vspace{-0.0mm}
+	 \ef{\parbox{\hsize-2mm}{#1}}
+	 \par
+	 \vspace{2mm}}
+	{\hfill
+	 \ea{\rule{2mm}{2mm}}\ \ea{\rule{2mm}{2mm}}
+	 \vspace{2mm}
+	 \par}
+
+\newenvironment{ejemplo}[1]
+	{\addtocounter{ejercicio}{1}
+	 \setcounter{apartado}{0}
+	 \par
+	 \vspace{3mm}
+	 \large
+	 \ea{\rule{3mm}{3mm}}
+	 \ex{\textbf{\textsf{Ejercicio Resuelto \theejercicio}}}
+	 \settowidth{\linea}{\ \rule{3mm}{3mm}\textbf{\textsf{Ejercicio Resuelto \theejercicio}}\ }
+	 \ea{\rule{\columnwidth-\linea}{2mm}}
+	 \normalsize\par	  
+	 \vspace{-0.0mm}
+	 \ef{\parbox{\hsize-2mm}{#1}}
+	 \par
+	 \vspace{2mm}}
+	{\hfill
+	 \ea{\rule{2mm}{2mm}}\ \ea{\rule{2mm}{2mm}}
+	 \vspace{2mm}
+	 \par}
+	 
+\def\teorema#1#2{
+	\addtocounter{teorema}{1}
+	\par
+	\vspace{3mm}
+	\ta{\rule{3mm}{3mm}}
+	\te{\textbf{\textsf{TEOREMA \theteorema#1\hfil}}}
+	\settowidth{\linea}{\ \rule{3mm}{3mm}\textbf{\textsf{TEOREMA \theteorema#1\hfil}}\ }
+	\ta{\rule{\columnwidth-\linea}{2mm}}
+	\normalsize\par
+	\vspace{0.5mm}\colorbox{tfondo}{\parbox{\hsize-2mm}{#2}}
+}
+
+
+
+
+\newenvironment{ejercicios}
+	{\setlength{\linewidth}{17cm}
+	 \par\vspace{3mm}
+	 \large\textbf{\ex{\textsf{Ejercicios}}}\normalsize\par
+	 \ea{\rule[3mm]{\linewidth}{1mm}}
+	 \vspace{-10mm}
+	 \begin{multicols}{2}
+	 \begin{list}{\ex{\textsf{\textbf{\theejercicio}}}}{} }
+	{\end{list}
+	 \vspace{5mm}\hspace{1cm}\raisebox{1.5mm}{\ex{\textbf{\textsf{Soluciones}}}}\par\vspace{-7mm}{\flushleft\soluciones\par}
+	 \gdef\soluciones{\small}
+	 \end{multicols}
+	 \ea{\hspace{0cm}\rule[10mm]{17cm}{1mm}}}
+
+
+\newenvironment{apartados}
+	{\begin{list}{\ex{\textbf{\textsf{\alph{apartado}.}}}}{} }
+	{\end{list} }
+
+
+\newenvironment{apartadosc}
+	{\begin{multicols}{2}
+	 \begin{list}{\ex{\textbf{\textsf{\alph{apartado}.}}}}{} }
+	{\end{list}
+	 \end{multicols} }
+
+
+\newenvironment{apartadoscc}
+	{\begin{multicols}{3}
+	 \begin{list}{\ex{\textbf{\textsf{\alph{apartado}.}}}}{} }
+	{\end{list}
+	 \end{multicols} }
+	 
+\newenvironment{apartadosccc}
+	{\begin{multicols}{4}
+	 \begin{list}{\ex{\textbf{\textsf{\alph{apartado}.}}}}{} }
+	{\end{list}
+	 \end{multicols} }
+		 
+\def\ej{\refstepcounter{ejercicio}\item}
+	 
+\def\ap{\refstepcounter{apartado}\item}
+    
+\def\pr#1{\ex{\textbf{\textsf{#1}}}}
+
+
+
+\def\soluciones{\small}
+
+
+\makeatletter
+\def\sol#1{%
+  \begingroup
+  \ifnum\value{apartado}<2
+  	\ifnum\value{apartado}=0
+    	\edef\@tempa{\noexpand\bfseries%
+    				 \noexpand\sffamily%
+    				 \noexpand\color{ejercicio}%
+    				 \theejercicio%
+    				 \noexpand\color{black}%
+    				 \noexpand\rmfamily%
+    				 \noexpand\mdseries}%
+    	\g@addto@macro\soluciones{\par\leftskip=1cm\noindent\ea{\rule[1mm]{3cm}{0.5mm}}}
+    	\g@addto@macro\soluciones{\par\leftskip=1cm\noindent}
+    	\expandafter\g@addto@macro%
+    	\expandafter\soluciones%
+    	\expandafter{%
+    	\expandafter\hbox%
+    	\expandafter{%
+    	\@tempa\ #1}}%
+    	\g@addto@macro\soluciones{\par}
+    \else
+    	\edef\@tempa{\noexpand\bfseries%
+    				 \noexpand\sffamily%
+    				 \noexpand\color{ejercicio}%
+    				 \theapartado%
+    				 \noexpand\color{black}%
+    				 \noexpand\rmfamily%
+    				 \noexpand\mdseries}%
+    	\g@addto@macro\soluciones{\par\leftskip=1cm\noindent\ea{\rule[1mm]{3cm}{0.5mm}}}
+    	\g@addto@macro\soluciones{\par\leftskip=1cm\noindent}
+    	\expandafter\g@addto@macro%
+    	\expandafter\soluciones%
+    	\expandafter{%
+    	\expandafter\hbox%
+    	\expandafter{%
+    	\@tempa\ #1}}% 
+    	\g@addto@macro\soluciones{\phantom{mm} }   
+  \fi
+  \else
+    \edef\@tempa{\noexpand\bfseries%
+    			 \noexpand\sffamily%
+    			 \noexpand\color{ejercicio}%
+    			 \theapartado%
+    			 \noexpand\color{black}%
+    			 \noexpand\rmfamily%
+    			 \noexpand\mdseries}%
+    \expandafter\g@addto@macro%
+    \expandafter\soluciones%
+    \expandafter{%
+    \expandafter\hbox%
+    \expandafter{%
+    \@tempa\ #1}}%
+    \g@addto@macro\soluciones{\phantom{mm} }
+  \fi
+  \endgroup
+}
+\makeatother
+
+
+\def\margen#1{\ifodd\value{page}
+					\marginpar{\flushleft\small #1 \rule{1mm}{1mm}}
+			  \else
+			  		\reversemarginpar
+			  		\marginpar{\flushleft\small #1 \rule{1mm}{1mm}}
+			  \fi
+}
+
+
+\def\fmargen#1#2{\ifodd\value{page}
+					\marginpar{\includegraphics[width=3.5cm]{#2}
+					\par\small \rule{2mm}{2mm} #1}
+			  \else
+			  		\reversemarginpar
+					\marginpar{\includegraphics[width=3.5cm]{#2}
+					\par\small \rule{2mm}{2mm} #1}
+			  \fi
+}
+
+
+\def\amargen#1#2{\ifodd\value{page}
+					\marginpar{#2
+					\par\small \rule{2mm}{2mm} #1}
+			  \else
+			  		\reversemarginpar
+					\marginpar{\includegraphics[width=3.5cm]{#2}
+					\par\small \rule{2mm}{2mm} #1}
+			  \fi
+}
+
+
+\def\metodo#1{\textcolor{ejercicio}{\textsf{\textbf{#1}}}}
+
+\def\ueq#1{
+    \underset{\substack{#1}}{=}
+}
+
+\def\oeq#1{
+    \overset{\substack{#1}}{=}
+}
+
+\def\uoeq#1#2{
+    \underset{\substack{#1}}{
+        \overset{\substack{#2}}{=}
+    }
+}
+
+
+% COMANDOS TIKZ
+
+
+\def\etiqt#1#2{\overset{\hfill\tikz\node[circle,fill=ejercicio,text=white,inner sep=0.2mm]
+	{\textsf{\textbf{\tiny #1}}};\hfill}{#2}}
+
+
+
+
+\def\etiq#1{\tikz\node[circle,fill=ejercicio,text=white,inner sep=0.2mm]{\textsf{\textbf{\tiny #1}}};}
+
+
+\def\Etiq#1{\tikz[baseline=(n.base)]\node[circle,fill=ejercicio,text=white,inner sep=0.2mm] (n) {\textsf{\textbf{#1}}};}
+
+
+\def\itemP#1#2{\vspace{2mm}\Etiq{#1} \parbox[t]{9.5cm}{#2}}
+
+
+\def\nr#1{\tikz[baseline=(n.base)]
+	\node[rounded corners=1pt,rectangle,fill=eadorno,draw=ejercicio,inner sep=1pt,minimum width=13pt] (n)	
+	{$\begin{smallmatrix}#1\end{smallmatrix}$};}
+	
+\def\nrv#1{\tikz[baseline=(n.base)]
+	\node[rounded corners=1pt,rectangle,draw=ejercicio,inner sep=1pt,minimum width=13pt] (n)
+	{$\begin{smallmatrix}#1\end{smallmatrix}$};}
+	
+\def\mi#1{\tikz[remember picture,overlay]\node[circle,minimum size=0pt,fill=red,inner sep=0pt] (#1) {};}
+
+
+\def\mf#1#2#3#4{
+		\tikz[remember picture,overlay]\node[circle,minimum size=0pt,fill=red,inner sep=0pt] (#2) {};
+		\tikz[remember picture,overlay]
+		\draw[draw=ejercicio,rounded corners=2pt] (#1)+(-#3,2.1mm) rectangle  (#4,-0.3mm)+(#2);}
+
+
+	  
+%%%%
+
+
+\def\Nr#1{\tikz[baseline=(n.base)]
+	\node[rounded corners=1pt,rectangle,fill=eadorno,draw=ejercicio,inner sep=1pt,minimum width=13pt] (n)	
+	{$#1$};}
+	
+\def\Nrv#1{\tikz[baseline=(n.base)]
+	\node[rounded corners=1pt,rectangle,draw=ejercicio,inner sep=1pt,minimum width=13pt] (n)
+	{$#1$};}
+	
+\def\Mi#1{\tikz[remember picture,overlay,baseline=(#1.base)]
+	\node[rectangle,draw=white,inner sep=0.5pt] (#1) {\phantom{I}};}
+
+
+\def\Mf#1#2{\tikz[remember picture,overlay,baseline=(#2.base)]
+	\node[rectangle,draw=white,inner sep=0.5pt] (#2) {\phantom{I}};
+	 \tikz[remember picture,overlay]
+	 \node[draw=ejercicio,very thick,rectangle,rounded corners,fit=(#1) (#2),inner sep=1.5pt] {};}
+	 
+\long\def\rsol#1{\hfill Solución: \tikz[baseline=(S.base)] \node[rectangle,rounded corners=2pt,fill=efondo,draw=ejercicio] (S) {#1};\vspace{3mm}}
+	
+\def\miniejemplo#1#2{\hfill\parbox{#1}{\ex{#2}}}
+
+
+\def\mparametrica#1#2#3{
+	\left\{
+	\begin{smallmatrix}
+		x=#1\hfill\\
+		y=#2\hfill\\
+		z=#3\hfill
+	\end{smallmatrix}\right.}
+
+
+\def\parametrica#1#2#3{
+	\left\{
+	\begin{array}{lcl}
+		x&=&#1\\
+		y&=&#2\\
+		z&=&#3
+	\end{array}\right.}
+
+
+\def\dosplanos#1#2{\left\{\begin{array}{l}#1\\#2\end{array}\right.}
+
+
+\def\mdosplanos#1#2{\left\{\begin{smallmatrix}
+	#1\hfill\\#2\hfill\end{smallmatrix}\right.}
+
+
+\def\canonica#1#2#3{\frac{x}{#1}+\frac{y}{#2}+\frac{z}{#3}=1}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% COMANDOS GRÁFICOS													%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+% ESTILOS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\tikzset{trazo teoria/.style={color=teoria!50,thick}}
+
+
+\tikzset{cuadricula fina/.style={color=black!30,very thin}}
+\tikzset{cuadricula normal/.style={color=black!30}}
+\tikzset{cuadricula gruesa/.style={color=black!30,thick}}
+
+
+\def\cuadricula#1{
+		\draw[step=0.25cm,cuadricula fina]  (0,0) grid (9cm,#1);
+		\draw[step=0.5cm,cuadricula normal] (0,0) grid (9cm,#1);
+		\draw[step=1cm,cuadricula gruesa]   (0,0) grid (9cm,#1);
+}
+
+
+
+
+\def\aclarat#1{\textcolor{teoria}{\small #1}}
+
+
+\def\nt#1#2{
+	\tikz[remember picture]{
+		\node[rounded corners=3pt,draw=teoria!50,fill=teoria!20,thick] 
+			(#1) 
+			{\textcolor{black}{\small #2}};
+		}
+}
+
+% Comandos matemáticos
+\newenvironment{smatrix}{\left(\begin{smallmatrix}}{\end{smallmatrix}\right)}
+
+\newenvironment{sdet}{\left|\begin{smallmatrix}}{\end{smallmatrix}\right|}
+
+\newcommand{\figurelink}[3]{
+    \par\bigskip\noindent
+    \begin{minipage}{\linewidth}
+        \centering
+        \href{https://sandbox.babylonjs.com/?assetUrl=https://raw.githubusercontent.com/phraellyn/geometria-descriptiva/main/#2}{
+            \includegraphics[width=0.8\textwidth]{#1}
+        }
+        \vspace{-2mm}\captionof{figure}{#3}
+    \end{minipage}
+    \bigskip\par
+}
+
+\newcommand{\figuretikz}[2]{
+    \par\bigskip\noindent
+    \begin{minipage}{\linewidth}
+        \centering #1
+        \par\vspace{-2mm}\par
+        \centering\captionof{figure}{#2}
+    \end{minipage}
+    \bigskip\par
+}
+
+\def\L#1{\lim_{x\to#1}}
+\def\LH#1{
+    \underset{\text{\tiny\sffamily{L'H}}}{=}\lim_{x\to#1}
+}
+\def\iCdC{\left[\frac00\right]}
+\def\iIdI{\left[\frac{\infty}{\infty}\right]}
+\def\iImI{\left[\inty-\infty\right]}
+\def\iCpI{\left[0\cdot\inty\right]}
+\def\iCeC{\left[0^0\right]}
+\def\iUeI{\left[1^{\infty}\right]}
+\def\iIeC{\left[\infty^0\right]}
+
+%%% previo: \begin{document}\begin{preview}
+%%% previo: \noindent\textbf{ {{title}} }\par
+%%% previo: \noindent{{level}} · {{subject}}\par\medskip
+%%% final: \end{preview}\end{document}

@@ -1,0 +1,337 @@
+% neope:document {"version":2,"content":"exercises","assessment":true,"command":"logo","exerciseEnvironment":"ejercicios","render":{"includeSolutions":true,"includeAnswers":true}}
+% neope:field {"key":"level","label":"Nivel","formOnly":true,"type":"level","required":true}
+% neope:field {"key":"subject","label":"Asignatura","command":"logo","argument":1,"type":"subject","required":true}
+% neope:field {"key":"course","label":"Grupo","command":"logo","argument":4,"type":"group","required":true}
+% neope:field {"key":"title","label":"Título","command":"logo","argument":2,"type":"text","required":true}
+% neope:field {"key":"date","label":"Fecha","command":"logo","argument":3,"type":"date","required":true}
+
+% neope:tool {"id":"obligatorios","label":"Obligatorios","description":"Inicia una sección de ejercicios obligatorios","behavior":"required-section","code":"\\obligatorios"}
+% neope:tool {"id":"optativos","label":"Optatividad","description":"Inicia una sección de ejercicios optativos","behavior":"optional-section","code":"\\optativos{{{countWord}}}{{{availableWord}}}","arguments":[{"key":"count","label":"Ejercicios a elegir","type":"number","default":1,"min":1}]}
+% neope:tool {"id":"salto-pagina","label":"Salto de página","description":"Inserta un salto de página","behavior":"page-break","code":"\\salto"}
+% neope:document
+
+\documentclass[a4paper,9pt,fleqn]{article}
+\usepackage[spanish,activeacute,es-noquoting]{babel}
+\usepackage[utf8]{inputenc}
+%\usepackage[dvipdfm]{color}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{graphicx,capt-of,fancyhdr,titlesec,multicol,amsfonts,amssymb}
+\usepackage{latexsym}
+\usepackage{tabularx,array,multirow,hhline}
+\usepackage{makeidx}
+\usepackage{pxfonts}
+\usepackage{asymptote}
+\usepackage{tikz}
+\usetikzlibrary{calc,arrows,shapes,backgrounds,3d,fit}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\usepgfplotslibrary{fillbetween}
+\usepackage{eurosym}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{mathpazo}
+\usepackage{cancel}
+\usepackage{nicematrix}
+%\usepackage{mathtools}
+\DeclareGraphicsRule{*}{eps}{*}{}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% COMANDOS OBLIGATORIOS %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\obligatorios}{
+  \item[] \textbf{Parte obligatoria}
+}
+
+\newcommand{\optativos}[2]{
+  \item[] \textbf{Parte optativa}
+}
+
+\newcommand{\salto}{
+  \end{ejercicios}
+  \newpage
+  \begin{ejercicios}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% MEDIDAS DE PAGINA %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\pagestyle{empty}
+
+\hoffset=-2.6cm %
+\voffset=-2.6cm %
+
+\oddsidemargin=0.8cm %
+\topmargin=1cm %
+\headheight=0cm %
+\headsep=0cm %
+
+\textwidth=19cm %
+\textheight=27.2cm %
+
+\mathindent=0cm %
+
+\DeclareMathOperator{\si}{si}
+\DeclareMathOperator{\sii}{sii}
+\DeclareMathOperator{\cotan}{cotan}
+\DeclareMathOperator{\mcm}{mcm}
+\DeclareMathOperator{\mcd}{mcd}
+\DeclareMathOperator{\rg}{rg}
+\DeclareMathOperator{\dist}{dist}
+\DeclareMathOperator{\dom}{dom}
+\DeclareMathOperator{\Det}{det}
+\DeclareMathOperator{\rango}{rango}
+\DeclareMathOperator{\Proy}{proy}
+\DeclareMathOperator{\arccotan}{arc\,cotan}
+
+\def\d#1{\dom(#1)}
+\def\D#1{\dom\left(#1\right)}
+\def\R{\mathbb{R}}
+
+\newenvironment{smatrix2}
+    {
+        \left(
+        \begin{array}{cc|c}
+    }
+    {
+        \end{array}
+        \right)
+    }
+    
+\newenvironment{smatrix3}
+    {
+        \left(
+        \begin{array}{ccc|c}
+    }
+    {
+        \end{array}
+        \right)
+    }
+
+\newenvironment{smatrix4}
+    {
+        \left(
+        \begin{array}{cccc|c}
+    }
+    {
+        \end{array}
+        \right)
+    }
+
+\newcommand{\sm}[1] {\left(\begin{smallmatrix}#1\end{smallmatrix}\right)}
+
+\newcommand{\ssmxy}[1]
+    {\left(\scalebox{0.8}{\begin{array}{cc|c}#1\end{array}}\right)}
+    
+\newcommand{\ssmxyz}[1]
+    {\left(\scalebox{0.8}{\begin{array}{ccc|c}#1\end{array}}\right)}
+
+\newcommand{\sd}[1]{\left|\begin{smallmatrix}#1\end{smallmatrix}\right|}
+
+\newcommand{\pv}[1]{\left|\begin{smallmatrix}\vec{\imath}&\vec{\jmath}&\vec{k}\\#1\end{smallmatrix}\right|}
+
+\newenvironment{smatrix}
+    {\left(\begin{smallmatrix}}{\end{smallmatrix}\right)}
+    
+\newenvironment{sdet}
+    {\left|\begin{smallmatrix}}{\end{smallmatrix}\right|}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% DEFINICION DE COLORES %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\definecolor{gris}{gray}{0.6}
+\definecolor{blanco}{gray}{1}
+\definecolor{solcolor}{RGB}{113, 109, 130}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% COMANDOS Y ENTORNOS  %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\punto}{\hfill\mbox{\emph{(1 punto)}}}
+\newcommand{\puntos}[1]{\hfill\emph{(#1 puntos)}}
+\newcommand{\Punto}{\hfill\mbox{\emph{\textbf{(1 punto)}}}}
+\newcommand{\Puntos}[1]{\hfill\emph{\textbf{(#1 puntos)}}}
+\newcommand{\puntosp}[1]{\par\vspace{-2mm}\hfill(#1 puntos)\vspace{-3mm}}
+\newcommand{\pbi}[1]{\hfill\emph{[#1]}}
+\newcommand{\Pbi}[1]{\hfill\textbf{\emph{[#1]}}}
+\newcommand{\esp}[1]{\vspace{#1}}
+\newcommand{\marca}{\hspace{-1cm}$\ast$\hspace{0.8cm}}
+
+\newenvironment{solucion}
+    {
+        \vspace{2mm}
+        \leavevmode\color{solcolor}
+    }
+    {
+        \renewcommand{\arraystretch}{1}
+    }
+
+\newcommand{\logo}[4]{
+    \hspace{-4mm}
+    \tikz{
+        \node at (0,0) [below right]
+            {\includegraphics[width=1.2cm]{./logo.png}};
+        \node at (1.45,-0.1) [below right]
+            {\large \sffamily{IES Cervantes / DEPARTAMENTO DE MATEMÁTICAS / \textbf{#1}}}; %% asignatura %%
+        \node at (1.45,-0.75) [below right]
+            {\sffamily{\textbf{#4} / #2 / #3}}; %% grupo, título, fecha %%
+        \draw[gray,very thick] (1.40,-0.153) rectangle (19,-1.298);
+    }
+    \vspace{-2mm}
+}
+
+\newcounter{ejercicio}
+\def\theejercicio{\textsf{\textcolor{gris}{\large\bfseries\arabic{ejercicio}.}}}
+
+\newenvironment{ejercicios}
+    {
+        \setlength{\columnsep}{2mm}
+        \begin{multicols}{2}
+        \begin{list}{\theejercicio}{}
+    }
+    {
+        \end{list}
+        \end{multicols}
+    }
+
+\def\ej{\refstepcounter{ejercicio}\item}
+
+\newcounter{apartado}[ejercicio]
+\def\theapartado{\textsf{\textcolor{gris}{\normalsize\bfseries\alph{apartado}.}}}
+
+\def\app#1{\item[\textsf{\textcolor{gris}{\normalsize\bfseries{#1}.}}]}
+
+\newenvironment{apartados}
+        {\begin{list}{\theapartado}{}}
+        {\end{list}}
+
+\newenvironment{apartadosc}[1]
+        {\begin{multicols}{2}{#1}\begin{list}{\theapartado}{}}
+        {\end{list}\end{multicols}}
+
+\def\ap{\refstepcounter{apartado}\item}
+
+\def\lin{\par\rule{20cm}{0.1mm}}
+
+\newcommand{\answer}[1]{
+    \vspace{5mm}
+    \hspace{-11mm}
+    \fbox{\hspace{5mm}
+        \vbox{
+        \vspace{8mm}\\
+        \tikz{
+            \foreach \x in {0.25,0.5,...,17} {
+                \foreach \y in {1,2,...,#1} {
+                    \fill (\x,0.8*\y) circle (0.5pt);
+                }
+            }
+        }
+        \vspace{3mm}
+        }
+    }
+}
+
+\def\y{\hspace{3mm}\text{y}\hspace{3mm}}
+\def\para{\hspace{5mm}\text{para}\hspace{5mm}}
+\def\si{\text{si}}
+
+\newcommand{\answerbox}[1]{
+    \par
+    \vspace{3mm}
+    \hspace{-1cm}
+    \tikz{
+        \draw[step=0.4,thin,lightgray] (0,0) grid (16.8,#1*0.4);
+        \draw (0,0) rectangle (16.8,#1*0.4)
+    }
+    \par
+    \vspace{3mm}
+}
+\newcommand{\ejanswerbox}[1]{
+    \par
+    \vspace{3mm}
+    \hspace{-1cm}
+    \tikz{
+        \draw[step=0.4,thin,lightgray] (0,0) grid (18,#1*0.4);
+        \draw (0,0) rectangle (18,#1*0.4)
+    }
+    \par
+    \vspace{3mm}
+}
+
+\def\M#1{
+    \vspace{6mm}
+    {\small \sffamily\textbf{[Puntuación total: #1]}}
+}
+
+\def\p#1{
+    \if#11
+        \textsf{\small(1 punto)}
+    \else
+        \textsf{\small(#1 puntos)}
+    \fi
+}
+\def\P#1{\textbf{\p{#1}}}
+\def\info#1{
+    \par\vspace{-2mm}\hfill\textcolor{gray}{\tiny{\textsf{\uppercase{#1}}}}
+}
+
+\def\instrucciones#1{
+    \hspace{-7mm}
+    \fbox{
+        \begin{minipage}[t]{17.4cm}
+            \vspace{1mm}
+            \sffamily{
+                \textbf{Instrucciones}
+                #1
+            }\vspace{0mm}
+        \end{minipage}
+    }
+}
+
+\def\completar#1{
+    \vspace{#1}
+    \phantom{.}
+}
+
+\def\€{\,\euro}
+
+\def\Vec#1{\overrightarrow{#1}}
+
+\newcommand{\lheq}{
+    \ensuremath{\underset{\sffamily{\text{\textbf{\tiny L'H}}}}{=}}
+}
+
+\newenvironment{matrizp}{
+  \left(\begin{smallmatrix}
+}{
+  \end{smallmatrix}\right)
+}
+
+\newenvironment{detp}{
+  \left|\begin{smallmatrix}
+}{
+  \end{smallmatrix}\right|
+}
+
+\newenvironment{sistemap}{
+  \left\{\begin{smallmatrix}
+}{
+  \end{smallmatrix}\right.
+}
+
+\def\sol#1{}
+
+\def\lsol#1{}
+
+\def\csol#1{}
+
+\def\esol#1{}
+
+\def\solpg#1{}
+
+%%% previo: \begin{document}
+%%% previo: {{header}}
+%%% final: \end{document}

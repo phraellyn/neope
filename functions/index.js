@@ -21,6 +21,7 @@ export {
   syncStudentAccessCodes,
 } from './auth.js'
 import { codeForCompiler, compilationArtifacts, sourceHash } from './exerciseCompilation.js'
+import { validateExerciseSolutionSource } from './exerciseSolutionSource.js'
 import { curriculumPromptContext } from './curriculumContext.js'
 import { achievementGranularityInstructions } from './achievementGranularity.js'
 import {
@@ -969,6 +970,7 @@ Si el usuario incluye un MARCO CURRICULAR OBLIGATORIO, ajusta vocabulario, profu
 Contrato obligatorio de salida:
 - Devuelve exclusivamente el EJERCICIO COMPLETO como formato de intercambio LaTeX con Neope: sin Markdown, sin explicaciones externas, sin preámbulo y sin \begin{document} ni \end{document}. Neope descompondrá después el resultado en campos estructurados; no devuelvas JSON, rutas de Storage ni referencias a PDF.
 - Conserva literalmente el enunciado y su estructura. Los comandos \M{...}, \P{...}, \p{...}, \T{...} y \t{...} son proyecciones de campos gestionados por Neope: no cambies sus valores ni su posición. Conserva también literalmente cada comentario «% neope:part id=...». Añade solamente las soluciones y coloca \info al final según la regla indicada por el usuario.
+- Si una afirmación del enunciado es falsa, faltan hipótesis o la función no está definida en algún punto necesario, demuéstralo y explícalo dentro de la solución. No inventes ni modifiques datos, funciones, intervalos o preguntas para hacer que el apartado sea cierto. No apliques teoremas sin comprobar sus hipótesis.
 - Ignora por completo \sol, \lsol y \soluciones: no los copies ni los generes.
 - Si el ejercicio tiene apartados (\ap), añade exactamente un entorno \begin{solucion} ... \end{solucion} completo después del contenido de CADA apartado y antes del siguiente \ap o del cierre del entorno de apartados original. Si no hay \ap, añade un único entorno \begin{solucion} ... \end{solucion} al final del ejercicio, antes de \info.
 - Conserva exactamente \begin{apartadosc}...\end{apartadosc} si aparece en el enunciado. La aplicación sustituirá esos delimitadores solo en la copia temporal destinada a compilar el PDF resuelto; el código fuente devuelto debe mantener el entorno original.
@@ -1279,7 +1281,10 @@ function validateLatexVariation(original, variation, expectedInfo = '') {
 }
 
 function validateSolvedExercise(original, solvedExercise, expectedInfo) {
-  const issues = validateLatexVariation(original, solvedExercise, expectedInfo)
+  const issues = [
+    ...validateExerciseSolutionSource(original, solvedExercise),
+    ...validateLatexVariation(original, solvedExercise, expectedInfo),
+  ]
   const partCount = countMatches(original, /\\ap\b/g)
   const solutionCount = countMatches(solvedExercise, /\\begin\s*\{solucion\}/g)
 
