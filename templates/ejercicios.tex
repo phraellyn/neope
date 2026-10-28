@@ -1,8 +1,12 @@
-% neope:document {"name":"Apuntes - Matemáticas","command":"logo","version":2,"content":"code","assessment":false,"exerciseEnvironment":"ejercicios"}
+% neope:document {"name":"Ejercicios","command":"logo","version":2,"content":"exercises","assessment":false,"exerciseEnvironment":"ejercicios"}
 % neope:field {"key":"subject","label":"Asignatura","argument":1,"type":"subject","placeholder":"Matemáticas II","required":true}
 % neope:field {"key":"title","label":"Título","argument":2,"type":"text","placeholder":"Bloque o tema","required":false,"hidden":false}
 % neope:field {"key":"date","label":"Fecha","argument":3,"type":"date","required":false,"hidden":true}
 % neope:field {"key":"level","label":"Nivel","argument":4,"type":"level","placeholder":"2ºBTO B","required":true}
+% neope:field {"key":"includeInfo","label":"Información de los ejercicios","default":true,"type":"checkbox","formOnly":true,"required":false}
+% neope:field {"key":"includeAnswers","label":"Respuestas breves (sol / lsol)","default":true,"type":"checkbox","formOnly":true,"required":false}
+% neope:field {"key":"includeSolutions","label":"Soluciones detalladas","default":false,"type":"checkbox","formOnly":true,"required":false}
+% neope:field {"key":"includeCriteria","label":"Criterios de calificación","default":true,"type":"checkbox","formOnly":true,"required":false}
 
 \documentclass[a4paper,twoside,fleqn,dvipsnames]{book}
 \pagestyle{empty}

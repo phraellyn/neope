@@ -24,6 +24,8 @@ import { codeForCompiler, compilationArtifacts, sourceHash } from './exerciseCom
 import { validateExerciseSolutionSource } from './exerciseSolutionSource.js'
 import { curriculumPromptContext } from './curriculumContext.js'
 import { achievementGranularityInstructions } from './achievementGranularity.js'
+import { generateExerciseRaster, prepareVisualVariation, regenerateTikzFigure, visualMessageContent, visualModelCatalog, visualVariationFormat } from './visualGeneration.js'
+import { graphicReferences, tikzFigures } from './exerciseVisualsShared.js'
 import {
   ensureAlignedInDisplayMath,
   hasLegacyDisplayMathDelimiters,
@@ -61,6 +63,28 @@ function requireTeacherAccess(request) {
 }
 
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
+const visualCallableOptions = { region: 'europe-west1', enforceAppCheck: true, secrets: [openRouterApiKey], memory: '512MiB' }
+
+export const listAiModelCapabilities = onCall({ ...visualCallableOptions, timeoutSeconds: 60 }, async (request) => {
+  requireTeacherAccess(request)
+  const models = await visualModelCatalog(openRouterApiKey.value())
+  const teacher = await adminDb.doc(`teachers/${request.auth.uid}`).get()
+  const configured = teacher.data()?.perfil?.modelos
+  const allowed = new Set(Array.isArray(configured) ? configured.map((entry) => String(entry?.openRouterId || '').trim()) : Object.keys(aiModels))
+  return { checkedAt: new Date().toISOString(), models: models.filter((model) => allowed.has(model.id)).map(({ parameters, ...model }) => model) }
+})
+
+export const generateExerciseImage = onCall({ ...visualCallableOptions, timeoutSeconds: 240 }, async (request) => {
+  requireTeacherAccess(request)
+  await resolveAiModel(request, request.data?.imageModel)
+  return generateExerciseRaster(request.data || {}, openRouterApiKey.value())
+})
+
+export const regenerateExerciseTikz = onCall({ ...visualCallableOptions, timeoutSeconds: 180 }, async (request) => {
+  requireTeacherAccess(request)
+  const model = await resolveAiModel(request, request.data?.model)
+  return regenerateTikzFigure(request.data || {}, openRouterApiKey.value(), model)
+})
 const compilerOrigin = 'http://51.170.57.25:5000'
 
 async function deleteStudentAccounts(accessCodes) {
@@ -280,8 +304,9 @@ function compilationTarget(exercise, variationIndex = null) {
   return Array.isArray(exercise.variaciones) ? exercise.variaciones[variationIndex] : null
 }
 
-function compilationAssets(exercise = {}) {
-  return Object.fromEntries((Array.isArray(exercise.archivos) ? exercise.archivos : [])
+function compilationAssets(exercise = {}, target = exercise) {
+  const files = Array.isArray(target.archivos) ? target.archivos : (Array.isArray(exercise.archivos) ? exercise.archivos : [])
+  return Object.fromEntries(files
     .filter((file) => file?.compilerName && file?.url)
     .map((file) => [file.compilerName, { url: file.url }]))
 }
@@ -575,7 +600,7 @@ export const processExerciseCompilation = onDocumentCreated({
       await exerciseReference.update({ 'compilation.status': 'compiling' })
     }
 
-    const assets = compilationAssets(exercise)
+    const assets = compilationAssets(exercise, target)
     const context = compilationContext(job.preambleName, assets)
     const artifacts = compilationArtifacts(target, job.exerciseId, job.revision).map((artifact) => {
       const compilerCode = codeForCompiler(artifact.code, artifact.profile)
@@ -1383,6 +1408,7 @@ export const generateExerciseVariation = onCall({
   }
   const modelConfig = await resolveAiModel(request, model)
   const exerciseForGeneration = normalizeDisplayMathDelimiters(stripLegacySolutionCommands(enunciado))
+  const visual = await prepareVisualVariation(request.data || {}, model, openRouterApiKey.value())
   const modelLabel = modelConfig.label
 
   try {
@@ -1429,7 +1455,7 @@ export const generateExerciseVariation = onCall({
           reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
           messages: [
             { role: 'system', content: analysisSystemPrompt },
-            { role: 'user', content: [curriculumContext, 'EJERCICIO BASE:', exerciseForGeneration].filter(Boolean).join('\n\n') },
+            { role: 'user', content: visualMessageContent([curriculumContext, 'EJERCICIO BASE:', exerciseForGeneration].filter(Boolean).join('\n\n'), visual?.files || []) },
           ],
           response_format: exerciseAnalysisResponseFormat,
           provider: { require_parameters: true, data_collection: 'deny' },
@@ -1452,6 +1478,7 @@ export const generateExerciseVariation = onCall({
       solutionRequirement,
       infoRequirement,
       experimentalStrategy,
+      visual?.instruction,
       'EJERCICIO ORIGINAL:',
       exerciseForGeneration,
       variaciones.length ? `VARIACIONES YA EXISTENTES (no repetir):\n${variaciones.join('\n\n---\n\n')}` : '',
@@ -1481,10 +1508,10 @@ ${variation?.enunciado || ''}`
           model,
           reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
           messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: [originalRequest, repairRequest].filter(Boolean).join('\n\n') },
+            { role: 'system', content: visual ? `${systemPrompt}\n\nUsa una envoltura JSON de transporte con enunciado e imagePlan. El campo enunciado contiene exclusivamente el ejercicio LaTeX.` : systemPrompt },
+            { role: 'user', content: visualMessageContent([originalRequest, repairRequest].filter(Boolean).join('\n\n'), visual?.files || []) },
           ],
-          response_format: variationResponseFormat,
+          response_format: visual ? visualVariationFormat : variationResponseFormat,
           provider: {
             require_parameters: true,
             data_collection: 'deny',
@@ -1529,6 +1556,16 @@ ${variation?.enunciado || ''}`
 
       variation.enunciado = splitOverloadedCompactRows(normalizeDisplayMathDelimiters(compactAlignedChains(stripLegacySolutionCommands(variation.enunciado.trim()))))
       validationIssues = validateLatexVariation(exerciseForGeneration, variation.enunciado, expectedInfo)
+      if (visual) {
+        const references = graphicReferences(variation.enunciado)
+        const generated = references.some((entry) => entry.name === 'neope_generated_1')
+        if (generated !== Boolean(variation.imagePlan?.needed)) validationIssues.push('imagePlan.needed debe coincidir con el uso de neope_generated_1.')
+        if (variation.imagePlan?.needed && !variation.imagePlan.prompt?.trim()) validationIssues.push('La imagen nueva necesita una especificación completa en imagePlan.prompt.')
+        if (visual.output === 'tikz' && references.length) validationIssues.push('Dibuja las figuras directamente en TikZ; no uses imágenes externas.')
+        if (visual.mode === 'required' && (visual.output === 'tikz' ? !tikzFigures(variation.enunciado).length : !generated)) validationIssues.push(visual.output === 'tikz' ? 'Debes incluir la figura TikZ nueva solicitada.' : 'Debes incluir la imagen externa nueva solicitada.')
+        if (visual.mode === 'none' && references.length) validationIssues.push('No debes incluir imágenes externas en esta variante.')
+        if (references.some((entry) => entry.name !== 'neope_generated_1')) validationIssues.push('Sustituye las imágenes del original por una figura TikZ nueva o neope_generated_1 para que los datos del dibujo correspondan a la variante; no inventes nombres de archivo.')
+      }
       if (experimental && !variation.enunciado.includes(`\\info{${expectedInfo}}`)) {
         validationIssues.push(`La variación experimental debe terminar con \\info{${expectedInfo}}.`)
       }
@@ -1556,6 +1593,7 @@ ${variation?.enunciado || ''}`
     return {
       enunciado: variation.enunciado.trim(),
       model,
+      ...(visual ? { imagePlan: variation.imagePlan } : {}),
     }
   } catch (error) {
     if (error instanceof HttpsError) throw error

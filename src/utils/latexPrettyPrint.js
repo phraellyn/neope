@@ -1,85 +1,52 @@
-const compactEnvironments = new Set([
-  'aligned', 'alignedat', 'array', 'bmatrix', 'Bmatrix', 'cases', 'det', 'detp',
-  'gather', 'gather*', 'gathered', 'matrix', 'matrix*', 'matriz', 'matrizb',
-  'matrizp', 'matrizv', 'pmatrix', 'pmatrix*', 'smallmatrix', 'split', 'Vmatrix',
-  'vmatrix',
-])
+import { executableLatex } from './latexDocumentSource.js'
 
-const verbatimEnvironments = new Set(['Verbatim', 'lstlisting', 'minted', 'verbatim'])
-
-function environmentTokens(line) {
-  return [...line.matchAll(/\\(begin|end)\s*\{([^{}]+)\}/g)].map((match) => ({
-    type: match[1],
-    name: match[2].trim(),
-  }))
+function escaped(source, index) {
+  let slashes = 0
+  while (index > 0 && source[--index] === '\\') slashes += 1
+  return slashes % 2 === 1
 }
 
-function removeEnvironment(stack, name) {
-  const index = stack.lastIndexOf(name)
-  if (index >= 0) stack.splice(index, 1)
-}
+// Solo cambia la sangría. Conserva cada salto físico (también CRLF), las
+// líneas vacías, los espacios finales, los comentarios y todos los comandos.
+export function prettyPrintLatex(value) {
+  const source = String(value ?? '')
+  const literals = []
+  const masked = executableLatex(source, { onLiteral: (from, to) => literals.push({ from, to }) })
+  const pieces = source.split(/(\r\n|\r|\n)/)
+  const environments = []
+  let braces = 0
+  let offset = 0
+  let previousComment = false
+  let unsafeSpacing = false
+  let literalIndex = 0
+  for (let index = 0; index < pieces.length; index += 2) {
+    const line = pieces[index]
+    const code = masked.slice(offset, offset + line.length)
+    while (literals[literalIndex]?.to <= offset) literalIndex += 1
+    const literal = literals[literalIndex]
+    const protectedLine = literal && literal.from <= offset + line.length && literal.to > offset
+    if (/\\(?:obeyspaces|obeylines|catcode)\b/.test(code)) unsafeSpacing = true
 
-export function prettyPrintLatex(source) {
-  const indent = '    '
-  const stack = []
-  const output = []
-  let pendingBlankLine = false
-  let verbatimEnvironment = null
-
-  for (const originalLine of String(source || '').replace(/\r\n?/g, '\n').split('\n')) {
-    const trimmed = originalLine.trim()
-
-    if (verbatimEnvironment) {
-      const closesVerbatim = environmentTokens(originalLine)
-        .some(({ type, name }) => type === 'end' && name === verbatimEnvironment)
-      if (!closesVerbatim) {
-        output.push(originalLine)
-        continue
-      }
-      removeEnvironment(stack, verbatimEnvironment)
-      output.push(`${indent.repeat(stack.length)}${trimmed}`)
-      verbatimEnvironment = null
-      continue
+    const leading = code.match(/^[ \t]*/)?.[0].length || 0
+    const prefix = code.slice(leading)
+    const closures = prefix.match(/^(?:(?:\\end\s*\{[^{}]+\}|\})[ \t]*)+/)?.[0] || ''
+    const closingCount = [...closures.matchAll(/\\end\s*\{[^{}]+\}|\}/g)].length
+    const depth = Math.max(0, environments.length + braces - closingCount)
+    if (line.trim() && !protectedLine && !previousComment && !unsafeSpacing) {
+      pieces[index] = '    '.repeat(Math.min(depth, 24)) + line.replace(/^[ \t]*/, '')
     }
 
-    if (!trimmed) {
-      if (output.length && !stack.some((name) => compactEnvironments.has(name))) pendingBlankLine = true
-      continue
+    for (const match of code.matchAll(/\\(begin|end)\s*\{([^{}]+)\}|[{}]/g)) {
+      if (escaped(code, match.index)) continue
+      if (match[1] === 'begin') environments.push(match[2])
+      else if (match[1] === 'end') {
+        const opening = environments.lastIndexOf(match[2])
+        if (opening >= 0) environments.splice(opening, 1)
+      } else if (match[0] === '{') braces += 1
+      else braces = Math.max(0, braces - 1)
     }
-
-    const tokens = environmentTokens(trimmed)
-    const leadingEnds = []
-    let remainingPrefix = trimmed
-    while (true) {
-      const match = remainingPrefix.match(/^\\end\s*\{([^{}]+)\}\s*/)
-      if (!match) break
-      const name = match[1].trim()
-      leadingEnds.push(name)
-      removeEnvironment(stack, name)
-      remainingPrefix = remainingPrefix.slice(match[0].length)
-    }
-
-    if (pendingBlankLine) {
-      const closesCompactBlock = leadingEnds.some((name) => compactEnvironments.has(name))
-      const followsExerciseHeader = /^\\ej\b.*\\\\$/.test(String(output.at(-1) || '').trim())
-      if (!closesCompactBlock && !followsExerciseHeader && output.at(-1) !== '') output.push('')
-      pendingBlankLine = false
-    }
-
-    output.push(`${indent.repeat(stack.length)}${trimmed}`)
-
-    let skippedLeadingEnds = 0
-    for (const token of tokens) {
-      if (token.type === 'end' && skippedLeadingEnds < leadingEnds.length) {
-        skippedLeadingEnds += 1
-        continue
-      }
-      if (token.type === 'begin') {
-        stack.push(token.name)
-        if (verbatimEnvironments.has(token.name)) verbatimEnvironment = token.name
-      } else removeEnvironment(stack, token.name)
-    }
+    previousComment = [...line.matchAll(/%/g)].some((match) => !escaped(line, match.index))
+    offset += line.length + (pieces[index + 1]?.length || 0)
   }
-
-  return output.join('\n')
+  return pieces.join('')
 }

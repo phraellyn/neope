@@ -10,7 +10,7 @@ Texto del enunciado.
 \end{apartados}`
 
 const formatted = prettyPrintLatex(source)
-assert.match(formatted, /^\\ej\\M\{2,5\}\\T\{10\}\\\\\nTexto del enunciado\./)
+assert.match(formatted, /^\\ej\\M\{2,5\}\\T\{10\}\\\\\n\nTexto del enunciado\./)
 assert.doesNotMatch(formatted, /\\salto/)
 assert.equal((formatted.match(/\\ej/g) || []).length, 1)
 assert.equal((formatted.match(/\\ap/g) || []).length, 1)

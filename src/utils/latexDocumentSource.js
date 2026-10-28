@@ -1,27 +1,31 @@
 // Preserve offsets while ignoring comments and literal LaTeX examples.
-function executableLatex(source) {
+export function executableLatex(source, { onLiteral = () => {} } = {}) {
   const masked = source.split('')
   const blank = (start, end) => {
-    for (let index = start; index < end; index += 1) if (source[index] !== '\n') masked[index] = ' '
+    for (let index = start; index < end; index += 1) if (!['\n', '\r'].includes(source[index])) masked[index] = ' '
   }
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] === '%') {
       let end = source.indexOf('\n', index)
+      const carriage = source.indexOf('\r', index)
+      if (carriage >= 0 && (end < 0 || carriage < end)) end = carriage
       if (end < 0) end = source.length
       blank(index, end)
       index = end - 1
     } else if (source[index] === '\\') {
-      const literal = /^\\begin\s*\{(verbatim\*?|Verbatim|lstlisting|minted)\}/.exec(source.slice(index))
+      const literal = /^\\begin\s*\{(verbatim\*?|Verbatim\*?|lstlisting|minted|alltt|comment)\}/.exec(source.slice(index))
       const verb = /^\\verb\*?([^A-Za-z\s])/.exec(source.slice(index))
       if (literal) {
         const endPattern = new RegExp(`\\\\end\\s*\\{${literal[1].replace('*', '\\*')}\\}`)
         const end = endPattern.exec(source.slice(index + literal[0].length))
         const stop = end ? index + literal[0].length + end.index + end[0].length : source.length
+        onLiteral(index, stop)
         blank(index, stop)
         index = stop - 1
       } else if (verb) {
         const end = source.indexOf(verb[1], index + verb[0].length)
         const stop = end < 0 ? source.length : end + 1
+        onLiteral(index, stop)
         blank(index, stop)
         index = stop - 1
       } else if (['%', '\\'].includes(source[index + 1])) {

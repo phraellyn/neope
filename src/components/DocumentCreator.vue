@@ -19,6 +19,8 @@ import { compactExerciseConceptLabel, exerciseStatementText, exerciseVersionAuth
 import { normalizeAlignedLineBreaks, normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
 import { canonicalFieldKey, isInternalTemplate, migrateDocumentTemplate, readDocumentTemplate, renderTemplateWrapper, splitFinalDocumentCode, templateHeader } from '../utils/documentTemplate'
 import { documentSourceContent, repairNestedLegacyDocument } from '../utils/latexDocumentSource'
+import { compilerDocumentSource, diagnoseLatexStructure, parseLatexDiagnostics } from '../utils/latexDiagnostics'
+import { graphicReferences, imageReferenceName, versionImageFiles } from '../utils/exerciseImages'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import { syncDocumentAssessment } from '../services/documentAssessmentRepository'
 import { assessmentExerciseModel } from '../utils/documentAssessmentMatrix'
@@ -151,6 +153,19 @@ const previewDocuments = ref([])
 const documentCode = ref('')
 const documentCodeNeedsRegeneration = ref(true)
 const finalCodes = reactive({})
+const templateCompileErrors = reactive({})
+const finalCodeEditor = ref(null)
+const sourceCodeEditor = ref(null)
+const sourceCompilationError = computed(() => {
+  const captured = Object.values(templateCompileErrors).filter((entry) => entry.inputSource !== null)
+  const source = captured.find((entry) => entry.inputSource === sourceLatexCode.value)?.inputSource ?? captured[0]?.inputSource ?? null
+  const errors = captured.filter((entry) => entry.inputSource === source)
+  return {
+    diagnostics: errors.flatMap((entry) => entry.inputDiagnostics.map((item) => ({ ...item, id: `${entry.templateKey}-${item.id}` }))),
+    log: errors.map((entry) => `${entry.name}: ${entry.message}`).join('\n\n'),
+    source,
+  }
+})
 const codeEditorKey = ref('')
 const codeEditorVisible = ref(false)
 const codeCompilationId = globalThis.crypto.randomUUID()
@@ -1461,18 +1476,30 @@ function exerciseForQueue(item) {
   return item?.snapshot || props.exercises.find((exercise) => exercise.id === item.exerciseId) || null
 }
 
-function exerciseImageFiles(exercise) {
-  return (Array.isArray(exercise?.archivos) ? exercise.archivos : []).filter((file) => file?.url && file?.latexName)
+function exerciseImageFiles(exercise, version = selectedVersionFor(exercise)) {
+  return versionImageFiles(exercise, activeVersion(exercise, version)).filter((file) => file?.url && file?.latexName)
 }
 
 function documentExerciseAssetName(exercise, file, index) {
   const exerciseId = String(exercise?.id || 'ejercicio').replace(/[^a-zA-Z0-9_-]/g, '') || 'ejercicio'
   const extension = String(file.compilerName || file.nombre || '').match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase() || 'png'
-  return `ej_${exerciseId}_${file.latexName || `imagen${index + 1}`}.${extension === 'jpeg' ? 'jpg' : extension}`
+  const assetId = String(file.id || file.latexName || `imagen${index + 1}`).replace(/[^a-zA-Z0-9_-]/g, '')
+  return `ej_${exerciseId}_${assetId}.${extension === 'jpeg' ? 'jpg' : extension}`
 }
 
-function rewriteExerciseImageReferences(code, exercise) {
-  const files = exerciseImageFiles(exercise)
+function historicalExerciseImages(exercise, version) {
+  return [...(exercise?.archivos || []), ...(exercise?.imageHistory || []), ...(activeVersion(exercise, version)?.imageHistory || [])]
+    .filter((file) => file?.url && file?.latexName)
+}
+
+function legacyDocumentExerciseAssetName(exercise, file, index) {
+  const name = documentExerciseAssetName(exercise, file, index)
+  const exerciseId = String(exercise?.id || 'ejercicio').replace(/[^a-zA-Z0-9_-]/g, '') || 'ejercicio'
+  return `ej_${exerciseId}_${file.latexName || `imagen${index + 1}`}.${name.split('.').at(-1)}`
+}
+
+function rewriteExerciseImageReferences(code, exercise, version) {
+  const files = exerciseImageFiles(exercise, version)
   if (!files.length || !code.includes('\\includegraphics')) return code
   return code.replace(/\\includegraphics(\*)?\s*(\[[^\]]*\]\s*)?\{([^{}]+)\}/g, (match, star = '', options = '', rawReference) => {
     const reference = String(rawReference).trim().split('/').at(-1).replace(/\.(?:png|jpe?g|pdf)$/i, '')
@@ -1563,7 +1590,7 @@ function queueExerciseCode(item, template = selectedTemplate.value) {
     includeCriteria: criteriaEnabledForTemplate(template),
     includeInfo: infoEnabledForTemplate(template),
   }) || statementCode(sourceVersion?.enunciado || '')
-  const exerciseCode = rewriteExerciseImageReferences(adaptExerciseEnvironmentsToTemplate(code, template), exercise)
+  const exerciseCode = rewriteExerciseImageReferences(adaptExerciseEnvironmentsToTemplate(code, template), exercise, item.version)
   if (!item.pageBreakBefore) return exerciseCode
   const pageBreak = templateDefinesCommand(template, 'salto') ? '\\salto' : '\\newpage'
   return `${pageBreak}\n${exerciseCode}`
@@ -2109,7 +2136,7 @@ async function grayscaleLogoAsset(url) {
 function documentAssetSignature() {
   const exerciseFiles = exerciseQueue.value
     .filter((item) => item.type !== 'tool')
-    .flatMap((item) => exerciseImageFiles(exerciseForQueue(item)).map((file) => `${item.exerciseId}:${file.path}:${file.url}`))
+    .flatMap((item) => [...exerciseImageFiles(exerciseForQueue(item), item.version), ...historicalExerciseImages(exerciseForQueue(item), item.version)].map((file) => `${item.exerciseId}:${item.version}:${file.path}:${file.url}`))
   const directFiles = sourceFiles.value.map((file) => [file.id, file.name, file.size, file.url || ''].join(':'))
   const signatureFiles = teacherSignatureImages.value.map((image) => `${image.path || image.id}:${image.url}`)
   return [currentCenterLogo.value, ...signatureFiles, ...exerciseFiles, ...directFiles].join('|')
@@ -2117,6 +2144,7 @@ function documentAssetSignature() {
 
 async function documentAssets() {
   const assets = {}
+  const storedImageNames = new Set(Object.values(finalCodes).flatMap((code) => graphicReferences(code).map((reference) => reference.name)))
   if (currentCenterLogo.value) {
     try {
       assets['logo.png'] = await grayscaleLogoAsset(currentCenterLogo.value)
@@ -2130,8 +2158,14 @@ async function documentAssets() {
   }
   selectedExercises.value.forEach((item) => {
     const exercise = exerciseForQueue(item)
-    exerciseImageFiles(exercise).forEach((file, index) => {
+    exerciseImageFiles(exercise, item.version).forEach((file, index) => {
       assets[documentExerciseAssetName(exercise, file, index)] = { url: file.url }
+    })
+    // Saved editable code can still refer to a replaced image or a legacy filename.
+    ;[...historicalExerciseImages(exercise, item.version), ...exerciseImageFiles(exercise, item.version)].forEach((file, index) => {
+      for (const name of [documentExerciseAssetName(exercise, file, index), legacyDocumentExerciseAssetName(exercise, file, index)]) {
+        if (!assets[name] && storedImageNames.has(imageReferenceName(name))) assets[name] = { url: file.url }
+      }
     })
   })
   for (const file of sourceFiles.value) {
@@ -2155,6 +2189,7 @@ function invalidatePreview() {
   previewAssetSignature.value = ''
   compileError.value = ''
   compileErrorVisible.value = false
+  Object.keys(templateCompileErrors).forEach((key) => delete templateCompileErrors[key])
   if (currentStep.value < lastStep.value) documentCodeNeedsRegeneration.value = true
 }
 
@@ -2760,11 +2795,14 @@ async function compileDocument(force = false, options = {}) {
     const compilationErrors = []
     const assets = await documentAssets()
     for (const template of templatesToCompile) {
+      delete templateCompileErrors[template.key]
       let code = ''
       let compilerPreamble = ''
       let compilerBody = ''
+      let inputSource = null
       try {
         code = codeForTemplate(template)
+        inputSource = directSourceCode ?? (contentWorkspaceMode.value === 'latex' ? sourceLatexCode.value : null)
         const repairedCode = normalizeAlignedLineBreaks(repairNestedLegacyDocument(code))
         if (repairedCode !== code) {
           finalCodes[template.key] = repairedCode
@@ -2788,6 +2826,18 @@ async function compileDocument(force = false, options = {}) {
         entries.push({ templateKey: template.key, name: template.nombre || template.metadata.name, code, blob, url: URL.createObjectURL(blob), assetSignature })
       } catch (error) {
         const message = error.message || 'error de compilación'
+        const compiledSource = compilerDocumentSource(compilerPreamble, compilerBody)
+        const diagnostics = parseLatexDiagnostics(message, { source: code, compiledSource })
+        const localDiagnostics = !compilerPreamble && !compilerBody ? diagnoseLatexStructure(code) : []
+        templateCompileErrors[template.key] = {
+          templateKey: template.key,
+          name: template.nombre || template.metadata.name,
+          message,
+          source: code,
+          diagnostics: localDiagnostics.length ? localDiagnostics : diagnostics,
+          inputSource,
+          inputDiagnostics: inputSource === null ? [] : parseLatexDiagnostics(message, { source: inputSource, compiledSource, bodyOnly: true }),
+        }
         compilationErrors.push(`${template.nombre || template.metadata.name}: ${message}${latexErrorContext(message, compilerPreamble, compilerBody)}`)
       }
     }
@@ -2848,6 +2898,16 @@ const editingFinalCode = computed({
   set: (value) => { finalCodes[codeEditorKey.value] = value },
 })
 const editingCodeIsCompiled = computed(() => previewEntryForTemplate(codeEditorKey.value)?.code === editingFinalCode.value)
+const editingCompilationError = computed(() => templateCompileErrors[codeEditorKey.value] || null)
+async function locateDocumentCompileError() {
+  const error = Object.values(templateCompileErrors)[0]
+  if (!error) return
+  openFinalCode(error.templateKey)
+  compileErrorVisible.value = false
+  await nextTick()
+  const diagnostic = error.diagnostics.find((item) => item.line)
+  if (diagnostic && editingFinalCode.value === error.source) finalCodeEditor.value?.goToLine(diagnostic.line, diagnostic.column)
+}
 function openFinalCode(templateKey) {
   if (!selectedTemplates.value.some((template) => template.key === templateKey)) {
     showAppErrorToast('No se ha encontrado la plantilla ni una copia guardada de su preámbulo.')
@@ -3625,8 +3685,12 @@ defineExpose({
             <div v-else-if="contentWorkspaceMode === 'latex'" class="document-latex-source-step">
               <section class="document-latex-source-editor">
                 <DocumentCodeEditor
+                  ref="sourceCodeEditor"
                   :model-value="sourceLatexCode"
                   :compiling="isCompiling"
+                  :diagnostics="sourceCompilationError.diagnostics"
+                  :error-log="sourceCompilationError.log"
+                  :diagnostic-source="sourceCompilationError.source"
                   @update:model-value="updateSourceLatex"
                   @compile="compileCurrentSourceLatex"
                 />
@@ -3974,6 +4038,7 @@ defineExpose({
       >
         <div class="document-compile-snackbar-message">{{ compileError }}</div>
         <template #actions>
+          <v-btn v-if="Object.keys(templateCompileErrors).length" variant="text" size="small" @click="locateDocumentCompileError">Localizar</v-btn>
           <v-btn variant="text" size="small" @click="copyCompileError">Copiar</v-btn>
           <v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar error" @click="compileErrorVisible = false" />
         </template>
@@ -3990,10 +4055,10 @@ defineExpose({
         <v-btn icon="mdi-close" variant="text" aria-label="Cerrar código" :disabled="isCompiling || isSaving" @click="codeEditorVisible = false" />
       </v-card-title>
       <div class="final-code-layout">
-        <DocumentCodeEditor v-model="editingFinalCode" :compiling="isCompiling" @compile="compileEditingFinalCode" />
+        <DocumentCodeEditor ref="finalCodeEditor" v-model="editingFinalCode" :compiling="isCompiling" :diagnostics="editingCompilationError?.diagnostics || []" :error-log="editingCompilationError?.message || ''" :diagnostic-source="editingCompilationError?.source ?? null" @compile="compileEditingFinalCode" />
         <div class="final-code-result">
           <div v-if="!editingCodeIsCompiled" class="final-code-pending">Código pendiente de compilar. El visor muestra el último resultado válido.</div>
-          <div v-if="compileError" class="final-code-error"><pre>{{ compileError }}</pre><v-btn variant="text" size="small" @click="copyCompileError">Copiar error</v-btn></div>
+          <div v-if="editingCompilationError" class="final-code-error">La compilación ha fallado. Selecciona un error en el editor para localizarlo.<v-btn variant="text" size="small" @click="copyCompileError">Copiar error</v-btn></div>
           <DocumentPdfPreview :src="previewEntryForTemplate(codeEditorKey)?.url || ''" />
         </div>
       </div>

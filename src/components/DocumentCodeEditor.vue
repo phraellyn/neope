@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
@@ -7,18 +7,32 @@ import { indentWithTab } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { latex } from 'codemirror-lang-latex'
-import { prettyPrintLatex } from '../utils/latexPrettyPrint'
+import { formatLatexEditor, goToLatexLine, latexEditorTools, searchLatexEditor, setLatexDiagnostics } from '../utils/latexEditor'
+import LatexErrorList from './LatexErrorList.vue'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
   compiling: { type: Boolean, default: false },
   showHeader: { type: Boolean, default: true },
+  diagnostics: { type: Array, default: () => [] },
+  errorLog: { type: String, default: '' },
+  diagnosticSource: { type: String, default: null },
 })
 
 const emit = defineEmits(['update:modelValue', 'compile'])
 const editorHost = ref(null)
 let editor = null
 let applyingExternalValue = false
+const position = ref({ line: 1, column: 1 })
+const errorsStale = computed(() => props.diagnosticSource !== null && props.diagnosticSource !== props.modelValue)
+
+function refreshDiagnostics() {
+  setLatexDiagnostics(editor, errorsStale.value ? [] : props.diagnostics)
+}
+
+function locateError(error) {
+  if (!errorsStale.value) goToLatexLine(editor, error.line, error.column)
+}
 
 const editorTheme = EditorView.theme({
   '&': { height: '100%', backgroundColor: '#10213a', color: '#EAF2FF' },
@@ -47,22 +61,19 @@ function compile() {
 }
 
 function format() {
-  if (!editor) return true
-  const source = editor.state.doc.toString()
-  const formatted = prettyPrintLatex(source)
-  if (formatted !== source) {
-    editor.dispatch({ changes: { from: 0, to: source.length, insert: formatted } })
-  }
-  editor.focus()
-  return true
+  return formatLatexEditor(editor)
 }
+
+function search() { return editor ? searchLatexEditor(editor) : false }
 
 watch(() => props.modelValue, (value) => {
   if (!editor || editor.state.doc.toString() === value) return
   applyingExternalValue = true
   editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value } })
   applyingExternalValue = false
+  refreshDiagnostics()
 })
+watch([() => props.diagnostics, errorsStale], refreshDiagnostics, { deep: true })
 
 onMounted(() => {
   editor = new EditorView({
@@ -72,26 +83,30 @@ onMounted(() => {
         basicSetup,
         editorTheme,
         editorHighlighting,
-        EditorView.lineWrapping,
+        latexEditorTools,
         latex({ enableAutocomplete: false, autoCloseBrackets: true, autoCloseTags: true, enableTooltips: true }),
         keymap.of([
           indentWithTab,
           { key: 'Mod-s', run: compile },
           { key: 'Ctrl-s', run: compile },
-          { key: 'Mod-f', run: format },
-          { key: 'Ctrl-f', run: format },
         ]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !applyingExternalValue) emit('update:modelValue', update.state.doc.toString())
+          if (update.docChanged || update.selectionSet) {
+            const cursor = update.state.selection.main.head
+            const line = update.state.doc.lineAt(cursor)
+            position.value = { line: line.number, column: cursor - line.from + 1 }
+          }
         }),
       ],
     }),
     parent: editorHost.value,
   })
+  refreshDiagnostics()
 })
 
 onBeforeUnmount(() => editor?.destroy())
-defineExpose({ compile, format, focus: () => editor?.focus() })
+defineExpose({ compile, format, search, goToLine: (line, column) => goToLatexLine(editor, line, column), focus: () => editor?.focus() })
 </script>
 
 <template>
@@ -99,7 +114,8 @@ defineExpose({ compile, format, focus: () => editor?.focus() })
     <header v-if="showHeader">
       <span>Código LaTeX</span>
       <v-spacer />
-      <v-tooltip text="Formatear código (Ctrl/Cmd + F)" location="top">
+      <v-btn prepend-icon="mdi-magnify" size="small" variant="text" title="Buscar (Ctrl/Cmd + F)" aria-label="Buscar en el código" @click="search">Buscar</v-btn>
+      <v-tooltip text="Mejorar sangría sin cambiar saltos de línea (Alt + Mayús + F)" location="top">
         <template #activator="{ props: tooltipProps }">
           <v-btn v-bind="tooltipProps" prepend-icon="mdi-format-align-left" size="small" variant="text" aria-label="Formatear código" @click="format">Formatear</v-btn>
         </template>
@@ -110,15 +126,22 @@ defineExpose({ compile, format, focus: () => editor?.focus() })
         </template>
       </v-tooltip>
     </header>
-    <div ref="editorHost" class="document-code-editor-host" />
+    <div class="document-code-editor-workspace">
+      <div ref="editorHost" class="document-code-editor-host" />
+      <LatexErrorList :diagnostics="diagnostics" :log="errorLog" :stale="errorsStale" @locate="locateError" />
+      <footer>Línea {{ position.line }}, columna {{ position.column }} <span>Ctrl/Cmd + F · Buscar</span></footer>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.document-code-editor { display: grid; min-width: 0; min-height: 0; grid-template-rows: 43px minmax(0, 1fr); overflow: hidden; background: #10213a; }
+.document-code-editor { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: #10213a; }
 .document-code-editor-headerless { grid-template-rows: minmax(0, 1fr); }
-.document-code-editor header { display: flex; min-width: 0; align-items: center; gap: 5px; padding: 5px 8px 5px 13px; border-bottom: 1px solid #d8e2ed; background: #f8fafd; color: #365a82; }
+.document-code-editor header { display: flex; min-width: 0; min-height: 43px; flex-wrap: wrap; align-items: center; gap: 5px; padding: 5px 8px 5px 13px; border-bottom: 1px solid #d8e2ed; background: #f8fafd; color: #365a82; }
 .document-code-editor header > span { font-size: .72rem; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
 .document-code-editor-host { min-width: 0; min-height: 0; overflow: hidden; }
+.document-code-editor-workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto auto; overflow: hidden; }
+.document-code-editor-workspace footer { display: flex; justify-content: space-between; gap: 8px; padding: 4px 9px; background: #0b192d; color: #a6bedb; font-size: .68rem; }
+.document-code-editor-workspace footer span { color: #829bb9; }
 .document-code-editor-host :deep(.cm-editor) { height: 100%; }
 </style>

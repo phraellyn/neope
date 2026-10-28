@@ -61,6 +61,13 @@ import {
   needsAdministratorBootstrap,
 } from './utils/authSession'
 import { normalizeDisplayMathDelimiters } from './utils/latexNormalization'
+import { formatLatexEditor, goToLatexLine, latexEditorTools, searchLatexEditor, setLatexDiagnostics } from './utils/latexEditor'
+import { compilerDocumentSource, diagnoseLatexStructure, parseLatexDiagnostics } from './utils/latexDiagnostics'
+import { codeForCompiler as exerciseCodeForCompiler } from '../functions/exerciseRender.js'
+import LatexErrorList from './components/LatexErrorList.vue'
+import ExerciseImageDialog from './components/ExerciseImageDialog.vue'
+import { useExerciseImages } from './composables/useExerciseImages'
+import { archivedImage, exerciseImageAssets, graphicReferences, imageAssetsSignature, imageGenerationMetadata, modelCapabilitiesOption, referencedImageFiles, replaceGraphicReference, revokePendingImage, versionImageFiles } from './utils/exerciseImages'
 import { validateExerciseSolutionSource } from '../functions/exerciseSolutionSource.js'
 import { showAppErrorToast } from './composables/useAppErrorToast'
 import {
@@ -202,6 +209,8 @@ const exerciseSourceOptions = reactive({
 const isGeneratingPartSolution = ref(null)
 const sessionUploadedAttachmentPaths = new Set()
 const pendingDeletedAttachments = []
+const aiCapabilities = ref([])
+const pendingVisualVariant = ref(null)
 const defaultAiModels = Object.freeze([
   { id: 'gemini-3-flash', nombre: 'Gemini 3 Flash', openRouterId: 'google/gemini-3-flash-preview', descripcion: 'Predeterminado · rápido y fiable' },
   { id: 'gemini-3-7-flash', nombre: 'Gemini 3.7 Flash', openRouterId: 'google/gemini-3.7-flash', descripcion: 'Nueva generación · rápido y preciso' },
@@ -223,10 +232,11 @@ const aiModelOptions = computed(() => {
       title: model.nombre,
       value: model.openRouterId,
       subtitle: model.descripcion || model.openRouterId,
-    }))
+    })).map((option) => modelCapabilitiesOption(option, aiCapabilities.value))
 })
 const selectedAiModel = ref('google/gemini-3-flash-preview')
-watch(aiModelOptions, (options) => {
+watch(() => JSON.stringify([teacherProfile.value.modeloPorDefecto, (teacherProfile.value.modelos || defaultAiModels).map((model) => model.openRouterId)]), () => {
+  const options = aiModelOptions.value
   const configuredDefault = String(teacherProfile.value.modeloPorDefecto || '').trim()
   const preferred = options.find((model) => model.value === configuredDefault)?.value
   if (preferred) {
@@ -263,7 +273,8 @@ function exerciseDraftFingerprint(value = exerciseEditor.value) {
     archivos: value?.archivos || [],
     variaciones: value?.variaciones || [],
     structure: value?.structure || {},
-  })
+    imageHistory: value?.imageHistory || [],
+  }, (key, item) => key === 'pendingDataUrl' ? undefined : item)
 }
 
 const exerciseEditorDirty = computed(() => exerciseView.value === 'edit'
@@ -320,6 +331,9 @@ const selectedPreamble = ref('')
 const exercisePreviewTab = ref('statement')
 const exercisePreviewMode = ref('segmented')
 const compilerError = ref('')
+const exerciseDiagnostics = ref([])
+const exerciseDiagnosticSource = ref('')
+const exerciseDiagnosticsStale = computed(() => exerciseDiagnosticSource.value !== activeExerciseCode.value)
 const exerciseCompilerErrorSnackbar = computed({
   get: () => Boolean(compilerError.value && exerciseView.value === 'edit'),
   set: (visible) => {
@@ -440,6 +454,26 @@ const activeExerciseVersion = computed(() => selectedExerciseVersion.value === 0
   ? exerciseEditor.value
   : exerciseEditor.value.variaciones[selectedExerciseVersion.value - 1] || exerciseEditor.value)
 const activeExerciseCode = computed(() => activeExerciseVersion.value.enunciado || '')
+const activeExerciseFiles = computed(() => versionImageFiles(exerciseEditor.value, activeExerciseVersion.value))
+const exerciseVisuals = reactive(useExerciseImages({
+  exercise: exerciseEditor,
+  selectedVersion: selectedExerciseVersion,
+  model: selectedAiModel,
+  teacherReady: computed(() => authRole.value === 'teacher' && isAppCheckConfigured),
+  configuredModels: computed(() => Array.isArray(teacherProfile.value.modelos) ? teacherProfile.value.modelos : defaultAiModels),
+  nextImageNumber: nextExerciseImageNumber,
+  compileCandidate: (code, files) => compilePdfBlob(hasExerciseSolutions(code) ? resolvedLatex(code) : code, exercisePreambleName(), exerciseImageAssets(files), hasExerciseSolutions(code) ? exerciseRenderProfiles.solved : exerciseRenderProfiles.statement),
+  applyCode: async (version, code) => {
+    clearVersionPreview(version)
+    version.enunciado = code
+    version.structure = mergeExerciseStructure(parseExerciseLatex(code), version.structure || {})
+    version.renderedLatex = ''
+    version.compilation = { ...(version.compilation || {}), status: 'outdated' }
+    mountLatexEditor()
+    await compileExercisePreviews(code, exercisePreambleName())
+  },
+}))
+watch(() => exerciseVisuals.catalog, (models) => { aiCapabilities.value = models }, { immediate: true })
 const activeExerciseStructure = computed(() => activeExerciseVersion.value.structure || parseExerciseLatex(activeExerciseCode.value))
 const activeExerciseHasSections = computed(() => activeExerciseStructure.value.apartados.length > 0)
 const compiledPdfUrl = computed(() => activeExerciseVersion.value.previewPdf?.enunciado || activeExerciseVersion.value.pdf?.enunciado || '')
@@ -931,6 +965,8 @@ function normalizeExerciseFiles(files) {
         url: file.url,
         type: file.type || (extension === 'pdf' ? 'application/pdf' : `image/${extension === 'jpg' ? 'jpeg' : extension}`),
         size: Number(file.size) || 0,
+        ...(file.pendingDataUrl ? { pendingDataUrl: file.pendingDataUrl } : {}),
+        ...(file.generated ? { generated: true, generation: imageGenerationMetadata(file.generation), variantId: file.variantId || '' } : {}),
       }
     })
 }
@@ -1012,6 +1048,8 @@ function normalizeVariation(variation = {}) {
   const pdfLayout = normalizePdfLayout(variation.pdf)
   return {
     ...variation,
+    id: variation.id || crypto.randomUUID(),
+    ...(Array.isArray(variation.archivos) ? { archivos: normalizeExerciseFiles(variation.archivos) } : {}),
     enunciado: code,
     modelo: variation.modelo || '',
     pdf,
@@ -1055,7 +1093,7 @@ function normalizeExercise(exercise) {
     preview: normalizeExercisePreview(exercise.preview),
     structure,
     solucionIA: Boolean(exercise.solucionIA),
-    variaciones: Array.isArray(exercise.variaciones) ? exercise.variaciones.map(normalizeVariation) : [],
+    variaciones: Array.isArray(exercise.variaciones) ? exercise.variaciones.map((variation, index) => ({ ...normalizeVariation(variation), sourceVariationIndex: index })) : [],
     previewPdf: null,
     renderedLatex: pdf.enunciado ? code : '',
     analysis: { valid: true, ambiguous: false },
@@ -1648,34 +1686,8 @@ const exerciseRenderProfiles = Object.freeze({
   solved: 'solved',
 })
 
-function internalSegmentTemplate(code) {
-  return `\\noindent
-\\hspace*{2.5mm}
-\\begin{minipage}{8.5cm}
-\\vspace*{2.5mm}
-${String(code || '').trim()}
-\\par
-\\vspace*{2.5mm}
-\\end{minipage}
-\\hspace*{2.5mm}`
-}
-
-function internalCompleteExerciseTemplate(code) {
-  return `\\begin{ejercicios}\n${String(code || '').trim()}\n\\end{ejercicios}`
-}
-
 function codeForPreamble(code, profile = exerciseRenderProfiles.statement) {
-  const compilableCode = normalizeDisplayMathDelimiters(stripExerciseDurationMetadata(code))
-  const body = profile === exerciseRenderProfiles.segment
-    ? internalSegmentTemplate(compilableCode)
-    : internalCompleteExerciseTemplate(compilableCode)
-  return `\\shorthandoff{<>}\n${body}`
-}
-
-function stripExerciseDurationMetadata(code = '') {
-  return String(code || '')
-    .replace(/(\\ej\b(?:\s*\\(?:M|P)\s*\{[^{}]*\})?\s*)\\T\s*\{[^{}]*\}/g, '$1')
-    .replace(/(\\ap\b(?:\s*\\p\s*\{[^{}]*\})?\s*)\\t\s*\{[^{}]*\}/g, '$1')
+  return exerciseCodeForCompiler(String(code || ''), profile)
 }
 
 function removeBlankLinesInsideAligned(code) {
@@ -1689,7 +1701,7 @@ function compileErrorWithSourceContext(code, preambleName, error) {
   const lineMatch = compilerMessage.match(/document\.tex:(\d+):/)
   if (!lineMatch) return compilerMessage
 
-  const preamble = templates.value.find((template) => template.archivo === preambleName)?.codigo || ''
+  const preamble = error?.latexContext?.preamble ?? templates.value.find((template) => template.archivo === preambleName)?.codigo ?? ''
   const sourceLines = codeForPreamble(code).split('\n')
   const preambleLines = preamble.split('\n').length
   const sourceLine = Number(lineMatch[1]) - preambleLines - 2
@@ -1703,8 +1715,7 @@ function compileErrorWithSourceContext(code, preambleName, error) {
   return `${compilerMessage}\n\nLa línea ${sourceLine} corresponde al fragmento siguiente del ejercicio generado:\n${excerpt}`
 }
 
-function compilationArtifactLatex(errorMessage = '') {
-  const structure = activeExerciseStructure.value
+function compilationArtifactLatex(errorMessage = '', structure = activeExerciseStructure.value) {
   const key = errorMessage.match(/Vista\s+([^:\n]+):/)?.[1] || ''
   const partMatch = key.match(/^parts\.([^.]+)\.(statement|workedSolution)\.pdf$/)
   let title = 'vista completa'
@@ -1761,17 +1772,25 @@ function compilationArtifactLatex(errorMessage = '') {
     })
   }
 
-  const compilerCode = removeBlankLinesInsideAligned(codeForPreamble(code, profile))
-  return { title, code: prettyPrintLatex(compilerCode) }
+  return { title, code: exerciseCodeForCompiler(code, profile) }
 }
 
-function compilationErrorWithLatex(error) {
+function compilationErrorWithLatex(error, options = {}) {
   const rawMessage = typeof error === 'string' ? error : error?.message
   const message = !rawMessage || /^(?:firebase:\s*)?internal\.?$/i.test(rawMessage.trim())
     ? 'La función de compilación ha devuelto un error interno.'
     : rawMessage
-  const source = compilationArtifactLatex(message)
-  return `${message}\n\nLaTeX enviado al compilador (${source.title}):\n\n${source.code}`
+  const artifact = compilationArtifactLatex(message, options.structure || activeExerciseStructure.value)
+  const body = error?.latexContext?.body || artifact.code
+  const preambleName = error?.latexContext?.preambleName || exercisePreambleName()
+  const preamble = error?.latexContext?.preamble ?? templates.value.find((template) => template.archivo === preambleName)?.codigo ?? ''
+  exerciseDiagnosticSource.value = options.source ?? error?.latexContext?.editorSource ?? activeExerciseCode.value
+  exerciseDiagnostics.value = parseLatexDiagnostics(message, {
+    source: exerciseDiagnosticSource.value,
+    compiledSource: compilerDocumentSource(preamble, body),
+    bodyOnly: true,
+  })
+  return `${message}\n\nLaTeX enviado al compilador (${artifact.title}):\n\n${body}`
 }
 
 async function copyTextToClipboard(value) {
@@ -1835,6 +1854,7 @@ function clearVersionPreview(version) {
 function clearExercisePreviews() {
   clearVersionPreview(exerciseEditor.value)
   exerciseEditor.value.variaciones.forEach(clearVersionPreview)
+  ;[exerciseEditor.value, ...exerciseEditor.value.variaciones].forEach((version) => (version.archivos || []).forEach(revokePendingImage))
 }
 
 function setActivePreviewPdf(documentType, url) {
@@ -2350,6 +2370,7 @@ function watchExerciseCompilationInList(exerciseId) {
   const unsubscribe = onSnapshot(doc(db, 'ejercicios', exerciseId), (snapshot) => {
     const normalized = updateExerciseListFromSnapshot(snapshot)
     const status = normalized?.compilation?.status
+    if ([normalized, ...(normalized?.variaciones || [])].some((version) => ['queued', 'compiling'].includes(version?.compilation?.status))) return
     if (!['ready', 'error'].includes(status)) return
     exerciseCompilationListWatches.get(exerciseId)?.()
     exerciseCompilationListWatches.delete(exerciseId)
@@ -2373,7 +2394,9 @@ function watchExerciseCompilation(exerciseId) {
     exerciseEditor.value.revision = normalized.revision
     copyCompiledStructureReferences(exerciseEditor.value.structure, normalized.structure)
     normalized.variaciones.forEach((variation, index) => {
-      const current = exerciseEditor.value.variaciones[index]
+      const storedVariation = snapshot.data().variaciones?.[index]
+      const current = exerciseEditor.value.variaciones.find((entry) => entry.id === variation.id)
+        || (!storedVariation?.id ? exerciseEditor.value.variaciones.find((entry) => entry.sourceVariationIndex === index) : null)
       if (!current) return
       current.pdf = variation.pdf
       current.compilation = variation.compilation
@@ -2381,14 +2404,16 @@ function watchExerciseCompilation(exerciseId) {
       copyCompiledStructureReferences(current.structure, variation.structure)
     })
 
-    const target = selectedExerciseVersion.value === 0
-      ? normalized
-      : normalized.variaciones[selectedExerciseVersion.value - 1]
+    const activeVersion = activeExerciseVersion.value
+    const target = selectedExerciseVersion.value === 0 ? normalized
+      : normalized.variaciones.find((entry) => entry.id === activeVersion.id)
+        || (Number.isInteger(activeVersion.sourceVariationIndex) ? normalized.variaciones[activeVersion.sourceVariationIndex] : null)
     const status = target?.compilation?.status || normalized.compilation?.status || 'ready'
     exerciseCompilationStatus.value = status
     if (status === 'error') {
       compilerError.value = compilationErrorWithLatex(
         target?.compilation?.error || normalized.compilation?.error || 'No se ha podido compilar el ejercicio.',
+        { source: target?.enunciado || activeExerciseCode.value, structure: target?.structure || activeExerciseStructure.value },
       )
     }
     if (['ready', 'error'].includes(status)) isCompiling.value = false
@@ -2440,6 +2465,7 @@ function mountLatexEditor() {
           basicSetup,
           latexEditorTheme,
           latexHighlighting,
+          latexEditorTools,
           hiddenExerciseMarkers,
           latex({ enableAutocomplete: false, autoCloseBrackets: true, autoCloseTags: true, enableTooltips: true }),
           autocompletion({ override: [latexCompletion] }),
@@ -2447,8 +2473,6 @@ function mountLatexEditor() {
             indentWithTab,
             { key: 'Mod-s', run: () => { refreshLatexRender(); return true } },
             { key: 'Ctrl-s', run: () => { refreshLatexRender(); return true } },
-            { key: 'Mod-f', run: () => { formatExerciseLatex(); return true } },
-            { key: 'Ctrl-f', run: () => { formatExerciseLatex(); return true } },
           ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
@@ -2461,6 +2485,7 @@ function mountLatexEditor() {
       }),
       parent: latexEditorHost.value,
     })
+    setLatexDiagnostics(latexCodeEditor, compilerError.value && !exerciseDiagnosticsStale.value ? exerciseDiagnostics.value : [])
   })
 }
 
@@ -2475,6 +2500,7 @@ function mountTemplateEditor() {
           basicSetup,
           latexEditorTheme,
           latexHighlighting,
+          latexEditorTools,
           latex({ enableAutocomplete: false, autoCloseBrackets: true, autoCloseTags: true, enableTooltips: true }),
           autocompletion({ override: [templateLatexCompletion] }),
           keymap.of([indentWithTab]),
@@ -2486,6 +2512,18 @@ function mountTemplateEditor() {
       parent: templateEditorHost.value,
     })
   })
+}
+
+watch([compilerError, exerciseDiagnosticsStale, exerciseDiagnostics], () => {
+  setLatexDiagnostics(latexCodeEditor, compilerError.value && !exerciseDiagnosticsStale.value ? exerciseDiagnostics.value : [])
+})
+
+async function locateExerciseError(error = exerciseDiagnostics.value.find((item) => item.line)) {
+  exerciseEditorTab.value = 'code'
+  await nextTick()
+  if (!latexCodeEditor) { mountLatexEditor(); await nextTick() }
+  if (error && !exerciseDiagnosticsStale.value) goToLatexLine(latexCodeEditor, error.line, error.column)
+  else latexCodeEditor?.focus()
 }
 
 function openNewTemplate() {
@@ -2823,125 +2861,8 @@ function mainPartPdfUrl(solved = false) {
     : structure.previewPdfEnunciado || structure.pdfenunciado || ''
 }
 
-const latexCompactEnvironments = new Set([
-  'align', 'align*', 'aligned', 'alignedat', 'array', 'bmatrix', 'bmatrix*',
-  'cases', 'det', 'detp', 'gather', 'gather*', 'gathered', 'matrix', 'matrix*',
-  'matriz', 'matrizb', 'matrizp', 'matrizv', 'pmatrix', 'pmatrix*', 'smallmatrix',
-  'split', 'Vmatrix', 'vmatrix',
-])
-const latexVerbatimEnvironments = new Set(['Verbatim', 'lstlisting', 'minted', 'verbatim'])
-
-function latexEnvironmentTokens(line) {
-  return [...line.matchAll(/\\(begin|end)\s*\{([^{}]+)\}/g)].map((match) => ({
-    type: match[1],
-    name: match[2].trim(),
-  }))
-}
-
-function removeLatexEnvironment(stack, name) {
-  const index = stack.lastIndexOf(name)
-  if (index >= 0) stack.splice(index, 1)
-}
-
-function compactLatexBlockIsOpen(stack) {
-  return stack.some((name) => latexCompactEnvironments.has(name))
-}
-
-function prettyPrintLatex(source) {
-  const indent = '    '
-  const stack = []
-  const output = []
-  let pendingBlankLine = false
-  let verbatimEnvironment = null
-
-  for (const originalLine of String(source || '').replace(/\r\n?/g, '\n').split('\n')) {
-    const trimmed = originalLine.trim()
-
-    if (verbatimEnvironment) {
-      const closesVerbatim = latexEnvironmentTokens(originalLine)
-        .some(({ type, name }) => type === 'end' && name === verbatimEnvironment)
-      if (!closesVerbatim) {
-        output.push(originalLine)
-        continue
-      }
-      removeLatexEnvironment(stack, verbatimEnvironment)
-      output.push(`${indent.repeat(stack.length)}${trimmed}`)
-      verbatimEnvironment = null
-      continue
-    }
-
-    if (!trimmed) {
-      if (output.length && !compactLatexBlockIsOpen(stack)) pendingBlankLine = true
-      continue
-    }
-
-    const tokens = latexEnvironmentTokens(trimmed)
-    const leadingEnds = []
-    let remainingPrefix = trimmed
-    while (true) {
-      const match = remainingPrefix.match(/^\\end\s*\{([^{}]+)\}\s*/)
-      if (!match) break
-      const name = match[1].trim()
-      leadingEnds.push(name)
-      removeLatexEnvironment(stack, name)
-      remainingPrefix = remainingPrefix.slice(match[0].length)
-    }
-
-    if (pendingBlankLine) {
-      const closesCompactBlock = leadingEnds.some((name) => latexCompactEnvironments.has(name))
-      const followsExerciseHeader = /^\\ej\b.*\\\\$/.test(String(output.at(-1) || '').trim())
-      if (!closesCompactBlock && !followsExerciseHeader && output.at(-1) !== '') output.push('')
-      pendingBlankLine = false
-    }
-
-    output.push(`${indent.repeat(stack.length)}${trimmed}`)
-
-    let skippedLeadingEnds = 0
-    for (const token of tokens) {
-      if (token.type === 'end' && skippedLeadingEnds < leadingEnds.length) {
-        skippedLeadingEnds += 1
-        continue
-      }
-      if (token.type === 'begin') {
-        stack.push(token.name)
-        if (latexVerbatimEnvironments.has(token.name)) verbatimEnvironment = token.name
-      } else {
-        removeLatexEnvironment(stack, token.name)
-      }
-    }
-  }
-
-  return output.join('\n')
-}
-
-function formattedCursorOffset(text, lineNumber, column) {
-  const lines = text.split('\n')
-  const targetLine = Math.min(Math.max(lineNumber, 1), lines.length)
-  const lineStart = lines.slice(0, targetLine - 1).reduce((total, line) => total + line.length + 1, 0)
-  return lineStart + Math.min(column, lines[targetLine - 1].length)
-}
-
 function formatExerciseLatex() {
-  if (!latexCodeEditor) return
-  const source = latexCodeEditor.state.doc.toString()
-  const formatted = prettyPrintLatex(source)
-  if (formatted === source) {
-    latexCodeEditor.focus()
-    return
-  }
-
-  const selection = latexCodeEditor.state.selection.main
-  const anchorLine = latexCodeEditor.state.doc.lineAt(selection.anchor)
-  const headLine = latexCodeEditor.state.doc.lineAt(selection.head)
-  latexCodeEditor.dispatch({
-    changes: { from: 0, to: source.length, insert: formatted },
-    selection: {
-      anchor: formattedCursorOffset(formatted, anchorLine.number, selection.anchor - anchorLine.from),
-      head: formattedCursorOffset(formatted, headLine.number, selection.head - headLine.from),
-    },
-    scrollIntoView: true,
-  })
-  latexCodeEditor.focus()
+  formatLatexEditor(latexCodeEditor)
 }
 
 function ensureExerciseId() {
@@ -2950,7 +2871,8 @@ function ensureExerciseId() {
 }
 
 function nextExerciseImageNumber() {
-  const numbers = [...exerciseEditor.value.archivos, ...pendingDeletedAttachments]
+  const versions = [exerciseEditor.value, ...exerciseEditor.value.variaciones]
+  const numbers = [...versions.flatMap((version) => [...(version.archivos || []), ...(version.imageHistory || [])]), ...pendingDeletedAttachments]
     .map((file) => Number(String(file.latexName || '').match(/^imagen(\d+)$/)?.[1]) || 0)
   return Math.max(0, ...numbers) + 1
 }
@@ -2965,6 +2887,8 @@ async function uploadExerciseFiles(event, { openGenerator = false } = {}) {
   isUploadingExerciseFiles.value = true
   exercisesError.value = ''
   let uploadedCount = 0
+  const version = activeExerciseVersion.value
+  if (!Array.isArray(version.archivos)) version.archivos = normalizeExerciseFiles(activeExerciseFiles.value)
   try {
     const exerciseId = ensureExerciseId()
     const rejected = []
@@ -2977,14 +2901,14 @@ async function uploadExerciseFiles(event, { openGenerator = false } = {}) {
       }
       const latexName = `imagen${imageNumber}`
       const compilerName = `${latexName}.${extension}`
-      const path = `ejercicios/${exerciseId}/archivos/${compilerName}`
+      const path = version === exerciseEditor.value ? `ejercicios/${exerciseId}/archivos/${compilerName}` : `ejercicios/${exerciseId}/variantes/${version.id}/archivos/${compilerName}`
       const reference = storageRef(storage, path)
       await uploadBytes(reference, file, {
         contentType: file.type || 'application/octet-stream',
         customMetadata: { exerciseId, originalName: file.name, latexName, compilerName },
       })
       const url = await getDownloadURL(reference)
-      exerciseEditor.value.archivos.push({
+      version.archivos.push({
         id: latexName,
         nombre: compilerName,
         originalName: file.name,
@@ -3036,7 +2960,7 @@ function arrayBufferBase64(buffer) {
 async function exerciseFilesForAi() {
   const files = []
   let encodedSize = 0
-  for (const file of normalizeExerciseFiles(exerciseEditor.value.archivos).slice(0, 6)) {
+  for (const file of normalizeExerciseFiles(activeExerciseFiles.value).slice(0, 6)) {
     const response = await fetch(file.url)
     if (!response.ok) throw new Error(`No se ha podido leer ${file.originalName || file.nombre}.`)
     const blob = await response.blob()
@@ -3098,7 +3022,7 @@ function generatedExerciseStructure(generated) {
 }
 
 async function generateExerciseFromFiles() {
-  if (!exerciseEditor.value.archivos.length || isGeneratingExerciseFromFiles.value) return
+  if (!activeExerciseFiles.value.length || isGeneratingExerciseFromFiles.value) return
   if (!isAppCheckConfigured) {
     exercisesError.value = 'App Check no está configurado en este entorno.'
     return
@@ -3173,7 +3097,8 @@ async function generateExerciseFromFiles() {
 }
 
 async function removeExerciseFile(file) {
-  exerciseEditor.value.archivos = exerciseEditor.value.archivos.filter((item) => item.path !== file.path)
+  activeExerciseVersion.value.archivos = activeExerciseFiles.value.filter((item) => item.path !== file.path)
+  if (file.pendingDataUrl) { revokePendingImage(file); return }
   if (sessionUploadedAttachmentPaths.has(file.path)) {
     sessionUploadedAttachmentPaths.delete(file.path)
     try { await deleteObject(storageRef(storage, file.path)) } catch (error) { console.warn('No se ha podido retirar el archivo recién subido:', error) }
@@ -3184,8 +3109,18 @@ async function removeExerciseFile(file) {
 
 async function cleanupSessionExerciseFiles() {
   const paths = [...sessionUploadedAttachmentPaths]
+  let protectedPaths = new Set()
+  if (exerciseEditor.value.id && paths.length) {
+    try {
+      const snapshot = await getDoc(doc(db, 'ejercicios', exerciseEditor.value.id))
+      if (snapshot.exists()) protectedPaths = exerciseStoredImagePaths(snapshot.data())
+    } catch (error) {
+      console.warn('No se borran adjuntos hasta confirmar si el ejercicio llegó a guardarse:', error)
+      return
+    }
+  }
   sessionUploadedAttachmentPaths.clear()
-  await Promise.all(paths.map(async (path) => {
+  await Promise.all(paths.filter((path) => !protectedPaths.has(path)).map(async (path) => {
     try { await deleteObject(storageRef(storage, path)) } catch (error) { console.warn('No se ha podido limpiar un archivo temporal:', error) }
   }))
 }
@@ -3222,6 +3157,9 @@ function deleteSelectedVariation() {
   const index = selectedExerciseVersion.value - 1
   if (index < 0 || index >= exerciseEditor.value.variaciones.length) return
   const [deletedVariation] = exerciseEditor.value.variaciones.splice(index, 1)
+  const archive = [...(deletedVariation.archivos || []), ...(deletedVariation.imageHistory || [])].map((file) => archivedImage(file)).filter(Boolean)
+  exerciseEditor.value.imageHistory = [...(exerciseEditor.value.imageHistory || []), ...archive]
+  ;(deletedVariation.archivos || []).forEach(revokePendingImage)
   clearVersionPreview(deletedVariation)
   selectedExerciseVersion.value = 0
   exercisePreviewTab.value = 'statement'
@@ -3414,76 +3352,99 @@ function deleteExercisePartSolution(apartadoIndex) {
   }
 }
 
+async function openVariationGeneration(experimental = false) {
+  if (isGeneratingVariation.value || isSavingExercise.value) return
+  exerciseVisuals.form.experimental = experimental === true
+  exerciseVisuals.form.instructions = ''
+  pendingVisualVariant.value = null
+  exercisesError.value = ''
+  exerciseVisuals.generationDialog = true
+  if (!exerciseVisuals.catalog.length) await exerciseVisuals.loadCatalog()
+}
+
 async function addExerciseVariation(experimental = false) {
   const original = exerciseEditor.value.enunciado.trim()
   if (!original || isGeneratingVariation.value) return
-  if (!isAppCheckConfigured) {
-    exercisesError.value = 'App Check no está configurado en este entorno. Añade VITE_FIREBASE_APP_CHECK_KEY y registra el token de depuración de localhost en Firebase.'
-    return
-  }
+  if (!isAppCheckConfigured) { exercisesError.value = 'App Check no está configurado en este entorno.'; return }
+  const editor = exerciseEditor.value
+  const model = selectedAiModel.value
+  const imageOutput = exerciseVisuals.imageModels.length ? 'raster' : 'tikz'
+  const cacheKey = JSON.stringify([editor.id, original, model, experimental === true, exerciseVisuals.form.imageMode, imageOutput])
   isGeneratingVariation.value = true
   const startedAt = Date.now()
-  let progressPhase = experimental ? 'Analizando ejercicio' : 'Generando'
-  const updateProgressText = () => {
-    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
-    variationProgressText.value = `${progressPhase} · ${elapsedSeconds} s`
-  }
+  let progressPhase = 'Preparando referencia visual'
+  const updateProgressText = () => { variationProgressText.value = progressPhase + ' · ' + Math.floor((Date.now() - startedAt) / 1000) + ' s' }
   updateProgressText()
-  const progressTimer = window.setInterval(updateProgressText, 1_000)
+  const timer = window.setInterval(updateProgressText, 1000)
   exercisesError.value = ''
+  let generatedFile = null
   try {
-    const generateVariation = httpsCallable(functions, 'generateExerciseVariation', { timeout: 120_000 })
-    const response = await generateVariation({
-      enunciado: original,
-      tags: exerciseEditor.value.tags,
-      variaciones: exerciseEditor.value.variaciones.map((variation) => variation.enunciado),
-      model: selectedAiModel.value,
-      experimental,
-      curriculum: exerciseAiCurriculum(),
-    })
-    progressPhase = experimental ? 'Aplicando estrategia' : 'Preparando variante'
+    let draft = pendingVisualVariant.value?.key === cacheKey ? pendingVisualVariant.value : null
+    if (!draft) {
+      const references = await exerciseVisuals.referenceImages(editor)
+      progressPhase = experimental ? 'Analizando el ejercicio y sus imágenes' : 'Generando ejercicio'
+      updateProgressText()
+      const response = await httpsCallable(functions, 'generateExerciseVariation', { timeout: 125000 })({
+        enunciado: original, tags: editor.tags, variaciones: editor.variaciones.map((variation) => variation.enunciado),
+        model, experimental: experimental === true, curriculum: exerciseAiCurriculum(),
+        visualGeneration: true, imageMode: exerciseVisuals.form.imageMode,
+        imageOutput,
+        imageInstructions: exerciseVisuals.form.instructions, referenceImages: references,
+      })
+      const enunciado = response.data?.enunciado?.trim()
+      if (!enunciado) throw new Error('La IA no ha devuelto un ejercicio válido.')
+      draft = { key: cacheKey, id: crypto.randomUUID(), enunciado, model: response.data.model || model, imagePlan: response.data.imagePlan || { needed: false }, references }
+      pendingVisualVariant.value = draft
+    }
+    const variation = normalizeVariation({ id: draft.id, enunciado: draft.enunciado, modelo: draft.model, archivos: [], visualGeneration: { imagePlan: draft.imagePlan, sourceExerciseId: editor.id || null, createdAt: new Date().toISOString() } })
+    variation.archivos = normalizeExerciseFiles(referencedImageFiles(variation.enunciado, editor.archivos))
+    if (draft.imagePlan.needed) {
+      if (!exerciseVisuals.form.imageModel) throw new Error('El ejercicio está preparado. Selecciona un generador para crear su imagen.')
+      progressPhase = 'Generando la imagen'
+      updateProgressText()
+      generatedFile = await exerciseVisuals.prepareVariationImage(draft.imagePlan, variation, draft.references)
+      variation.enunciado = replaceGraphicReference(variation.enunciado, 'neope_generated_1', generatedFile.latexName)
+      variation.archivos.push(generatedFile)
+      variation.structure = mergeExerciseStructure(parseExerciseLatex(variation.enunciado), variation.structure)
+    }
+    if (exerciseEditor.value !== editor) throw new Error('El ejercicio ha cambiado. Vuelve a abrir la generación sobre el ejercicio actual.')
+    editor.variaciones.push(variation)
+    generatedFile = null
+    pendingVisualVariant.value = null
+    exerciseVisuals.generationDialog = false
+    selectExerciseVersion(editor.variaciones.length)
+    progressPhase = 'Compilando la previsualización'
     updateProgressText()
-    const enunciado = response.data?.enunciado?.trim()
-    if (!enunciado) throw new Error('La IA no ha devuelto un ejercicio válido.')
-    exerciseEditor.value.variaciones.push(normalizeVariation({
-      enunciado,
-      modelo: response.data?.model || selectedAiModel.value,
-    }))
-    selectExerciseVersion(exerciseEditor.value.variaciones.length)
-    progressPhase = 'Compilando PDF'
-    updateProgressText()
-    await compileExercisePreviews(enunciado, exercisePreambleName())
+    await compileExercisePreviews(variation.enunciado, exercisePreambleName())
   } catch (error) {
-    const isAppCheckError = error.code === 'functions/unauthenticated'
-      || error.code === 'functions/failed-precondition'
-    exercisesError.value = isAppCheckError
-      ? 'Firebase ha rechazado la llamada de App Check. Registra el token de depuración de localhost en la consola de Firebase y vuelve a intentarlo.'
-      : error.message || 'No se ha podido generar la variación con IA.'
-    console.error('Error al generar variación:', error)
+    if (generatedFile) revokePendingImage(generatedFile)
+    exercisesError.value = error.message || 'No se ha podido generar la variante con su imagen.'
   } finally {
-    window.clearInterval(progressTimer)
+    window.clearInterval(timer)
     isGeneratingVariation.value = false
     variationProgressText.value = ''
   }
 }
 
-function exerciseCompileAssets(files = exerciseEditor.value.archivos) {
-  return Object.fromEntries(normalizeExerciseFiles(files)
-    .filter((file) => file.compilerName && file.url && exerciseImageExtension(file))
-    .map((file) => [file.compilerName, { url: file.url }]))
+function exerciseCompileAssets(files = activeExerciseFiles.value) {
+  return exerciseImageAssets(normalizeExerciseFiles(files).filter((file) => exerciseImageExtension(file)))
 }
 
 async function compilePdfBlob(code, preambleName, assets = exerciseCompileAssets(), profile = exerciseRenderProfiles.statement) {
-  const response = await compilerRequest('/compile', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      code: codeForPreamble(removeBlankLinesInsideAligned(code), profile),
-      preamble_name: preambleName,
-      assets,
-    }),
-  })
-  return response.blob()
+  const body = codeForPreamble(removeBlankLinesInsideAligned(code), profile)
+  const editorSource = activeExerciseCode.value
+  const preamble = templates.value.find((template) => template.archivo === preambleName)?.codigo || ''
+  try {
+    const response = await compilerRequest('/compile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: body, preamble_name: preambleName, assets }),
+    })
+    return await response.blob()
+  } catch (error) {
+    error.latexContext = { body, preambleName, preamble, editorSource }
+    throw error
+  }
 }
 
 async function runWithConcurrency(items, limit, task) {
@@ -3671,16 +3632,24 @@ function compilationStateAfterSave(previous = {}, revision, sourceChanged = true
   }
 }
 
-function structuredVariationForSave(variation, previous = {}) {
+function structuredVariationForSave(variation, previous = {}, previousExercise = {}) {
   const analysis = analyzeExerciseLatex(variation.enunciado || '', variation.structure || {})
   if (!analysis.valid) throw new Error('La variante contiene una estructura LaTeX incompleta.')
   variation.analysis = { valid: true, ambiguous: analysis.ambiguous }
   variation.structure = mergeExerciseStructure(analysis.structure, variation.structure || {})
   const candidate = exerciseDocumentStructure(variation.structure, previous, (Number(previous.revision) || 0) + 1)
+  const files = normalizeExerciseFiles(versionImageFiles(exerciseEditor.value, variation))
+  const previousFiles = versionImageFiles(previousExercise, previous)
   const sourceChanged = Number(previous.schemaVersion || 0) < 4 || compilationSource(candidate) !== compilationSource(previous)
+    || imageAssetsSignature(files) !== imageAssetsSignature(previousFiles)
   const revision = sourceChanged ? (Number(previous.revision) || 0) + 1 : Number(previous.revision) || 1
   const persisted = {
     ...exerciseDocumentStructure(variation.structure, previous, revision),
+    id: variation.id || previous.id || crypto.randomUUID(),
+    archivos: files,
+    imageHistory: variation.imageHistory || [],
+    figureGenerations: variation.figureGenerations || [],
+    visualGeneration: variation.visualGeneration || previous.visualGeneration || null,
     modelo: variation.modelo || previous.modelo || null,
     solucionIA: Boolean(variation.solucionIA),
     compilation: compilationStateAfterSave(previous.compilation, revision, sourceChanged),
@@ -3693,33 +3662,75 @@ function structuredVariationForSave(variation, previous = {}) {
   return persisted
 }
 
+function exerciseStoredImagePaths(exercise = {}) {
+  return new Set([exercise, ...(exercise.variaciones || [])].flatMap((version) => [...(version.archivos || []), ...(version.imageHistory || [])]).map((file) => file.path).filter(Boolean))
+}
+
+async function stagePendingExerciseImages() {
+  const exerciseId = ensureExerciseId()
+  for (const [index, version] of [exerciseEditor.value, ...exerciseEditor.value.variaciones].entries()) {
+    if (!Array.isArray(version.archivos)) continue
+    if (index > 0 && !version.id) version.id = crypto.randomUUID()
+    for (const file of version.archivos) {
+      if (!file.pendingDataUrl) continue
+      const blob = await (await fetch(file.pendingDataUrl)).blob()
+      const extension = file.type === 'image/jpeg' ? 'jpg' : 'png'
+      const variantId = index === 0 ? 'original' : version.id
+      const path = 'ejercicios/' + exerciseId + '/variantes/' + variantId + '/imagenes/' + file.id + '.' + extension
+      const reference = storageRef(storage, path)
+      await uploadBytes(reference, blob, { contentType: file.type, customMetadata: { exerciseId, variantId, model: file.generation?.model || '', compilerName: file.compilerName } })
+      sessionUploadedAttachmentPaths.add(path)
+      const url = await getDownloadURL(reference)
+      revokePendingImage(file)
+      file.path = path
+      file.url = url
+      delete file.pendingDataUrl
+    }
+  }
+}
+
 async function saveExercise(options = {}) {
   const closeAfterSave = options?.closeAfterSave !== false
   if (!exerciseEditor.value.enunciado.trim()) return null
   isSavingExercise.value = true
   exercisesError.value = ''
   try {
-    const reference = exerciseEditor.value.id
-      ? doc(db, 'ejercicios', exerciseEditor.value.id)
-      : doc(collection(db, 'ejercicios'))
+    const reference = doc(db, 'ejercicios', ensureExerciseId())
     const previousSnapshot = await getDoc(reference)
     const previousData = previousSnapshot.exists() ? previousSnapshot.data() : {}
     const previousCurriculum = normalizeCurriculum(previousData.curriculum)
     const code = exerciseEditor.value.enunciado
     const analysis = analyzeExerciseLatex(code, exerciseEditor.value.structure || {})
-    if (!analysis.valid) throw new Error('El código LaTeX está incompleto. Corrige las llaves o entornos antes de guardar.')
+    if (!analysis.valid) {
+      exerciseDiagnosticSource.value = code
+      exerciseDiagnostics.value = diagnoseLatexStructure(code)
+      compilerError.value = 'El código LaTeX está incompleto. Corrige las llaves o entornos antes de guardar o compilar.'
+      throw new Error(compilerError.value)
+    }
     exerciseEditor.value.analysis = { valid: true, ambiguous: analysis.ambiguous }
     const structure = mergeExerciseStructure(analysis.structure, exerciseEditor.value.structure || {})
     exerciseEditor.value.structure = structure
+    for (const variation of exerciseEditor.value.variaciones) {
+      if (!analyzeExerciseLatex(variation.enunciado || '', variation.structure || {}).valid) throw new Error('Una variante tiene código LaTeX incompleto. Corrígelo antes de guardar sus imágenes.')
+    }
+    await stagePendingExerciseImages()
     const candidateStructure = exerciseDocumentStructure(structure, previousData, (Number(previousData.revision) || 0) + 1)
     const sourceChanged = Number(previousData.schemaVersion || 0) < 4
       || compilationSource(candidateStructure) !== compilationSource(previousData)
+      || imageAssetsSignature(exerciseEditor.value.archivos) !== imageAssetsSignature(previousData.archivos || [])
     const revision = sourceChanged ? (Number(previousData.revision) || 0) + 1 : Number(previousData.revision) || 1
     const persistedStructure = exerciseDocumentStructure(structure, previousData, revision)
     const previousVariaciones = Array.isArray(previousData.variaciones) ? previousData.variaciones : []
+    const preservedPreviousVariations = new Set()
     const variaciones = exerciseEditor.value.variaciones
       .filter((variation) => variation.enunciado.trim())
-      .map((variation, index) => structuredVariationForSave(variation, previousVariaciones[index] || {}))
+      .map((variation) => {
+        const legacyPrevious = Number.isInteger(variation.sourceVariationIndex) ? previousVariaciones[variation.sourceVariationIndex] : null
+        const previous = previousVariaciones.find((entry) => entry.id && entry.id === variation.id)
+          || (legacyPrevious && !legacyPrevious.id ? legacyPrevious : null)
+        if (previous) preservedPreviousVariations.add(previous)
+        return structuredVariationForSave(variation, previous || {}, previousData)
+      })
     const nextStoragePaths = new Set([
       ...exercisePdfStoragePaths(persistedStructure),
       ...variaciones.flatMap((variation) => exercisePdfStoragePaths(variation)),
@@ -3728,7 +3739,7 @@ async function saveExercise(options = {}) {
       ...(previousData.pendingStorageCleanup || []),
       ...exercisePdfStoragePaths(previousData).filter((path) => !nextStoragePaths.has(path)),
       ...previousVariaciones
-        .slice(variaciones.length)
+        .filter((variation) => !preservedPreviousVariations.has(variation))
         .flatMap((variation) => exercisePdfStoragePaths(variation)),
     ])]
     const curriculum = {
@@ -3744,6 +3755,7 @@ async function saveExercise(options = {}) {
       curriculum,
       tags: normalizeTags(exerciseEditor.value.tags),
       archivos: normalizeExerciseFiles(exerciseEditor.value.archivos),
+      imageHistory: exerciseEditor.value.imageHistory || [],
       solucionIA: Boolean(exerciseEditor.value.solucionIA),
       variaciones,
       // Se conserva como referencia obsoleta hasta que la nueva miniatura se
@@ -3759,7 +3771,8 @@ async function saveExercise(options = {}) {
     await syncExerciseConceptIndex(reference.id, previousCurriculum.conceptIds, data.curriculum.conceptIds, batch)
     await batch.commit()
     const filesToDelete = pendingDeletedAttachments.splice(0)
-    await Promise.all(filesToDelete.map(async (file) => {
+    const preservedImages = exerciseStoredImagePaths(data)
+    await Promise.all(filesToDelete.filter((file) => !preservedImages.has(file.path)).map(async (file) => {
       try { await deleteObject(storageRef(storage, file.path)) } catch (error) { console.warn('No se ha podido eliminar un archivo retirado:', error) }
     }))
     sessionUploadedAttachmentPaths.clear()
@@ -3771,6 +3784,18 @@ async function saveExercise(options = {}) {
     selectedExerciseId.value = reference.id
     exerciseEditorBaseline.value = exerciseDraftFingerprint(savedExercise)
     if (closeAfterSave) {
+      const imageVersions = [data, ...data.variaciones]
+      for (const [index, version] of imageVersions.entries()) {
+        const hasGeneratedVisuals = version.visualGeneration || version.figureGenerations?.length || (version.archivos || []).some((file) => file.generated)
+        if (version.compilation?.status !== 'outdated' || !hasGeneratedVisuals) continue
+        try {
+          await httpsCallable(functions, 'queueExerciseCompilation', { timeout: 30000 })({ exerciseId: reference.id, variationIndex: index === 0 ? null : index - 1, mode: 'selective', preambleName: exercisePreambleName() })
+        } catch (error) {
+          exercisesError.value = 'El ejercicio y sus imágenes se han guardado, pero queda pendiente compilar su PDF. Puedes volver a compilarlo desde el editor.'
+          console.warn('No se ha podido encolar el PDF de la variante con imágenes:', error)
+        }
+      }
+      watchExerciseCompilationInList(reference.id)
       stopWatchingExerciseCompilation()
       destroyLatexEditor()
       clearExercisePreviews()
@@ -3781,6 +3806,7 @@ async function saveExercise(options = {}) {
       exerciseEditorBaseline.value = ''
     } else {
       const activeVersionIndex = selectedExerciseVersion.value
+      clearExercisePreviews()
       exerciseEditor.value = savedExercise
       selectedExerciseVersion.value = Math.min(activeVersionIndex, savedExercise.variaciones.length)
       exerciseCompilationStatus.value = 'outdated'
@@ -4999,7 +5025,7 @@ onBeforeUnmount(() => {
     <v-app-bar flat class="app-bar" height="76">
       <v-btn icon="mdi-menu" variant="text" class="d-md-none" aria-label="Abrir menú" @click="drawer = !drawer" />
       <template v-if="active === 'Ejercicios' && exerciseView === 'edit'">
-        <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back" @click="cancelExerciseEdit">Volver</v-btn>
+        <v-btn variant="text" prepend-icon="mdi-arrow-left" class="app-toolbar-back" :disabled="isSavingExercise || isGeneratingVariation || exerciseVisuals.busy || isCompiling" @click="cancelExerciseEdit">Volver</v-btn>
         <v-spacer />
         <v-btn-toggle
           :model-value="selectedExerciseVersion"
@@ -5007,6 +5033,7 @@ onBeforeUnmount(() => {
           density="compact"
           class="exercise-version-selector"
           aria-label="Variación del ejercicio"
+          :disabled="isCompiling || isSavingExercise || isGeneratingVariation || exerciseVisuals.busy || isUploadingExerciseFiles"
           @update:model-value="selectExerciseVersion"
         >
           <v-btn :value="0" aria-label="Ejercicio original">0</v-btn>
@@ -5027,7 +5054,7 @@ onBeforeUnmount(() => {
               :prepend-icon="isGeneratingVariation ? undefined : 'mdi-dice-multiple'"
               class="exercise-add-variation app-toolbar-primary-action"
               :disabled="!exerciseEditor.enunciado.trim() || isSavingExercise"
-              @click="addExerciseVariation"
+              @click="openVariationGeneration(false)"
             >
               <template v-if="isGeneratingVariation">
                 <v-progress-circular indeterminate :size="16" :width="2" />
@@ -5048,7 +5075,7 @@ onBeforeUnmount(() => {
               aria-label="Generar variación experimental"
               class="mx-2"
               :disabled="!exerciseEditor.enunciado.trim() || isSavingExercise || isGeneratingVariation"
-              @click="addExerciseVariation(true)"
+              @click="openVariationGeneration(true)"
             />
           </template>
         </v-tooltip>
@@ -5090,7 +5117,7 @@ onBeforeUnmount(() => {
             />
           </template>
         </v-tooltip>
-        <v-btn color="primary" variant="flat" prepend-icon="mdi-content-save-outline" class="app-toolbar-primary-action mr-3" :disabled="!exerciseEditor.enunciado.trim() || isDeletingExercise" :loading="isSavingExercise" @click="saveExercise">Guardar</v-btn>
+        <v-btn color="primary" variant="flat" prepend-icon="mdi-content-save-outline" class="app-toolbar-primary-action mr-3" :disabled="!exerciseEditor.enunciado.trim() || isDeletingExercise || isGeneratingVariation || exerciseVisuals.busy || isCompiling || isUploadingExerciseFiles" :loading="isSavingExercise" @click="saveExercise">Guardar</v-btn>
       </template>
       <template v-else-if="active === 'Matemáticas'">
         <v-tooltip :text="mathConceptConfigurationMode ? 'Salir de la configuración' : 'Configurar mapa de contenidos'" location="bottom">
@@ -5697,7 +5724,8 @@ onBeforeUnmount(() => {
                   <v-spacer />
                   <span v-if="exerciseEditorTab === 'contents'" class="exercise-content-toolbar-label">{{ selectedContentTargetLabel() }}</span>
                   <span v-if="exerciseEditorTab === 'grading'" class="exercise-content-toolbar-label">{{ selectedGradingTargetLabel() }}</span>
-                  <v-tooltip v-if="exerciseEditorTab === 'code'" text="Formatear código LaTeX" location="bottom">
+                  <v-btn v-if="exerciseEditorTab === 'code'" icon="mdi-magnify" size="x-small" variant="text" color="primary" title="Buscar (Ctrl/Cmd + F)" aria-label="Buscar en el código LaTeX" @click="searchLatexEditor(latexCodeEditor)" />
+                  <v-tooltip v-if="exerciseEditorTab === 'code'" text="Mejorar sangría sin cambiar saltos de línea (Alt + Mayús + F)" location="bottom">
                     <template #activator="{ props }">
                       <v-btn
                         v-bind="props"
@@ -5713,7 +5741,10 @@ onBeforeUnmount(() => {
                     </template>
                   </v-tooltip>
                 </div>
-                <div v-show="exerciseEditorTab === 'code'" ref="latexEditorHost" class="latex-editor-shell exercise-editor-shell" />
+                <div v-show="exerciseEditorTab === 'code'" class="exercise-code-workspace">
+                  <div ref="latexEditorHost" class="latex-editor-shell exercise-editor-shell" />
+                  <LatexErrorList v-if="compilerError" :diagnostics="exerciseDiagnostics" :log="compilerError" :stale="exerciseDiagnosticsStale" @locate="locateExerciseError" />
+                </div>
                 <div v-show="exerciseEditorTab === 'contents'" class="exercise-editor-curriculum">
                   <ExerciseCurriculumPicker
                     v-model="exerciseContentModel"
@@ -5742,12 +5773,12 @@ onBeforeUnmount(() => {
                       <span>Imágenes y otros recursos que podrá utilizar el código LaTeX.</span>
                     </div>
                     <div class="exercise-files-action-buttons">
-                      <v-btn v-if="exerciseEditor.archivos.length" color="primary" variant="tonal" prepend-icon="mdi-auto-fix" @click="exerciseSourceDialog = true">Generar desde archivos</v-btn>
+                      <v-btn v-if="activeExerciseFiles.length" color="primary" variant="tonal" prepend-icon="mdi-auto-fix" @click="exerciseSourceDialog = true">Generar desde archivos</v-btn>
                       <v-btn color="primary" variant="tonal" prepend-icon="mdi-paperclip-plus" :loading="isUploadingExerciseFiles" @click="openExerciseFilePicker">Añadir archivos</v-btn>
                     </div>
                   </div>
-                  <div v-if="exerciseEditor.archivos.length" class="exercise-files-list">
-                    <v-card v-for="file in exerciseEditor.archivos" :key="file.path" variant="outlined" class="exercise-file-card">
+                  <div v-if="activeExerciseFiles.length" class="exercise-files-list">
+                    <v-card v-for="file in activeExerciseFiles" :key="file.path" variant="outlined" class="exercise-file-card">
                       <v-icon :icon="file.type.startsWith('image/') ? 'mdi-file-image-outline' : 'mdi-file-outline'" color="primary" size="28" />
                       <div class="exercise-file-info">
                         <strong :title="file.originalName">{{ file.nombre }}</strong>
@@ -5790,6 +5821,9 @@ onBeforeUnmount(() => {
                           <template #activator="{ props }">
                             <v-btn v-bind="props" icon="mdi-eraser" size="x-small" variant="tonal" color="error" rounded="circle" class="exercise-segment-icon" aria-label="Eliminar todas las soluciones" :disabled="isGeneratingSolution" :loading="isDeletingSolution" @click="deleteOriginalExerciseSolution" />
                           </template>
+                        </v-tooltip>
+                        <v-tooltip v-if="selectedExerciseVersion > 0" text="Generar o regenerar la imagen de esta variante" location="bottom">
+                          <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-image-refresh-outline" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" aria-label="Regenerar imagen de la variante" :disabled="isGeneratingVariation || isSavingExercise || isCompiling || exerciseVisuals.busy" @click="exerciseVisuals.openRegeneration" /></template>
                         </v-tooltip>
                         <v-tooltip v-if="selectedExerciseVersion > 0" text="Eliminar variante" location="bottom">
                           <template #activator="{ props }">
@@ -5947,7 +5981,13 @@ onBeforeUnmount(() => {
                   Marca los argumentos del encabezado con comentarios como <code>%% grupo %%</code>, <code>%% asignatura %%</code>, <code>%% título %%</code> o <code>%% fecha %%</code>. Si una línea contiene varios argumentos, enuméralos en el mismo orden, por ejemplo <code>%% grupo, título, fecha %%</code>.
                   Los entornos y comandos opcionales del ejercicio solo se insertarán cuando estén definidos por la propia plantilla.
                 </v-alert>
-                <div ref="templateEditorHost" class="latex-editor-shell template-code-editor" />
+                <div class="template-code-workspace">
+                  <div class="template-code-actions">
+                    <v-btn prepend-icon="mdi-magnify" size="small" variant="text" @click="searchLatexEditor(templateCodeEditor)">Buscar</v-btn>
+                    <v-btn prepend-icon="mdi-format-indent-increase" size="small" variant="text" title="Mejorar sangría sin cambiar saltos de línea" @click="formatLatexEditor(templateCodeEditor)">Formatear</v-btn>
+                  </div>
+                  <div ref="templateEditorHost" class="latex-editor-shell template-code-editor" />
+                </div>
               </template>
               <div v-else class="template-editor-empty"><v-icon icon="mdi-content-duplicate" size="42" color="primary" /><p>Selecciona una plantilla o crea una nueva desde la toolbar.</p></div>
             </section>
@@ -6316,11 +6356,13 @@ onBeforeUnmount(() => {
     <v-snackbar v-model="exerciseCompilerErrorSnackbar" location="bottom" color="error" timeout="-1" class="exercise-error-snackbar">
       <div class="exercise-error-snackbar-message">{{ compilerError }}</div>
       <template #actions>
+        <v-btn variant="text" size="small" @click="locateExerciseError()">Ver errores</v-btn>
         <v-btn variant="text" size="small" @click="copyCompilerError">Copiar</v-btn>
         <v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar error de compilación" @click="exerciseCompilerErrorSnackbar = false" />
       </template>
     </v-snackbar>
     </template>
+    <ExerciseImageDialog :state="exerciseVisuals" :text-model="selectedAiModel" :text-models="aiModelOptions" :generating-variation="isGeneratingVariation" :variation-error="exercisesError" :pending-variation="Boolean(pendingVisualVariant)" @update:text-model="selectedAiModel = $event" @generate-variation="addExerciseVariation(exerciseVisuals.form.experimental)" />
     <AppErrorToast />
   </v-app>
 </template>

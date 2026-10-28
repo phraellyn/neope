@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { auth } from '../services/firebase'
 import { loadRubrics } from '../services/rubricRepository'
 import {
@@ -18,6 +18,7 @@ import {
 } from '../services/programmingRepository'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import { normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
+import { compilerDocumentSource, parseLatexDiagnostics } from '../utils/latexDiagnostics'
 import ProgrammingLatexContent from './ProgrammingLatexContent.vue'
 
 const props = defineProps({
@@ -50,6 +51,7 @@ const deleteDialog = ref(false)
 const deleteTarget = ref(null)
 const deleting = ref(false)
 const compilingContentIds = ref(new Set())
+const contentCompileErrors = reactive({})
 
 const normalized = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').replace(/[^a-z0-9]+/g, '')
 const eligibleRubrics = computed(() => rubrics.value.filter((rubric) => {
@@ -436,13 +438,16 @@ async function compileContent(day, content) {
     return
   }
   const code = programmingContentBody(content.code)
+  const editorSource = content.code || ''
+  const preamble = template.codigo
   if (!code) return
   setContentCompiling(content.id, true)
+  delete contentCompileErrors[content.id]
   try {
     await compilerRequest('/preambles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: template.archivo, content: template.codigo }),
+      body: JSON.stringify({ name: template.archivo, content: preamble }),
     })
     const response = await compilerRequest('/compile', {
       method: 'POST',
@@ -467,6 +472,12 @@ async function compileContent(day, content) {
     content.updatedAt = new Date().toISOString()
     await persist(day)
   } catch (error) {
+    contentCompileErrors[content.id] = {
+      source: editorSource,
+      log: error.message || 'No se ha podido compilar el contenido.',
+      diagnostics: parseLatexDiagnostics(error.message, { source: editorSource, compiledSource: compilerDocumentSource(preamble, code), bodyOnly: true }),
+    }
+    content.codeVisible = true
     showAppErrorToast(`${error.message || 'No se ha podido compilar el contenido.'}\n\nLaTeX enviado al compilador:\n\n${code}`)
   } finally {
     setContentCompiling(content.id, false)
@@ -669,6 +680,7 @@ defineExpose({ flush })
               :resources="day.resources"
               :editing="isEditing(day.id)"
               :compiling="compilingContentIds.has(content.id)"
+              :compilation-error="contentCompileErrors[content.id] || null"
               @update-code="setContentValue(content, 'code', $event)"
               @update-template="setContentValue(content, 'templateFile', $event)"
               @update-code-visible="setContentValue(content, 'codeVisible', $event)"

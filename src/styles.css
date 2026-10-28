@@ -668,3 +668,9 @@ body { margin: 0; background: #f8f9fe; }
   .gradebook-rubric-category > header { padding: 10px; }
   .gradebook-level-scores { grid-template-columns: 1fr; }
 }
+
+/* Herramientas del editor LaTeX: ajuste visual y diagnóstico persistente. */
+.exercise-code-workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
+.exercise-code-workspace .exercise-editor-shell { height: 100%; min-height: 0; }
+.template-code-workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.template-code-actions { display: flex; justify-content: flex-end; gap: 5px; padding: 3px 7px; background: #f1f5fa; color: #315f96; }

@@ -9,6 +9,7 @@ const props = defineProps({
   resources: { type: Array, default: () => [] },
   editing: { type: Boolean, default: false },
   compiling: { type: Boolean, default: false },
+  compilationError: { type: Object, default: null },
 })
 
 const emit = defineEmits(['update-code', 'update-template', 'update-code-visible', 'compile', 'remove'])
@@ -51,7 +52,8 @@ function imageReferenceName(resource, index) {
           @update:model-value="emit('update-template', $event)"
         />
         <v-spacer />
-        <v-tooltip text="Embellecer código (Ctrl/Cmd + F)" location="top">
+        <v-btn icon="mdi-magnify" size="small" rounded="circle" variant="text" title="Buscar (Ctrl/Cmd + F)" aria-label="Buscar en el código" @click="editor?.search?.()" />
+        <v-tooltip text="Mejorar sangría sin cambiar saltos de línea (Alt + Mayús + F)" location="top">
           <template #activator="{ props: tooltipProps }">
             <v-btn v-bind="tooltipProps" icon="mdi-format-align-left" size="small" rounded="circle" variant="text" aria-label="Embellecer código" @click="formatCode" />
           </template>
@@ -83,6 +85,9 @@ function imageReferenceName(resource, index) {
         :model-value="content.code || ''"
         :compiling="compiling"
         :show-header="false"
+        :diagnostics="compilationError?.diagnostics || []"
+        :error-log="compilationError?.log || ''"
+        :diagnostic-source="compilationError?.source ?? null"
         @update:model-value="emit('update-code', $event)"
         @compile="emit('compile')"
       />
