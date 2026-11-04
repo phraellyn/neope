@@ -10,6 +10,7 @@ import ExercisePdfPreview from './ExercisePdfPreview.vue'
 import ExerciseVariantSelector from './ExerciseVariantSelector.vue'
 import DocumentPdfPreview from './DocumentPdfPreview.vue'
 import DocumentCodeEditor from './DocumentCodeEditor.vue'
+import DocumentVariationDialog from './DocumentVariationDialog.vue'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
 import DocumentAssessmentAlignmentEditor from './DocumentAssessmentAlignmentEditor.vue'
 import DocumentQueueChildren from './DocumentQueueChildren.vue'
@@ -20,7 +21,11 @@ import { normalizeAlignedLineBreaks, normalizeDisplayMathDelimiters } from '../u
 import { canonicalFieldKey, isInternalTemplate, migrateDocumentTemplate, readDocumentTemplate, renderTemplateWrapper, splitFinalDocumentCode, templateHeader } from '../utils/documentTemplate'
 import { documentSourceContent, repairNestedLegacyDocument } from '../utils/latexDocumentSource'
 import { compilerDocumentSource, diagnoseLatexStructure, parseLatexDiagnostics } from '../utils/latexDiagnostics'
-import { graphicReferences, imageReferenceName, versionImageFiles } from '../utils/exerciseImages'
+import { graphicReferences, imageReferenceName, replaceGraphicReference, versionImageFiles, exerciseImageAssets } from '../utils/exerciseImages'
+import { exerciseVisualReferences } from '../composables/useExerciseImages'
+import { useDocumentVariation } from '../composables/useDocumentVariation'
+import { applyDocumentVariationEdits, documentExerciseRanges, documentVariationEdits, flattenVariationBlocks, matchTemplateColumnBreaks, replaceVariationBlocks, uniqueConceptIds, variationBlockCode, variationCommandBlocks } from '../utils/documentVariation'
+import { codeForCompiler as variationCompilerCode } from '../../functions/exerciseRender.js'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import { syncDocumentAssessment } from '../services/documentAssessmentRepository'
 import { assessmentExerciseModel } from '../utils/documentAssessmentMatrix'
@@ -153,6 +158,7 @@ const previewDocuments = ref([])
 const documentCode = ref('')
 const documentCodeNeedsRegeneration = ref(true)
 const finalCodes = reactive({})
+const recycledHeadersToReview = reactive({})
 const templateCompileErrors = reactive({})
 const finalCodeEditor = ref(null)
 const sourceCodeEditor = ref(null)
@@ -179,6 +185,14 @@ const viewedDocument = ref(null)
 const storedTemplateSnapshots = ref([])
 const viewerAssessmentExercises = ref([])
 const viewerAssessmentLoading = ref(false)
+const documentVariation = reactive(useDocumentVariation({
+  call: async (name, payload, timeout) => (await httpsCallable(functions, name, { timeout })(payload)).data,
+  model: documentAiModel, prepare: prepareDocumentVariation, sourceFor: documentVariationSource,
+  visualReferences: documentVariationReferences, snapshotFor: documentVariationSnapshot,
+  compileExercise: compileDocumentVariationExercise, compileDocuments: compileDocumentVariationPreviews,
+  accept: acceptDocumentVariation, fingerprint: documentFingerprint,
+  onBusy: (busy) => emit('busy-change', busy),
+}))
 const assessmentAlignmentDialog = ref(false)
 const queueStructureCache = new WeakMap()
 const grayscaleLogoCache = new Map()
@@ -192,24 +206,31 @@ function emptyCurriculum() {
 
 function sourceOptionsFor(type, overrides = {}) {
   const previous = documentContent.value.source.options || {}
+  const shared = {
+    ...(previous.variation ? { variation: previous.variation } : {}),
+    ...(previous.recycledFromDocumentId ? { recycledFromDocumentId: previous.recycledFromDocumentId } : {}),
+    ...(previous.retainedAssets ? { retainedAssets: previous.retainedAssets } : {}),
+  }
   if (type === DOCUMENT_CONTENT_SOURCE_TYPES.LATEX) {
-    return { code: String(overrides.code ?? sourceLatexDraft.value ?? previous.code ?? '') }
+    return { ...shared, code: String(overrides.code ?? sourceLatexDraft.value ?? previous.code ?? '') }
   }
   if ([DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(type)) {
     return {
+      ...shared,
       code: String(overrides.code ?? sourceLatexDraft.value ?? previous.code ?? ''),
       files: Array.isArray(overrides.files) ? overrides.files : (Array.isArray(previous.files) ? previous.files : []),
     }
   }
   if (type === DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM) {
     return {
+      ...shared,
       course: documentCurriculum.value.course || null,
       subjectId: documentCurriculum.value.subjectId || null,
       conceptIds: [...new Set(documentCurriculum.value.conceptIds || [])],
       competencial: Boolean(documentCurriculum.value.competencial),
     }
   }
-  return {}
+  return shared
 }
 
 function setDocumentSource(type, options = null) {
@@ -858,7 +879,7 @@ const workflowState = computed(() => ({
   step: currentStep.value,
   canContinue: canContinue.value,
   canGoBack: currentStep.value > 1,
-  isCompiling: isCompiling.value || isGeneratingContent.value,
+  isCompiling: isCompiling.value || isGeneratingContent.value || documentVariation.state.busy,
   isSaving: isSaving.value,
   totalSteps: lastStep.value,
   canSave: currentStep.value === lastStep.value && Boolean(previewUrl.value) && !isCompiling.value,
@@ -1256,6 +1277,253 @@ function conceptAncestors(conceptId) {
     current = current.parentId ? byId.get(current.parentId) : null
   }
   return ids
+}
+
+const copyVariationData = (value) => JSON.parse(JSON.stringify(value))
+
+async function openDocumentVariation(documentData = null) {
+  if (isCompiling.value || isSaving.value || isGeneratingContent.value || documentVariation.state.busy) return
+  if (documentData) {
+    if (workflowState.value.dirty && !window.confirm('Hay cambios sin guardar. ¿Quieres descartarlos y abrir este documento?')) return
+    editDocument(documentData)
+    if (selectedDocumentId.value !== documentData.id) return
+  }
+  await documentVariation.open()
+}
+
+async function prepareDocumentVariation() {
+  if (!selectedTemplates.value.length) throw new Error('Selecciona primero las plantillas del documento.')
+  const templates = copyVariationData(selectedTemplates.value)
+  const originals = templates.map((template) => ({ template, code: activeDocumentCode(template) }))
+  const toolCommands = templates.flatMap((template) => template.metadata.tools.flatMap((tool) => String(tool.code || '').trim().match(/^\\([A-Za-z@]+)\b/)?.[1] || []))
+  const toolEnvironments = templates.flatMap((template) => template.metadata.tools.flatMap((tool) => [...String(tool.begin || '').matchAll(/\\begin\s*\{([^}]+)\}/g)].map((match) => match[1])))
+  const rangeOptions = { commands: toolCommands, environments: toolEnvironments }
+  let blocks = copyVariationData(exerciseQueue.value)
+  if (!flattenVariationBlocks(blocks).length) {
+    const ranges = documentExerciseRanges(originals[0].code, rangeOptions)
+    const files = await Promise.all(sourceFiles.value.map(async (file) => ({
+      id: file.id, compilerName: file.compilerName, nombre: file.name, path: file.path || '',
+      url: file.url || file.previewUrl || '', type: file.contentType || file.file?.type || '', latexName: imageReferenceName(file.compilerName),
+      ...(file.file ? { pendingDataUrl: `data:${file.contentType || file.file.type};base64,${binaryBase64(await file.file.arrayBuffer())}` } : {}),
+    })))
+    blocks = ranges.map((range, index) => {
+      const structure = parseExerciseLatex(range.code)
+      const id = `document-original-${index}-${crypto.randomUUID()}`
+      return createExerciseDocumentBlock(id, { snapshot: {
+        id, enunciado: range.code, structure, archivos: files, variaciones: [],
+      }, metrics: metricsForVersion({ structure }, 0) })
+    })
+  }
+  const flat = flattenVariationBlocks(blocks)
+  if (!flat.length || flat.length > 40) throw new Error('La copia con IA necesita entre 1 y 40 ejercicios con comandos \\ej.')
+  const slots = []
+  for (const block of flat) {
+    let root = block.snapshot || props.exercises.find((exercise) => exercise.id === block.exerciseId)
+    if (!root) {
+      const stored = await getDoc(doc(db, 'ejercicios', block.exerciseId))
+      if (stored.exists()) root = { id: stored.id, ...stored.data() }
+    }
+    if (!root) throw new Error('No se encuentra uno de los ejercicios originales ni una copia de su contenido.')
+    const version = activeVersion(root, block.version)
+    const structure = copyVariationData(versionStructure(root, block.version))
+    if (block.metrics) {
+      if (structure.apartados.length) structure.apartados.forEach((part, index) => {
+        part.puntuacion = Number(block.metrics.apartados?.[index]?.puntuacion) || 0
+        part.tiempo = Number(block.metrics.apartados?.[index]?.tiempo) || 0
+      })
+      else { structure.puntuacion = block.metrics.puntuacion; structure.tiempo = block.metrics.tiempo }
+    }
+    const snapshot = { ...copyVariationData(root), ...copyVariationData(version), id: block.exerciseId,
+      structure: aggregateExerciseStructure(structure), archivos: copyVariationData(versionImageFiles(root, version)), variaciones: [] }
+    snapshot.enunciado = buildExerciseLatex(snapshot.structure, { preserveApartadosEnvironment: true })
+    const item = { ...block, snapshot, version: 0 }
+    slots.push({ slotId: block.blockId, sourceExerciseId: block.generated ? null : block.exerciseId,
+      root: snapshot, item, structure: snapshot.structure, latex: snapshot.enunciado,
+      conceptIds: uniqueConceptIds([...(snapshot.structure.contenidos || []), ...(snapshot.curriculum?.conceptIds || [])]),
+      metrics: block.metrics || metricsForVersion(snapshot, 0) })
+  }
+  const descriptors = originals.map(({ template, code }) => ({
+    template, code,
+    edits: documentVariationEdits(code, slots.map((slot) => ({ slotId: slot.slotId, code: queueExerciseCode(slot.item, template) })), rangeOptions),
+  }))
+  // The final editable code takes precedence over stale bank snapshots.
+  const richest = descriptors.find((entry) => templateOption(entry.template, 'includeSolutions', false)) || descriptors[0]
+  for (const slot of slots) {
+    const edit = richest.edits.find((entry) => entry.slotId === slot.slotId)
+    let actual = richest.code.slice(edit.from, edit.to).replace(/^% neope:document-block[^\r\n]*(?:\r?\n|$)/gm, '').replace(/^\s*\\(?:salto|newpage)\b\s*/, '')
+    slot.root.archivos.forEach((file, index) => {
+      actual = replaceGraphicReference(actual, documentExerciseAssetName(slot.root, file, index), file.latexName)
+      actual = replaceGraphicReference(actual, legacyDocumentExerciseAssetName(slot.root, file, index), file.latexName)
+    })
+    const parsed = mergeExerciseStructure(parseExerciseLatex(actual), slot.structure)
+    if (!templateOption(richest.template, 'includeSolutions', false)) {
+      parsed.solucion = slot.structure.solucion
+      parsed.apartados.forEach((part, index) => { part.solucion = slot.structure.apartados[index]?.solucion || '' })
+    }
+    if (!templateOption(richest.template, 'includeAnswers', false)) {
+      parsed.respuesta = slot.structure.respuesta
+      parsed.apartados.forEach((part, index) => { part.respuesta = slot.structure.apartados[index]?.respuesta || '' })
+    }
+    parsed.tiempo = slot.structure.tiempo
+    parsed.apartados.forEach((part, index) => { part.tiempo = slot.structure.apartados[index]?.tiempo || 0 })
+    slot.structure = aggregateExerciseStructure(parsed)
+    slot.latex = buildExerciseLatex(slot.structure, { preserveApartadosEnvironment: true })
+    slot.metrics = metricsForVersion({ structure: slot.structure }, 0)
+    slot.root.structure = slot.structure; slot.root.enunciado = slot.latex
+    slot.item = { ...slot.item, metrics: slot.metrics, snapshot: slot.root }
+  }
+  blocks = replaceVariationBlocks(blocks, new Map(slots.map((slot) => [slot.slotId, slot.item])))
+  const curriculum = effectiveGenerationCurriculum()
+  curriculum.course ||= slots[0]?.root.curriculum?.course || ''
+  curriculum.subjectId ||= slots[0]?.root.curriculum?.subjectId || ''
+  curriculum.conceptIds = uniqueConceptIds([...(curriculum.conceptIds || []), ...slots.flatMap((slot) => slot.conceptIds)])
+  const concepts = props.conceptNodes.map((node) => ({ id: node.id, title: node.title, path: conceptPath(node.id), parentId: node.parentId || '' }))
+  curriculum.conceptIds.forEach((id) => { if (!concepts.some((node) => node.id === id)) concepts.push({ id, title: id, path: '', parentId: '' }) })
+  const context = { compileId: crypto.randomUUID(), templates, descriptors, blocks, slots, curriculum, concepts, subjectSelections: copyVariationData(props.subjectSelections), capabilities: generationLatexCapabilities(),
+    content: serializeDocumentContent(documentContent.value), sourceDocumentId: selectedDocumentId.value,
+    fingerprint: documentFingerprint(), assets: await documentAssets(blocks, descriptors.map((entry) => entry.code)) }
+  const internal = exercisePreambleTemplate()
+  if (!internal) throw new Error('No se encuentra la plantilla interna de ejercicios para mostrar las propuestas.')
+  await compilerRequest('/preambles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: internal.archivo, content: internal.codigo }) })
+  context.preambleName = internal.archivo
+  for (const [index, descriptor] of descriptors.entries()) {
+    if (previewDocuments.value.some((entry) => entry.templateKey === descriptor.template.key && entry.code === descriptor.code)) continue
+    const split = splitFinalDocumentCode(descriptor.code, descriptor.template.codigo)
+    const name = `neope-variation-original-${context.compileId}-${index}.tex`
+    await compilerRequest('/preambles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, content: split.preamble }) })
+    try {
+      const response = await compilerRequest('/compile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: split.body, preamble_name: name, assets: context.assets }) })
+      await response.arrayBuffer()
+    } catch (error) {
+      throw new Error(`Documento original (${descriptor.template.nombre || descriptor.template.metadata.name}): ${error.message}${latexErrorContext(error.message, split.preamble, split.body)}`)
+    }
+  }
+  return context
+}
+
+async function documentVariationSource(choice, original) {
+  if (choice.origin !== 'bank') return { root: original.root, version: original.root, code: original.latex }
+  const stored = await getDoc(doc(db, 'ejercicios', choice.exerciseId))
+  if (!stored.exists()) throw new Error('El ejercicio elegido del banco ya no existe. Usa «Buscar otro ejercicio».')
+  const root = { id: stored.id, ...stored.data() }
+  const index = choice.variationId ? (root.variaciones || []).findIndex((entry) => entry.id === choice.variationId) + 1 : choice.version
+  if (choice.variationId && index === 0) throw new Error('La variante elegida ya no está disponible. Usa «Buscar otro ejercicio».')
+  const version = activeVersion(root, index)
+  return { root, version, code: buildExerciseLatex(versionStructure(root, index), { preserveApartadosEnvironment: true }) }
+}
+
+async function documentVariationReferences(source, context) {
+  return exerciseVisualReferences(source.root, source.version, source.code, async (code, files) => {
+    const response = await compilerRequest('/compile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      code: documentVariationCompilerCode(code), preamble_name: context.preambleName, assets: exerciseImageAssets(files),
+    }) })
+    return response.blob()
+  })
+}
+
+function documentVariationCompilerCode(code, profile = 'statement') {
+  const normalized = code.replace(/\\begin\s*\{apartadosc\}/g, '\\begin{apartados}').replace(/\\end\s*\{apartadosc\}/g, '\\end{apartados}')
+  return `\\def\\columnbreak{}\n\\def\\newcolumn{}\n${variationCompilerCode(normalized, profile)}`
+}
+
+function documentVariationSnapshot(response, row, context) {
+  const parsed = parseExerciseLatex(response.enunciado)
+  if (!response.criteria?.length) parsed.final = [parsed.final, ...variationCommandBlocks(response.enunciado)].filter(Boolean).join('\n')
+  const required = response.coveredConceptIds || row.choice.requiredConceptIds
+  const criteria = (partId) => (response.criteria || []).filter((criterion) => criterion.partId === partId).map((criterion) => ({ id: crypto.randomUUID(), description: criterion.description, points: criterion.points, source: 'ai', model: response.model }))
+  parsed.gradingCriteria = criteria('exercise')
+  parsed.contenidosGenerales = parsed.apartados.length ? [] : required
+  parsed.contenidos = required
+  parsed.apartados.forEach((part, index) => {
+    const previous = row.original.structure.apartados[index]?.contenidos || []
+    part.gradingCriteria = criteria(part.id)
+    part.contenidos = response.partConcepts?.find((entry) => entry.partId === part.id)?.conceptIds || previous.filter((id) => required.includes(id))
+    if (!part.contenidos.length) part.contenidos = [...required]
+  })
+  const structure = aggregateExerciseStructure(parsed)
+  const id = row.snapshot?.id || `document-generated-${crypto.randomUUID()}`
+  const code = buildExerciseLatex(structure, { preserveApartadosEnvironment: true })
+  return { id, enunciado: code, codigo: code, structure,
+    curriculum: { course: documentVariation.state.course || context.curriculum.course, subjectId: documentVariation.state.subjectId || context.curriculum.subjectId, conceptIds: required },
+    archivos: [], variaciones: [], modelo: response.model, autorEnunciado: `IA · ${response.model}`, autorSolucion: `IA · ${response.model}`,
+    documentVariation: { origin: row.choice.origin, sourceExerciseId: row.choice.exerciseId || row.original.sourceExerciseId || null, generatedAt: new Date().toISOString() } }
+}
+
+async function compileDocumentVariationExercise(snapshot, context) {
+  const artifacts = []
+  try {
+    const compile = async (code, profile = 'segment') => {
+      const response = await compilerRequest('/compile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        code: documentVariationCompilerCode(code, profile), preamble_name: context.preambleName, assets: {},
+      }) })
+      return response.blob()
+    }
+    const blob = await compile(snapshot.enunciado, 'solved')
+    const structure = snapshot.structure
+    const attach = async (key, code, assign) => {
+      if (!String(code || '').trim()) return
+      const partBlob = await compile(code)
+      const url = URL.createObjectURL(partBlob)
+      artifacts.push({ exerciseId: snapshot.id, key, blob: partBlob, url })
+      assign(url)
+    }
+    await attach('main-statement', buildExercisePartLatex(structure), (url) => { structure.pdfenunciado = url })
+    if (!structure.apartados.length && structure.solucion?.trim()) await attach('main-solved', buildExercisePartLatex(structure, null, { includeSolutions: true, includeAnswers: true }), (url) => { structure.pdfsolucion = url; structure.pdfsolucioncompleto = url })
+    for (const [index, part] of structure.apartados.entries()) if (part.solucion?.trim()) await attach(`part-${index}-solved`, buildExercisePartLatex(structure, index, { includeSolutions: true, includeAnswers: true }), (url) => { part.pdfsolucion = url })
+    return { blob, artifacts }
+  } catch (error) { artifacts.forEach((artifact) => URL.revokeObjectURL(artifact.url)); throw error }
+}
+
+async function compileDocumentVariationPreviews(blocks, context) {
+  const entries = []
+  try {
+    const byId = new Map(flattenVariationBlocks(blocks).map((item) => [item.blockId, item]))
+    for (const [index, descriptor] of context.descriptors.entries()) {
+      const code = applyDocumentVariationEdits(descriptor.code, descriptor.edits, (slotId, edit) => {
+        const generated = queueExerciseCode({ ...byId.get(slotId), ...(edit.fallback ? { pageBreakBefore: false } : {}) }, descriptor.template)
+        return variationBlockCode(slotId, matchTemplateColumnBreaks(generated, descriptor.code.slice(edit.from, edit.to)))
+      })
+      const split = splitFinalDocumentCode(code, descriptor.template.codigo)
+      const name = `neope-variation-${context.compileId}-${index}.tex`
+      await compilerRequest('/preambles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, content: split.preamble }) })
+      let response
+      try {
+        response = await compilerRequest('/compile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: split.body, preamble_name: name, assets: context.assets }) })
+      } catch (error) {
+        throw new Error(`Copia generada (${descriptor.template.nombre || descriptor.template.metadata.name}): ${error.message}${latexErrorContext(error.message, split.preamble, split.body)}`)
+      }
+      const blob = await response.blob()
+      entries.push({ templateKey: descriptor.template.key, name: descriptor.template.nombre || descriptor.template.metadata.name, code, blob, url: URL.createObjectURL(blob) })
+    }
+    return entries
+  } catch (error) { entries.forEach((entry) => URL.revokeObjectURL(entry.url)); throw error }
+}
+
+async function acceptDocumentVariation({ blocks, rows, previews, context, plan, mode: variationMode }) {
+  revokePreview(); revokeGeneratedSegmentArtifacts()
+  selectedDocumentId.value = null; createdAt.value = null; viewedDocument.value = null
+  documentAssessment.gradebookItemId = null
+  documentCurriculum.value = { ...documentCurriculum.value, course: documentVariation.state.course || context.curriculum.course,
+    subjectId: documentVariation.state.subjectId || context.curriculum.subjectId, conceptIds: plan.conceptIds }
+  const retainedAssets = Object.fromEntries(Object.entries(context.assets).filter(([, asset]) => asset.url))
+  documentContent.value = createDocumentContent({ ...context.content, blocks,
+    source: { ...context.content.source, revision: context.content.source.revision + 1, options: { ...(context.content.source.options || {}), retainedAssets,
+      variation: { mode: variationMode, sourceDocumentId: context.sourceDocumentId || null, createdAt: new Date().toISOString(), conceptIds: plan.conceptIds,
+        headers: context.templates.map((template) => ({ archivo: template.archivo, code: headerCode(template) })) } } } })
+  Object.keys(selectedVersions).forEach((key) => delete selectedVersions[key])
+  rows.forEach((row) => { selectedVersions[row.snapshot.id] = 0; row.artifacts.forEach((artifact) => generatedSegmentArtifacts.set(`${artifact.exerciseId}:${artifact.key}`, artifact)) })
+  Object.keys(finalCodes).forEach((key) => delete finalCodes[key])
+  const signature = documentAssetSignature()
+  previewDocuments.value = previews.map((entry) => ({ ...entry, assetSignature: signature }))
+  previews.forEach((entry) => { finalCodes[entry.templateKey] = entry.code })
+  const first = previewDocuments.value[0]
+  selectedPreviewTemplateKey.value = first.templateKey
+  previewUrl.value = first.url; previewBlob.value = first.blob; previewCode.value = first.code; previewAssetSignature.value = signature
+  documentCode.value = first.code; documentCodeNeedsRegeneration.value = false
+  currentStep.value = lastStep.value; maxVisitedStep.value = lastStep.value; mode.value = 'editor'
+  compileError.value = ''; compileErrorVisible.value = false
+  // The original baseline also ensures that leaving the new copy asks about unsaved work.
+  documentEditorBaseline.value = context.fingerprint
 }
 
 function conceptClosure(conceptIds = []) {
@@ -2017,11 +2285,25 @@ function criteriaCommandFallback() {
 
 function generatedCodeForTemplate(template, options = {}) {
   if (!template) return ''
+  const variation = documentContent.value.source.options?.variation
+  const layoutSource = options.layoutSource || (variation ? finalCodes[template.key] : '')
+  if (variation && layoutSource?.includes('% neope:document-block')) {
+    const blocks = selectedExercises.value
+    const edits = documentVariationEdits(layoutSource, blocks.map((item) => ({ slotId: item.blockId, code: queueExerciseCode(item, template) })))
+    if (edits.every((edit) => edit.marked)) {
+      let preserved = applyDocumentVariationEdits(layoutSource, edits, (slotId, edit) => variationBlockCode(slotId, matchTemplateColumnBreaks(
+        queueExerciseCode(blocks.find((item) => item.blockId === slotId), template), layoutSource.slice(edit.from, edit.to),
+      )))
+      const previousHeader = variation.headers?.find((header) => header.archivo === template.archivo)
+      if (previousHeader?.code) preserved = preserved.replace(previousHeader.code, headerCode(template))
+      return preserved
+    }
+  }
   const hasDirectSource = typeof options.directSourceCode === 'string'
   const sourceType = documentContent.value.source.type
   const usesStructuredBlocks = !hasDirectSource && (sourceType === DOCUMENT_CONTENT_SOURCE_TYPES.EXERCISE_BANK
     || sourceType === DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM
-    || exerciseQueue.value.some((item) => item.type !== 'tool' && item.snapshot))
+    || selectedExercises.value.some((item) => item.snapshot))
   const exercises = usesStructuredBlocks
     ? renderDocumentBlocks(exerciseQueue.value, template)
     : ''
@@ -2134,17 +2416,16 @@ async function grayscaleLogoAsset(url) {
 }
 
 function documentAssetSignature() {
-  const exerciseFiles = exerciseQueue.value
-    .filter((item) => item.type !== 'tool')
+  const exerciseFiles = selectedExercises.value
     .flatMap((item) => [...exerciseImageFiles(exerciseForQueue(item), item.version), ...historicalExerciseImages(exerciseForQueue(item), item.version)].map((file) => `${item.exerciseId}:${item.version}:${file.path}:${file.url}`))
   const directFiles = sourceFiles.value.map((file) => [file.id, file.name, file.size, file.url || ''].join(':'))
   const signatureFiles = teacherSignatureImages.value.map((image) => `${image.path || image.id}:${image.url}`)
-  return [currentCenterLogo.value, ...signatureFiles, ...exerciseFiles, ...directFiles].join('|')
+  return [currentCenterLogo.value, ...signatureFiles, ...exerciseFiles, ...directFiles, JSON.stringify(documentContent.value.source.options?.retainedAssets || {})].join('|')
 }
 
-async function documentAssets() {
-  const assets = {}
-  const storedImageNames = new Set(Object.values(finalCodes).flatMap((code) => graphicReferences(code).map((reference) => reference.name)))
+async function documentAssets(blocks = exerciseQueue.value, codes = Object.values(finalCodes)) {
+  const assets = { ...(documentContent.value.source.options?.retainedAssets || {}) }
+  const storedImageNames = new Set(codes.flatMap((code) => graphicReferences(code).map((reference) => reference.name)))
   if (currentCenterLogo.value) {
     try {
       assets['logo.png'] = await grayscaleLogoAsset(currentCenterLogo.value)
@@ -2156,7 +2437,7 @@ async function documentAssets() {
     const selectedSignature = teacherSignatureImages.value[Math.floor(Math.random() * teacherSignatureImages.value.length)]
     assets['firma.png'] = { url: selectedSignature.url }
   }
-  selectedExercises.value.forEach((item) => {
+  flattenVariationBlocks(blocks).forEach((item) => {
     const exercise = exerciseForQueue(item)
     exerciseImageFiles(exercise, item.version).forEach((file, index) => {
       assets[documentExerciseAssetName(exercise, file, index)] = { url: file.url }
@@ -2451,6 +2732,7 @@ function resetDocumentAssessment() {
 }
 
 function resetWorkflow() {
+  if (documentVariation.state.visible) documentVariation.close()
   revokeSourceFiles()
   revokeGeneratedSegmentArtifacts()
   sourceLatexDraft.value = ''
@@ -2474,6 +2756,7 @@ function resetWorkflow() {
   compileErrorVisible.value = false
   documentCode.value = ''
   Object.keys(finalCodes).forEach((key) => delete finalCodes[key])
+  Object.keys(recycledHeadersToReview).forEach((key) => delete recycledHeadersToReview[key])
   codeEditorVisible.value = false
   codeEditorKey.value = ''
   documentCodeNeedsRegeneration.value = true
@@ -2535,7 +2818,7 @@ async function assessmentModelsForDocument(documentData) {
 }
 
 async function viewDocument(documentData) {
-  if (!documentData?.pdf?.url) return
+  if (!documentData || !documentCardPdf(documentData)) return
   editDocument(documentData)
   viewedDocument.value = documentData
   const storedTemplates = Array.isArray(documentData.plantillas) && documentData.plantillas.length
@@ -2554,7 +2837,7 @@ async function viewDocument(documentData) {
     assetSignature: documentAssetSignature(),
   })).filter((entry) => entry.url)
   selectedPreviewTemplateKey.value = previewDocuments.value[0]?.templateKey || ''
-  previewUrl.value = previewDocuments.value[0]?.url || documentData.pdf.url
+  previewUrl.value = previewDocuments.value[0]?.url || documentData.pdf?.url || ''
   mode.value = 'viewer'
   if (documentData.assessment?.evaluable) {
     viewerAssessmentLoading.value = true
@@ -2923,9 +3206,10 @@ function openFinalCode(templateKey) {
 function regenerateFinalCode() {
   if (!editingTemplate.value) return
   if (!window.confirm('Se sustituirá el código de este documento por el generado desde sus campos, contenido y plantilla. ¿Continuar?')) return
+  const layoutSource = editingFinalCode.value
   delete finalCodes[codeEditorKey.value]
   // Keep the regenerated code stable until another explicit regeneration.
-  finalCodes[codeEditorKey.value] = generatedCodeForTemplate(editingTemplate.value)
+  finalCodes[codeEditorKey.value] = generatedCodeForTemplate(editingTemplate.value, { layoutSource })
 }
 async function compileEditingFinalCode() {
   if (!editingFinalCode.value.trim() || isCompiling.value) return
@@ -2939,17 +3223,29 @@ async function saveEditingFinalCode() {
 
 function documentCardTitle(documentData) {
   const values = documentData.campos || {}
-  return values.title || values.subject || documentData.plantilla?.nombre || 'Documento sin título'
+  return values.title || values.titulo || values.subject || values.asignatura || documentData.plantilla?.nombre || 'Documento sin título'
 }
 
-function documentFieldEntries(documentData) {
-  const metadata = documentTemplates.value.find((template) => template.archivo === documentData.plantilla?.archivo)?.metadata || defaultMetadata
-  return metadata.fields.filter((field) => field.type !== 'checkbox').map((field) => ({
-    label: field.label,
-    value: documentData.campos?.[field.key]
-      ? (field.type === 'date' || field.key === 'date' ? formatDocumentDate(documentData.campos[field.key]) : documentData.campos[field.key])
-      : '—',
-  }))
+function documentCardGroup(documentData) {
+  const values = documentData.campos || {}
+  const level = String(values.level || values.nivel || documentData.curriculum?.course || '').trim()
+  const group = String(values.course || values.curso || values.group || values.grupo || documentData.groupContext?.name || '').trim()
+  if (!level) return group || 'Sin nivel o grupo'
+  if (!group || normalizeName(group).replace(/\s/g, '').startsWith(normalizeName(level).replace(/\s/g, ''))) return group || level
+  return `${level} · ${group}`
+}
+
+function documentCardDate(documentData) {
+  return formatDocumentDate(documentData.campos?.date || documentData.campos?.fecha || documentData.programming?.date || '')
+}
+
+function documentCardTemplates(documentData) {
+  const templates = Array.isArray(documentData.plantillas) && documentData.plantillas.length ? documentData.plantillas : [documentData.plantilla]
+  return templates.filter(Boolean).map((template) => template.nombre || template.archivo || 'Plantilla')
+}
+
+function documentCardPdf(documentData) {
+  return documentData.pdf?.url || documentData.pdfs?.find((pdf) => pdf?.url)?.url || ''
 }
 
 async function loadDocuments() {
@@ -3068,6 +3364,58 @@ function editDocument(documentData) {
   markDocumentBaseline()
 }
 
+function copyDocumentWithContext(documentData, context) {
+  if (!groupOptions.value.some((group) => group.id === context.groupId)) {
+    showAppErrorToast('No se encuentra el grupo de destino. No se ha creado la copia.')
+    return
+  }
+  editDocument(copyVariationData(documentData))
+  if (selectedDocumentId.value !== documentData.id) return
+  const oldValues = selectedTemplates.value.map((template) => ({
+    key: template.key,
+    before: renderTemplateWrapper(template.metadata.before, template.metadata, (field) => documentFieldValue(field, template)),
+    after: renderTemplateWrapper(template.metadata.after, template.metadata, (field) => documentFieldValue(field, template)),
+    header: headerCode(template),
+  }))
+  const previousCurriculum = { ...documentCurriculum.value }
+  selectedDocumentId.value = null
+  createdAt.value = null
+  creationContext.value = { ...context }
+  applyCreationContext()
+  if (previousCurriculum.subjectId === documentCurriculum.value.subjectId) {
+    documentCurriculum.value = { ...previousCurriculum, course: documentCurriculum.value.course, subjectId: documentCurriculum.value.subjectId }
+  }
+  documentAssessment.gradebookItemId = null
+  documentAssessment.groupId = context.groupId
+  documentContent.value.source.options = { ...documentContent.value.source.options, recycledFromDocumentId: documentData.id }
+  const unmatched = []
+  selectedTemplates.value.forEach((template) => {
+    const old = oldValues.find((entry) => entry.key === template.key)
+    let code = finalCodes[template.key] || ''
+    const updated = {
+      before: renderTemplateWrapper(template.metadata.before, template.metadata, (field) => documentFieldValue(field, template)),
+      after: renderTemplateWrapper(template.metadata.after, template.metadata, (field) => documentFieldValue(field, template)),
+      header: headerCode(template),
+    }
+    let replaced = false
+    for (const key of ['before', 'after']) {
+      if (old[key] && old[key] !== updated[key] && code.includes(old[key])) { code = code.replace(old[key], updated[key]); replaced = true }
+    }
+    if (old.header && old.header !== updated.header && code.includes(old.header)) { code = code.replace(old.header, updated.header); replaced = true }
+    if ((old.before !== updated.before || old.after !== updated.after || old.header !== updated.header) && !replaced) {
+      unmatched.push(template.nombre || template.metadata.name)
+      recycledHeadersToReview[template.key] = code
+    }
+    finalCodes[template.key] = code
+  })
+  revokePreview()
+  documentCode.value = finalCodes[selectedTemplateKey.value] || ''
+  documentCodeNeedsRegeneration.value = false
+  currentStep.value = 1
+  maxVisitedStep.value = lastStep.value
+  if (unmatched.length) showAppErrorToast(`Revisa la cabecera en el código de ${unmatched.join(', ')}: no se ha podido actualizar automáticamente.`)
+}
+
 function documentAssessmentPoints() {
   return selectedExercises.value
     .reduce((total, item) => total + (Number(queueMetrics(item).puntuacion) || 0), 0)
@@ -3118,6 +3466,12 @@ function documentAssessmentItem(documentId) {
 
 async function saveDocument() {
   if (currentStep.value !== lastStep.value || isSaving.value) return
+  const pendingHeader = Object.keys(recycledHeadersToReview).find((key) => finalCodes[key] === recycledHeadersToReview[key])
+  if (pendingHeader) {
+    showAppErrorToast('Revisa y actualiza la cabecera del documento en el editor de código antes de guardar la copia.')
+    openFinalCode(pendingHeader)
+    return
+  }
   await compileDocument()
   if (previewDocuments.value.length !== selectedTemplates.value.length || selectedTemplates.value.some((template) => previewEntryForTemplate(template.key)?.code !== activeDocumentCode(template))) {
     showAppErrorToast('Compila correctamente todos los documentos antes de guardar. Hay código pendiente o errores de compilación.')
@@ -3146,6 +3500,19 @@ async function saveDocument() {
         .map((file) => file?.path || storagePathFromUrl(file?.url))
         .filter(Boolean),
     )
+    const recycledFrom = documentContent.value.source.options?.recycledFromDocumentId
+    if (!selectedDocumentId.value && recycledFrom) {
+      for (const block of flattenVariationBlocks(exerciseQueue.value)) {
+        for (const file of block.snapshot?.matrixFiles || []) {
+          const path = file.path || storagePathFromUrl(file.url)
+          const key = `${block.exerciseId}:${file.key}`
+          if (!file.url || !path?.startsWith(`documentos/${recycledFrom}/`) || generatedSegmentArtifacts.has(key)) continue
+          const response = await fetch(browserAssetUrl(file.url))
+          if (!response.ok) throw new Error(`No se ha podido copiar el PDF del ejercicio (HTTP ${response.status}).`)
+          generatedSegmentArtifacts.set(key, { exerciseId: block.exerciseId, key: file.key, blob: await response.blob() })
+        }
+      }
+    }
     const uploadedMatrixPaths = []
     for (const artifact of generatedSegmentArtifacts.values()) {
       const safeKey = artifact.key.replace(/[^A-Za-z0-9_-]/g, '-')
@@ -3175,6 +3542,13 @@ async function saveDocument() {
       ? sourceFiles.value
       : []
     for (const [index, sourceFile] of activeSourceFiles.entries()) {
+      const originalDocumentId = documentContent.value.source.options?.recycledFromDocumentId || documentContent.value.source.options?.variation?.sourceDocumentId
+      const originalPath = sourceFile.path || storagePathFromUrl(sourceFile.url)
+      if (!selectedDocumentId.value && originalDocumentId && !sourceFile.file && sourceFile.url && originalPath?.startsWith(`documentos/${originalDocumentId}/`)) {
+        const response = await fetch(browserAssetUrl(sourceFile.url))
+        if (!response.ok) throw new Error(`No se ha podido copiar el adjunto ${sourceFile.name} (HTTP ${response.status}).`)
+        sourceFile.file = new File([await response.blob()], sourceFile.name || sourceFile.compilerName || `fuente-${index}`, { type: sourceFile.contentType || response.headers.get('Content-Type') || '' })
+      }
       if (!sourceFile.file && sourceFile.url) {
         uploadedSourceFiles.push({
           id: sourceFile.id,
@@ -3205,11 +3579,25 @@ async function saveDocument() {
       })
     }
     if ([DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(documentContent.value.source.type)) {
+      const replacements = new Map(sourceFiles.value.map((file) => [file.url, uploadedSourceFiles.find((stored) => stored.id === file.id)?.url]))
+      const retained = documentContent.value.source.options?.retainedAssets
+      if (retained) Object.values(retained).forEach((asset) => { if (replacements.get(asset.url)) asset.url = replacements.get(asset.url) })
       documentContent.value = replaceDocumentContentSource(documentContent.value, {
         type: documentContent.value.source.type,
         revision: documentContent.value.source.revision,
         options: sourceOptionsFor(documentContent.value.source.type, { files: uploadedSourceFiles }),
       }, { touch: false })
+    }
+    if (!selectedDocumentId.value && recycledFrom) {
+      const retained = documentContent.value.source.options?.retainedAssets || {}
+      for (const [name, asset] of Object.entries(retained)) {
+        if (!asset.url || !storagePathFromUrl(asset.url)?.startsWith(`documentos/${recycledFrom}/`)) continue
+        const response = await fetch(browserAssetUrl(asset.url))
+        if (!response.ok) throw new Error(`No se ha podido copiar el adjunto ${name} (HTTP ${response.status}).`)
+        const path = `documentos/${reference.id}/recursos/${crypto.randomUUID()}-${name.replace(/[^a-zA-Z0-9._-]/g, '-')}`
+        await uploadBytes(storageRef(storage, path), await response.blob(), { contentType: response.headers.get('Content-Type') || 'application/octet-stream' })
+        asset.url = await getDownloadURL(storageRef(storage, path))
+      }
     }
     const uploadedPdfs = []
     for (const [index, entry] of previewDocuments.value.entries()) {
@@ -3325,6 +3713,7 @@ onBeforeUnmount(() => {
 defineExpose({
   newDocument,
   newDocumentWithContext,
+  copyDocumentWithContext,
   backToLibrary,
   previous: previousStep,
   next: nextStep,
@@ -3335,6 +3724,10 @@ defineExpose({
 
 <template>
   <div class="document-creator">
+    <div v-if="mode !== 'library' && selectedTemplates.length" class="d-flex justify-end mb-3">
+      <v-btn prepend-icon="mdi-auto-fix" variant="tonal" color="primary" :disabled="isCompiling || isSaving || isGeneratingContent || documentVariation.state.busy" @click="openDocumentVariation()">IA: crear una copia</v-btn>
+    </div>
+    <DocumentVariationDialog :controller="documentVariation" :models="aiModelOptions" :model="documentAiModel" @update:model="documentAiModel = $event" />
     <section v-if="mode === 'library'" class="document-library">
       <div v-if="isLoadingDocuments" class="document-library-empty">
         <v-progress-circular indeterminate color="primary" />
@@ -3347,35 +3740,39 @@ defineExpose({
           class="document-library-card"
           elevation="1"
         >
-          <header>
-            <div>
-              <span>{{ documentData.plantilla?.nombre || 'Documento' }}</span>
-              <strong>{{ documentCardTitle(documentData) }}</strong>
+          <header class="document-library-card-header">
+            <div class="document-library-card-meta">
+              <span :title="documentCardGroup(documentData)">{{ documentCardGroup(documentData) }}</span>
+              <time v-if="documentCardDate(documentData)">{{ documentCardDate(documentData) }}</time>
             </div>
-            <v-chip size="x-small" color="primary" variant="tonal">{{ documentData.ejercicios?.length || 0 }} ejercicios</v-chip>
+            <strong :title="documentCardTitle(documentData)">{{ documentCardTitle(documentData) }}</strong>
           </header>
-          <dl>
-            <template v-for="field in documentFieldEntries(documentData)" :key="field.label">
-              <dt>{{ field.label }}</dt>
-              <dd>{{ field.value }}</dd>
-            </template>
-          </dl>
+          <button v-if="documentCardPdf(documentData)" type="button" class="document-library-thumbnail" :aria-label="`Visualizar ${documentCardTitle(documentData)}`" @click="viewDocument(documentData)">
+            <span class="document-library-paper"><ExercisePdfPreview :src="documentCardPdf(documentData)" :title="`Primera página de ${documentCardTitle(documentData)}`" :aspect-ratio="0.707" thumbnail /></span>
+          </button>
+          <div v-else class="document-library-thumbnail document-library-thumbnail-empty"><v-icon icon="mdi-file-document-outline" size="38" /><span>PDF no disponible</span></div>
           <footer>
-            <span>{{ documentData.updatedAt ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium' }).format(new Date(documentData.updatedAt)) : '' }}</span>
+            <div class="document-library-templates" aria-label="Plantillas utilizadas">
+              <span v-for="(templateName, index) in documentCardTemplates(documentData)" :key="index" :title="templateName">{{ templateName }}</span>
+              <span v-if="!documentCardTemplates(documentData).length">Sin plantilla</span>
+            </div>
             <div class="document-library-actions">
+              <v-tooltip text="Crear copia con IA" location="top">
+                <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-auto-fix" size="x-small" rounded="circle" variant="text" color="primary" aria-label="Crear copia del documento con IA" @click="openDocumentVariation(documentData)" /></template>
+              </v-tooltip>
               <v-tooltip text="Visualizar PDF" location="top">
                 <template #activator="{ props: tooltipProps }">
-                  <v-btn v-bind="tooltipProps" icon="mdi-eye-outline" size="small" variant="tonal" color="primary" aria-label="Visualizar PDF" :disabled="!documentData.pdf?.url" @click="viewDocument(documentData)" />
+                  <v-btn v-bind="tooltipProps" icon="mdi-eye-outline" size="x-small" rounded="circle" variant="text" color="primary" aria-label="Visualizar PDF" :disabled="!documentCardPdf(documentData)" @click="viewDocument(documentData)" />
                 </template>
               </v-tooltip>
               <v-tooltip text="Editar documento" location="top">
                 <template #activator="{ props: tooltipProps }">
-                  <v-btn v-bind="tooltipProps" icon="mdi-pencil-outline" size="small" variant="tonal" color="primary" aria-label="Editar documento" @click="editDocument(documentData)" />
+                  <v-btn v-bind="tooltipProps" icon="mdi-pencil-outline" size="x-small" rounded="circle" variant="text" color="primary" aria-label="Editar documento" @click="editDocument(documentData)" />
                 </template>
               </v-tooltip>
               <v-tooltip text="Eliminar documento" location="top">
                 <template #activator="{ props: tooltipProps }">
-                  <v-btn v-bind="tooltipProps" icon="mdi-delete-outline" size="small" variant="tonal" color="error" aria-label="Eliminar documento" @click="requestDeleteDocument(documentData)" />
+                  <v-btn v-bind="tooltipProps" icon="mdi-delete-outline" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar documento" @click="requestDeleteDocument(documentData)" />
                 </template>
               </v-tooltip>
             </div>
@@ -4125,18 +4522,24 @@ defineExpose({
 .document-creator { width: 100%; height: 100%; min-height: 0; overflow: hidden; background: #f4f7fb; }
 .document-library { position: relative; width: 100%; height: 100%; overflow: auto; padding: 10px; }
 .document-library-error { position: sticky; z-index: 3; top: 0; margin-bottom: 10px; }
-.document-library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); align-items: start; gap: 10px; }
-.document-library-card { overflow: hidden; border: 1px solid #dce5f0; border-radius: 15px !important; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.document-library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 160px)); grid-auto-rows: 220px; align-content: start; gap: 12px; }
+.document-library-card { display: flex; min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid #dce5f0; border-radius: 7px !important; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
 .document-library-card:hover { border-color: #94afd1; box-shadow: 0 9px 24px rgba(33, 64, 103, .12) !important; transform: translateY(-2px); }
-.document-library-card header { display: flex; align-items: start; justify-content: space-between; gap: 12px; padding: 14px 15px 11px; border-bottom: 1px solid #e1e8f1; background: #f4f8fd; }
-.document-library-card header div { min-width: 0; }
-.document-library-card header span { display: block; color: #7387a1; font-size: .67rem; font-weight: 750; letter-spacing: .055em; text-transform: uppercase; }
-.document-library-card header strong { display: block; margin-top: 3px; overflow: hidden; color: #26486f; font-size: .94rem; text-overflow: ellipsis; white-space: nowrap; }
-.document-library-card dl { display: grid; grid-template-columns: minmax(82px, auto) 1fr; gap: 7px 12px; margin: 0; padding: 13px 15px; font-size: .75rem; }
-.document-library-card dt { color: #8291a5; font-weight: 700; }
-.document-library-card dd { min-width: 0; margin: 0; overflow: hidden; color: #405a79; text-overflow: ellipsis; white-space: nowrap; }
-.document-library-card footer { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-top: 1px solid #e5ebf3; color: #7a8ba1; font-size: .67rem; }
-.document-library-actions { display: flex; align-items: center; gap: 6px; }
+.document-library-card-header { min-width: 0; min-height: 52px; padding: 7px 9px; border-bottom: 1px solid #e1e8f1; background: #f8fbff; }
+.document-library-card-meta { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 5px; color: #7286a0; font-size: .55rem; font-weight: 650; }
+.document-library-card-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-library-card-meta time { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.document-library-card-header strong { display: -webkit-box; margin-top: 3px; overflow: hidden; color: #26486f; font-size: .6rem; font-weight: 700; line-height: 1.3; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.document-library-thumbnail { display: grid; width: 100%; min-height: 0; flex: 1 1 0; grid-template-rows: minmax(0, 1fr); aspect-ratio: 2.121; place-items: start stretch; padding: 0; border: 0; background: #fff; cursor: pointer; }
+.document-library-thumbnail:focus-visible { outline: 3px solid #477ebd; outline-offset: -3px; }
+.document-library-paper { display: block; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+.document-library-thumbnail-empty { align-content: center; gap: 5px; color: #8293a8; font-size: .72rem; cursor: default; }
+.document-library-card footer { display: flex; flex-direction: column; border-top: 1px solid #e1e8f1; background: #fff; }
+.document-library-templates { display: flex; min-width: 0; max-height: 56px; flex-direction: column; gap: 2px; overflow-y: auto; padding: 6px 9px; color: #6c819b; font-size: .55rem; line-height: 1.25; }
+.document-library-templates span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-library-actions { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 8px; border-top: 1px solid #e1e8f1; background: #f8fbff; }
+.document-library-actions :deep(.v-btn) { width: 24px !important; height: 24px !important; min-width: 24px; }
+.document-library-actions :deep(.v-icon) { font-size: 12px; }
 .document-library-empty { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 10px; color: #70839b; text-align: center; }
 .document-library-empty strong { color: #34577f; }
 .document-library-empty span { font-size: .78rem; }

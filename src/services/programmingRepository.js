@@ -1,5 +1,7 @@
 import {
   collection,
+  arrayRemove,
+  arrayUnion,
   deleteField,
   doc,
   getDoc,
@@ -43,6 +45,7 @@ function normalizeDay(snapshot, groupId) {
     groupId,
     notes: String(data.notes || ''),
     rubricInstruments: Array.isArray(data.rubricInstruments) ? clone(data.rubricInstruments, []) : [],
+    documentIds: Array.isArray(data.documentIds) ? data.documentIds.filter((id) => typeof id === 'string') : [],
     resources: Array.isArray(data.resources) ? clone(data.resources, []) : [],
     contents: Array.isArray(data.contents) ? clone(data.contents, []) : [],
     sessionKey: data.sessionKey || null,
@@ -119,6 +122,7 @@ export async function loadAndSynchronizeProgrammingDays({ group, calendar, teach
     groupId: group.id,
     notes: day.notes || '',
     rubricInstruments: day.rubricInstruments || [],
+    documentIds: day.documentIds || [],
     resources: day.resources || [],
     contents: day.contents || [],
     schemaVersion: 4,
@@ -346,6 +350,25 @@ export async function loadProgrammingDocuments(groupId) {
   const result = new Map()
   snapshots.flatMap((snapshot) => snapshot.docs).forEach((item) => result.set(item.id, { id: item.id, ...item.data() }))
   return [...result.values()]
+}
+
+export async function loadDocumentLibrary() {
+  const snapshot = await getDocs(collection(db, 'documentos'))
+  return snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+}
+
+export async function loadProgrammingDocumentReferences(days = []) {
+  const ids = [...new Set(days.flatMap((day) => day.documentIds || []))]
+  const snapshots = await Promise.all(ids.map((id) => getDoc(doc(db, 'documentos', id))))
+  return snapshots.filter((item) => item.exists()).map((item) => ({ id: item.id, ...item.data() }))
+}
+
+export async function setProgrammingDocumentReference(groupId, dayId, documentId, add) {
+  await setDoc(doc(db, 'grupos', groupId, 'programmingDays', dayId), {
+    documentIds: add ? arrayUnion(documentId) : arrayRemove(documentId),
+    updatedAt: new Date().toISOString(),
+  }, { merge: true })
 }
 
 export function programmingDocumentDate(documentData = {}) {

@@ -114,6 +114,7 @@ function compareProgrammingDays(left, right) {
 function programmingDayContentScore(day = {}) {
   return (String(day.notes || '').trim() ? 1 : 0)
     + (Array.isArray(day.rubricInstruments) ? day.rubricInstruments.length : 0)
+    + (Array.isArray(day.documentIds) ? day.documentIds.length : 0)
     + (Array.isArray(day.resources) ? day.resources.length : 0)
     + (Array.isArray(day.contents) ? day.contents.length : 0)
 }
@@ -143,6 +144,7 @@ function mergeProgrammingDayCandidates(session, candidates = []) {
     id: primary.id,
     notes: String(noteSource?.notes || ''),
     rubricInstruments: uniqueProgrammingItems(ranked, 'rubricInstruments'),
+    documentIds: [...new Set(ranked.flatMap((day) => day.documentIds || []))],
     resources: uniqueProgrammingItems(ranked, 'resources'),
     contents: uniqueProgrammingItems(ranked, 'contents'),
   }

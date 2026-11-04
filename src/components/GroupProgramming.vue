@@ -10,6 +10,9 @@ import {
   deleteProgrammingResource,
   loadAndSynchronizeProgrammingDays,
   loadProgrammingDocuments,
+  loadDocumentLibrary,
+  loadProgrammingDocumentReferences,
+  setProgrammingDocumentReference,
   programmingDocumentDate,
   saveProgrammingDay,
   uploadProgrammingContentPdf,
@@ -19,6 +22,7 @@ import {
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import { normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
 import { compilerDocumentSource, parseLatexDiagnostics } from '../utils/latexDiagnostics'
+import { documentMatchesGroupLevel } from '../utils/programmingDocuments'
 import ProgrammingLatexContent from './ProgrammingLatexContent.vue'
 
 const props = defineProps({
@@ -32,11 +36,19 @@ const props = defineProps({
 const emit = defineEmits(['new-document', 'assessment-added', 'assessment-removed'])
 const days = ref([])
 const documents = ref([])
+const referenceDocuments = ref([])
+const documentDialog = ref(false)
+const documentDay = ref(null)
+const documentLibrary = ref([])
+const documentSearch = ref('')
+const documentLoading = ref(false)
 const rubrics = ref([])
 const loading = ref(false)
 const editingDates = ref(new Set())
 const expandedDayIds = ref(new Set())
 const focusedDayId = ref(null)
+const programmingViewport = ref(null)
+const showReturnToToday = ref(false)
 const noteEditorDates = ref(new Set())
 const savingDates = ref(new Set())
 const dayElements = new Map()
@@ -76,7 +88,9 @@ function documentBelongsToDay(documentData, day) {
 const documentsByDay = computed(() => {
   const result = new Map()
   days.value.forEach((day) => {
-    result.set(day.id, documents.value.filter((documentData) => documentBelongsToDay(documentData, day)))
+    const native = documents.value.filter((documentData) => documentBelongsToDay(documentData, day))
+    const linked = referenceDocuments.value.filter((documentData) => (day.documentIds || []).includes(documentData.id) && !native.some((item) => item.id === documentData.id))
+    result.set(day.id, [...native, ...linked.map((item) => ({ ...item, programmingReference: true }))])
   })
   return result
 })
@@ -85,6 +99,36 @@ function dateLabel(date) {
   return new Intl.DateTimeFormat('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
     .format(new Date(`${date}T12:00:00`))
     .replace(/^./, (letter) => letter.toLocaleUpperCase('es'))
+}
+
+const availableDocuments = computed(() => {
+  const search = normalized(documentSearch.value)
+  return documentLibrary.value.filter((item) => documentMatchesGroupLevel(item, props.group)
+    && (!search || normalized(`${documentTitle(item)} ${item.plantilla?.nombre || ''} ${item.campos?.asignatura || ''} ${item.campos?.course || ''}`).includes(search)))
+})
+
+async function openDocuments(day) {
+  documentDay.value = day
+  documentSearch.value = ''
+  documentDialog.value = true
+  documentLoading.value = true
+  try { documentLibrary.value = await loadDocumentLibrary() }
+  catch (error) { documentLibrary.value = []; showAppErrorToast(error.message || 'No se han podido cargar los documentos.') }
+  finally { documentLoading.value = false }
+}
+
+async function addExistingDocument(documentData) {
+  const day = documentDay.value
+  if (!day) return
+  documentDialog.value = false
+  emit('new-document', { date: day.date, programmingDayId: day.id, sessionKey: day.sessionKey, sessionType: day.sessionType, sessionTitle: day.title, sessionColor: day.color, sourceDocument: documentData })
+}
+
+function createNewDocument() {
+  const day = documentDay.value
+  if (!day) return
+  documentDialog.value = false
+  emit('new-document', { date: day.date, programmingDayId: day.id, sessionKey: day.sessionKey, sessionType: day.sessionType, sessionTitle: day.title, sessionColor: day.color })
 }
 
 function readableTextColor(backgroundColor) {
@@ -167,7 +211,22 @@ function isFocusedDay(day) {
 
 function focusLabel(day) {
   if (!isFocusedDay(day)) return ''
-  return day.date === todayIso() ? 'Hoy' : 'Próxima clase'
+  return day.date === todayIso() ? 'Hoy' : day.date > todayIso() ? 'Próxima clase' : 'Última clase'
+}
+
+function updateReturnToToday() {
+  const viewport = programmingViewport.value
+  const target = dayElements.get(focusedDayId.value)
+  showReturnToToday.value = Boolean(viewport && target
+    && Math.abs(target.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 12) > 30)
+}
+
+function returnToToday(behavior = 'smooth') {
+  const viewport = programmingViewport.value
+  const target = dayElements.get(focusedDayId.value)
+  if (!viewport || !target) return
+  viewport.scrollTo({ top: viewport.scrollTop + target.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 12, behavior })
+  updateReturnToToday()
 }
 
 function countLabel(count, singular, plural = `${singular}s`) {
@@ -203,21 +262,22 @@ async function load() {
     ])
     days.value = loadedDays
     documents.value = loadedDocuments
+    referenceDocuments.value = await loadProgrammingDocumentReferences(loadedDays)
     rubrics.value = loadedRubrics
-    await nextTick()
     const current = todayIso()
     const target = loadedDays.find((day) => day.date >= current) || loadedDays.at(-1)
     focusedDayId.value = target?.id || null
     const availableIds = new Set(loadedDays.map((day) => day.id))
     const preserved = [...expandedDayIds.value].filter((id) => availableIds.has(id))
     expandedDayIds.value = new Set(preserved.length ? preserved : (target?.id ? [target.id] : []))
-    dayElements.get(target?.id)?.scrollIntoView?.({ block: 'center', behavior: 'instant' })
   } catch (error) {
     console.error('No se ha podido cargar la programación:', error)
     showAppErrorToast(error.message || 'No se ha podido cargar la programación del grupo.')
   } finally {
     loading.value = false
   }
+  await nextTick()
+  returnToToday('instant')
 }
 
 function isEditing(dayId) {
@@ -556,6 +616,9 @@ async function confirmInstrumentRemoval() {
       }))
       target.day.rubricInstruments = target.day.rubricInstruments.filter((item) => item.id !== target.value.id)
       emit('assessment-removed', { groupId: props.group.id, itemIds: result.removedIds })
+    } else if (target.value.programmingReference) {
+      await withRemovalTimeout(setProgrammingDocumentReference(props.group.id, target.day.id, target.value.id, false))
+      target.day.documentIds = (target.day.documentIds || []).filter((id) => id !== target.value.id)
     } else {
       const result = await withRemovalTimeout(removeDocumentFromProgramming(target.value, {
         evaluationStructure: props.group.evaluaciones?.estructura || [],
@@ -579,7 +642,7 @@ function removalTitle() {
 }
 
 function removalDeletesAssessment() {
-  return deleteTarget.value?.type === 'rubric' || Boolean(deleteTarget.value?.value?.assessment?.evaluable)
+  return deleteTarget.value?.type === 'rubric' || (!deleteTarget.value?.value?.programmingReference && Boolean(deleteTarget.value?.value?.assessment?.evaluable))
 }
 
 async function flush() {
@@ -602,7 +665,12 @@ defineExpose({ flush })
 </script>
 
 <template>
-  <section class="group-programming">
+  <section ref="programmingViewport" class="group-programming" @scroll.passive="updateReturnToToday">
+    <div v-if="!loading && focusedDayId" class="programming-return-anchor">
+      <v-tooltip :text="focusLabel(days.find(day => day.id === focusedDayId)) === 'Hoy' ? 'Volver a hoy' : `Volver a ${focusLabel(days.find(day => day.id === focusedDayId)).toLocaleLowerCase('es')}`" location="start">
+        <template #activator="{ props: tooltipProps }"><v-btn v-show="showReturnToToday" v-bind="tooltipProps" icon="mdi-calendar-today" size="small" rounded="circle" color="primary" variant="flat" class="programming-return-button" :aria-label="focusLabel(days.find(day => day.id === focusedDayId)) === 'Hoy' ? 'Volver a hoy' : 'Volver a la sesión destacada'" @click="returnToToday()" /></template>
+      </v-tooltip>
+    </div>
     <input ref="fileInput" type="file" hidden @change="receiveFile">
     <div v-if="loading" class="programming-state"><v-progress-circular indeterminate color="primary" /><span>Preparando los días lectivos…</span></div>
     <div v-else-if="!days.length" class="programming-state">
@@ -698,7 +766,7 @@ defineExpose({ flush })
               <a :href="documentData.pdf?.url" target="_blank" rel="noopener noreferrer">
                 <v-icon icon="mdi-file-document-outline" size="18" />
                 <span>{{ documentTitle(documentData) }}</span>
-                <small v-if="documentData.assessment?.evaluable">Evaluable</small>
+                <small v-if="documentData.assessment?.evaluable && !documentData.programmingReference">Evaluable</small>
               </a>
               <v-btn v-if="isEditing(day.id)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Retirar documento" @click="requestInstrumentRemoval(day, 'document', documentData)" />
             </div>
@@ -725,7 +793,7 @@ defineExpose({ flush })
           </section>
 
           <footer v-if="isEditing(day.id)" class="programming-tools">
-            <v-btn size="small" variant="text" prepend-icon="mdi-file-plus-outline" @click="emit('new-document', { date: day.date, programmingDayId: day.id, sessionKey: day.sessionKey, sessionType: day.sessionType, sessionTitle: day.title, sessionColor: day.color })">Documento</v-btn>
+            <v-btn size="small" variant="text" prepend-icon="mdi-file-plus-outline" @click="openDocuments(day)">Documento</v-btn>
             <v-btn size="small" variant="text" prepend-icon="mdi-table-star" @click="openRubrics(day)">Rúbrica</v-btn>
             <v-btn size="small" variant="text" prepend-icon="mdi-note-edit-outline" @click="openNoteEditor(day)">Anotación</v-btn>
             <v-btn size="small" variant="text" prepend-icon="mdi-language-latex" @click="addContent(day)">Contenido</v-btn>
@@ -735,6 +803,25 @@ defineExpose({ flush })
         </div>
       </article>
     </div>
+    <div v-if="!loading && days.length" class="programming-scroll-end" aria-hidden="true" />
+
+    <v-dialog v-model="documentDialog" max-width="760">
+      <v-card>
+        <v-card-title>Añadir documento</v-card-title>
+        <v-card-text>
+          <p class="mb-3">Elige un documento guardado para crear una copia adaptada a esta sesión, o crea uno nuevo.</p>
+          <v-text-field v-model="documentSearch" label="Buscar documentos" prepend-inner-icon="mdi-magnify" variant="outlined" density="compact" clearable />
+          <v-progress-linear v-if="documentLoading" indeterminate color="primary" />
+          <div v-else class="programming-rubric-list">
+            <button v-for="item in availableDocuments" :key="item.id" type="button" @click="addExistingDocument(item)">
+              <strong>{{ documentTitle(item) }}</strong><span>{{ item.plantilla?.nombre || 'Documento' }}{{ (item.assessment || item.evaluacion)?.evaluable ? ' · Evaluable' : '' }}</span>
+            </button>
+            <p v-if="!availableDocuments.length">No hay documentos de este nivel que coincidan con la búsqueda.</p>
+          </div>
+        </v-card-text>
+        <v-card-actions><v-btn prepend-icon="mdi-plus" color="primary" variant="tonal" @click="createNewDocument">Crear documento nuevo</v-btn><v-spacer /><v-btn variant="text" @click="documentDialog = false">Cerrar</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <v-dialog v-model="rubricDialog" width="760">
       <v-card>
@@ -784,6 +871,9 @@ defineExpose({ flush })
 
 <style scoped>
 .group-programming { height: 100%; overflow: auto; background: #f4f7fb; }
+.programming-return-anchor { position: sticky; z-index: 3; top: calc(100% - 48px); height: 0; pointer-events: none; }
+.programming-return-button { position: absolute; top: 0; right: 18px; pointer-events: auto; box-shadow: 0 3px 10px rgb(28 66 111 / 20%); }
+.programming-scroll-end { height: calc(100% - 64px); min-height: 0; pointer-events: none; }
 .programming-days { width: min(1080px, 100%); margin: 0 auto; padding: 12px; display: grid; gap: 10px; }
 .programming-day { background: #fff; border: 1px solid #d6e0ed; border-radius: 7px; overflow: hidden; box-shadow: 0 2px 7px rgb(28 66 111 / 5%); content-visibility: auto; contain-intrinsic-size: 72px; }
 .programming-day-expanded { content-visibility: visible; contain-intrinsic-size: auto; }

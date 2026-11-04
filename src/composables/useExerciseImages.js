@@ -55,6 +55,43 @@ async function pdfReferences(url, limit = 1, allPages = false) {
   } finally { await task.destroy() }
 }
 
+export async function exerciseVisualReferences(exercise, version, code, compileCandidate, { includePreview = true } = {}) {
+  const files = referencedImageFiles(code, versionImageFiles(exercise, version)).filter((file) => /^image\//.test(file.type || '') || file.type === 'application/pdf')
+  if (files.length > 4) throw new Error('Este ejercicio contiene más de cuatro imágenes. Genera una variante a partir de una selección más pequeña.')
+  const result = []
+  for (const file of files) {
+    let dataUrl = file.pendingDataUrl
+    if (!dataUrl) {
+      if (file.type === 'application/pdf') dataUrl = (await pdfReferences(file.url))[0]
+      else {
+        const response = await fetch(referenceUrl(file.url))
+        if (!response.ok) throw new Error(`No se ha podido cargar la imagen ${file.compilerName} (HTTP ${response.status}).`)
+        dataUrl = await blobDataUrl(await response.blob())
+      }
+    }
+    result.push({ name: file.compilerName, dataUrl })
+  }
+  const missingGraphics = graphicReferences(code).some((reference) => !files.some((file) => file.latexName === reference.name))
+  const needsRenderedReference = tikzFigures(code).length || /\\tikz\b/.test(code) || missingGraphics || files.some((file) => file.type === 'application/pdf')
+  if (includePreview && needsRenderedReference) {
+    const hasSolutions = /\\begin\s*\{solucion\}/.test(code)
+    const currentPreview = hasSolutions ? version.previewPdf?.resuelto || version.pdf?.resuelto : version.previewPdf?.enunciado || version.pdf?.enunciado
+    let preview = version.renderedLatex?.trim() === code.trim() ? currentPreview : ''
+    let temporaryUrl
+    try {
+      if (!preview) {
+        temporaryUrl = URL.createObjectURL(await compileCandidate(code, versionImageFiles(exercise, version)))
+        preview = temporaryUrl
+      }
+      // The rendered pages contain all the figures, including PDF page selections.
+      result.length = 0
+      const pages = await pdfReferences(preview, 4, true)
+      pages.forEach((dataUrl, index) => result.push({ name: `Ejercicio original renderizado · página ${index + 1}`, dataUrl }))
+    } finally { if (temporaryUrl) URL.revokeObjectURL(temporaryUrl) }
+  }
+  return result
+}
+
 export function useExerciseImages({ exercise, selectedVersion, model, teacherReady, configuredModels, compileCandidate, applyCode, nextImageNumber }) {
   const catalog = ref([])
   const catalogLoading = ref(false)
@@ -114,41 +151,8 @@ export function useExerciseImages({ exercise, selectedVersion, model, teacherRea
     else if (!options.some((entry) => entry.value === form.imageModel)) form.imageModel = options[0]?.value || ''
   })
 
-  async function referenceImages(version = exercise.value, code = version.enunciado || '', { includePreview = true } = {}) {
-    const files = referencedImageFiles(code, versionImageFiles(exercise.value, version)).filter((file) => /^image\//.test(file.type || '') || file.type === 'application/pdf')
-    if (files.length > 4) throw new Error('Este ejercicio contiene más de cuatro imágenes. Genera una variante a partir de una selección más pequeña.')
-    const result = []
-    for (const file of files) {
-      let dataUrl = file.pendingDataUrl
-      if (!dataUrl) {
-        if (file.type === 'application/pdf') dataUrl = (await pdfReferences(file.url))[0]
-        else {
-          const response = await fetch(referenceUrl(file.url))
-          if (!response.ok) throw new Error(`No se ha podido cargar la imagen ${file.compilerName} (HTTP ${response.status}).`)
-          dataUrl = await blobDataUrl(await response.blob())
-        }
-      }
-      result.push({ name: file.compilerName, dataUrl })
-    }
-    const missingGraphics = graphicReferences(code).some((reference) => !files.some((file) => file.latexName === reference.name))
-    const needsRenderedReference = tikzFigures(code).length || /\\tikz\b/.test(code) || missingGraphics || files.some((file) => file.type === 'application/pdf')
-    if (includePreview && needsRenderedReference) {
-      const hasSolutions = /\\begin\s*\{solucion\}/.test(code)
-      const currentPreview = hasSolutions ? version.previewPdf?.resuelto || version.pdf?.resuelto : version.previewPdf?.enunciado || version.pdf?.enunciado
-      let preview = version.renderedLatex?.trim() === code.trim() ? currentPreview : ''
-      let temporaryUrl
-      try {
-        if (!preview) {
-          temporaryUrl = URL.createObjectURL(await compileCandidate(code, versionImageFiles(exercise.value, version)))
-          preview = temporaryUrl
-        }
-        // The rendered pages contain all the figures, including PDF page selections.
-        result.length = 0
-        const pages = await pdfReferences(preview, 4, true)
-        pages.forEach((dataUrl, index) => result.push({ name: `Ejercicio original renderizado · página ${index + 1}`, dataUrl }))
-      } finally { if (temporaryUrl) URL.revokeObjectURL(temporaryUrl) }
-    }
-    return result
+  async function referenceImages(version = exercise.value, code = version.enunciado || '', options = {}) {
+    return exerciseVisualReferences(exercise.value, version, code, compileCandidate, options)
   }
 
   function discardCandidate() {

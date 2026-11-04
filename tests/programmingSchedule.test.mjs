@@ -97,6 +97,7 @@ const legacyDayWithContent = {
   sequenceIndex: null,
   notes: 'Contenido recuperado',
   contents: [{ id: 'contenido-antiguo', type: 'latex', code: 'Contenido' }],
+  documentIds: ['documento-compartido'],
 }
 const recoveredDuplicate = reconcileProgrammingSessions(
   [duplicateTarget],
@@ -106,5 +107,6 @@ const recoveredDuplicate = reconcileProgrammingSessions(
 assert.equal(recoveredDuplicate.id, legacyDayWithContent.id, 'Un registro antiguo con contenido prevalece sobre su duplicado estable vacío.')
 assert.equal(recoveredDuplicate.notes, 'Contenido recuperado')
 assert.deepEqual(recoveredDuplicate.contents, legacyDayWithContent.contents)
+assert.deepEqual(recoveredDuplicate.documentIds, ['documento-compartido'], 'Las referencias a documentos sobreviven a la reconciliación del calendario.')
 
 console.log('Programming schedule tests passed')

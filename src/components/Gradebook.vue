@@ -156,6 +156,8 @@ const weightDialogWeights = ref({})
 const suppressTitleClick = ref(false)
 let revision = 0
 let localIdentitySaveTimer = null
+let savedIdentityFingerprint = ''
+let savedRosterFingerprint = ''
 
 const structure = computed(() => localGroup.value.evaluaciones.estructura)
 const students = computed(() => localGroup.value.alumnos)
@@ -1178,6 +1180,24 @@ function privateStudentIdentity(student) {
   return identity
 }
 
+function identityFingerprint() {
+  return JSON.stringify(students.value.map(privateStudentIdentity).sort((a, b) => String(a.id).localeCompare(String(b.id))))
+}
+
+function rosterFingerprint() {
+  return JSON.stringify(students.value.map((student) => student.id).filter(Boolean).sort())
+}
+
+function getStudentChanges() {
+  const rosterChanged = rosterFingerprint() !== savedRosterFingerprint
+  return {
+    identities: rosterChanged || (!identityLoading.value && identityFingerprint() !== savedIdentityFingerprint),
+    roster: rosterChanged,
+  }
+}
+
+savedRosterFingerprint = rosterFingerprint()
+
 async function persistLocalIdentities() {
   identityError.value = ''
   try {
@@ -1234,8 +1254,10 @@ async function finalizeIdentityDeletions() {
   ids.forEach((id) => removedStudentIds.delete(id))
 }
 
-function markSaved(savedRevision = revision) {
+function markSaved(savedRevision = revision, { identitiesSaved = false } = {}) {
   if (savedRevision !== revision) return
+  if (identitiesSaved && !identityLoading.value) savedIdentityFingerprint = identityFingerprint()
+  savedRosterFingerprint = rosterFingerprint()
   dirty.value = false
   emit('dirty-change', false)
 }
@@ -1255,6 +1277,7 @@ onMounted(async () => {
     console.error('Error al cargar las identidades locales:', error)
   } finally {
     identityLoading.value = false
+    savedIdentityFingerprint = identityFingerprint()
     emitValidity()
   }
 })
@@ -1277,6 +1300,7 @@ defineExpose({
   persistLocalIdentities,
   finalizeIdentityDeletions,
   getRevision,
+  getStudentChanges,
 })
 </script>
 

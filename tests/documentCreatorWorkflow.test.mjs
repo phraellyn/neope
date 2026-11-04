@@ -12,6 +12,7 @@ let source = compileScript(parse(readFileSync(componentPath, 'utf8')).descriptor
 source = source.replace(/import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2/g, (statement, bindings, quote, target) => {
   if (!target.startsWith('.')) return statement
   if (target.endsWith('.vue')) return `const ${bindings.trim()} = {};`
+  if (target.endsWith('/composables/useExerciseImages')) return 'const exerciseVisualReferences = async () => [];'
   if (target.includes('/services/')) {
     const names = bindings.replace(/[{}\s]/g, '').split(',')
     return names.map((name) => `const ${name} = ${name === 'auth' ? '{ currentUser: { getIdToken: async () => "test-token" } }' : '(async () => { throw new Error("Unexpected Firebase operation"); })'};`).join('\n')
@@ -48,6 +49,13 @@ try {
 %%% final: \end{document}` })
   const props = { templates: [makeTemplate('a', 'Asignatura'), makeTemplate('b', 'Materia'), { id: 'internal', archivo: 'ejercicio.tex', codigo: '\\documentclass{article}' }], exercises: [], conceptNodes: [], subjectSelections: {}, exerciseCounts: {}, teacherProfile: { centros: [] }, groups: [], compilerBaseUrl: '/compiler-api/v1', aiModel: 'test', aiModelOptions: [], libraryQuery: '', hasMoreExercises: false, loadingMoreExercises: false }
   const state = component.setup(props, { expose() {}, emit() {} })
+  const card = { campos: { level: '2º ESO', course: '2º ESO B', title: 'Funciones', date: '2026-11-04' }, plantillas: [{ nombre: 'Examen' }, { nombre: 'Resuelto' }], pdfs: [{ url: 'document.pdf' }] }
+  assert.equal(state.documentCardGroup(card), '2º ESO B')
+  assert.equal(state.documentCardTitle(card), 'Funciones')
+  assert.equal(state.documentCardDate(card), '04/11/26')
+  assert.deepEqual(state.documentCardTemplates(card), ['Examen', 'Resuelto'])
+  assert.equal(state.documentCardPdf(card), 'document.pdf')
+  assert.equal(state.documentCardGroup({ campos: { nivel: '2º BTO', curso: 'A' } }), '2º BTO · A')
   state.newDocument()
   assert.equal(state.documentTemplates.value.length, 2, 'Internal template must be hidden')
   state.selectTemplate(state.documentTemplates.value[0])
@@ -79,6 +87,27 @@ try {
   }
   state.editDocument(saved)
   assert.match(state.activeDocumentCode(state.selectedTemplates.value[0]), /Contenido editado/)
+  const recycleTemplate = { id: 'recycle', archivo: 'recycle.tex', nombre: 'Examen', codigo: String.raw`% neope:document {"version":2,"content":"code","assessment":true,"command":"cabecera"}
+% neope:field {"key":"course","type":"group","argument":1}
+% neope:field {"key":"date","type":"date","argument":2}
+\documentclass{article}
+%%% previo: \begin{document}
+%%% previo: {{header}}
+%%% final: \end{document}` }
+  props.templates = [recycleTemplate]
+  props.groups = [{ id: 'new-group', nombre: '2º B', curso: '2º ESO', asignatura: 'Matemáticas', subjectId: 'math' }]
+  const original = { id: 'original', plantilla: { archivo: 'recycle.tex' }, campos: { course: '1º A', date: '2025-01-01' }, assessment: { evaluable: true, groupId: 'old-group', shortName: 'Prueba', gradebookItemId: 'old-grades' }, codigo: '\\documentclass{article}\n\\begin{document}\n\\cabecera{1º A}{01/01/25}\nContenido personalizado.\n\\end{document}', pdf: { url: 'old.pdf' } }
+  state.copyDocumentWithContext(original, { groupId: 'new-group', date: '2026-11-04', programmingDayId: 'day' })
+  assert.equal(state.selectedDocumentId.value, null)
+  assert.equal(state.documentAssessment.gradebookItemId, null)
+  assert.equal(state.documentAssessment.evaluable, true, 'The copy retains the original assessment setting')
+  assert.equal(state.documentAssessment.groupId, 'new-group')
+  assert.equal(original.assessment.gradebookItemId, 'old-grades')
+  assert.match(state.activeDocumentCode(state.selectedTemplates.value[0]), /\\cabecera\{2º B\}\{04\/11\/26\}/)
+  assert.match(state.activeDocumentCode(state.selectedTemplates.value[0]), /Contenido personalizado/)
+  assert.equal(state.previewDocuments.value.length, 0, 'The copied document must be recompiled')
+  props.templates = [makeTemplate('a', 'Asignatura'), makeTemplate('b', 'Materia'), { id: 'internal', archivo: 'ejercicio.tex', codigo: '\\documentclass{article}' }]
+  state.editDocument(saved)
   state.openFinalCode('a')
   state.regenerateFinalCode()
   assert.doesNotMatch(state.editingFinalCode.value, /Contenido editado/)
@@ -164,6 +193,34 @@ Contenido recuperado.
   notes.openFinalCode('notes')
   assert.doesNotMatch(notes.editingFinalCode.value, /\\input\{\.\.\/teoria\}/)
   assert.equal(notes.editingCodeIsCompiled.value, false, 'Recovered code must be compiled before treating an old PDF as current')
+  const copy = component.setup({ ...props, templates: [bankTemplate, { id: 'copy-internal', archivo: 'ejercicio.tex', nombre: 'ejercicio', codigo: '\\documentclass{article}' }], exercises: [{ ...exercise, curriculum: { ...exercise.curriculum, conceptIds: ['arithmetic'] } }], conceptNodes: [{ id: 'arithmetic', title: 'Cálculo' }] }, { expose() {}, emit() {} })
+  copy.selectTemplate(copy.documentTemplates.value[0])
+  copy.selectedDocumentId.value = 'original-document'
+  copy.documentAssessment.gradebookItemId = 'original-gradebook-item'
+  copy.exerciseQueue.value = [copy.createExerciseDocumentBlock('exercise')]
+  copy.finalCodes[copy.selectedTemplate.value.key] = copy.generatedCodeForTemplate(copy.selectedTemplate.value).replace('Calcula $1+1$.', 'Edición manual: calcula $7+7$.')
+  const originalCode = copy.finalCodes[copy.selectedTemplate.value.key]
+  const context = await copy.prepareDocumentVariation()
+  assert.match(context.slots[0].latex, /Edición manual: calcula \$7\+7\$/)
+  const row = { original: context.slots[0], choice: { origin: 'cloned', requiredConceptIds: ['arithmetic'] }, snapshot: null }
+  const generated = { enunciado: context.slots[0].latex.replace('7+7', '8+8').replace('\\lsol{2}', '\\lsol{16}'), model: 'test', coveredConceptIds: ['arithmetic'], criteria: [], partConcepts: [] }
+  row.snapshot = copy.documentVariationSnapshot(generated, row, context)
+  const compiled = await copy.compileDocumentVariationExercise(row.snapshot, context)
+  row.artifacts = compiled.artifacts
+  const copyBlocks = copy.replaceVariationBlocks(context.blocks, new Map([[row.original.slotId, { exerciseId: row.snapshot.id, snapshot: row.snapshot, version: 0, generated: true }]]))
+  const previews = await copy.compileDocumentVariationPreviews(copyBlocks, context)
+  assert.match(previews[0].code, /8\+8/)
+  assert.match(previews[0].code, /neope:document-block/)
+  assert.equal(copy.selectedDocumentId.value, 'original-document', 'Preview must not replace the original identity')
+  assert.equal(copy.finalCodes[copy.selectedTemplate.value.key], originalCode, 'Preview must leave the original editable code intact')
+  await copy.acceptDocumentVariation({ blocks: copyBlocks, rows: [row], previews, context, plan: { conceptIds: ['arithmetic'] }, mode: 'cloned' })
+  assert.equal(copy.selectedDocumentId.value, null, 'Accept creates a new document identity')
+  assert.equal(copy.documentAssessment.gradebookItemId, null, 'A copy cannot overwrite the original gradebook item')
+  assert.equal(copy.documentContent.value.source.options.variation.sourceDocumentId, 'original-document')
+  assert.equal(copy.workflowState.value.dirty, true, 'The accepted draft must ask about unsaved work')
+  assert.equal(exercise.enunciado.includes('8+8'), false, 'Generated exercises must not mutate the bank')
+  copy.revokePreview()
+  copy.revokeGeneratedSegmentArtifacts()
   await nextTick()
   console.log('Creador: campos compartidos, código por resultado, recompilación, regeneración y reapertura correctos.')
 } finally {

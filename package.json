@@ -10,6 +10,7 @@
     "test:exercise-structure": "node tests/exerciseStructure.test.mjs",
     "test:document-template": "node tests/documentTemplate.test.mjs",
     "test:document-creator": "node tests/documentCreatorWorkflow.test.mjs",
+    "test:document-variation": "node tests/documentVariation.test.mjs",
     "test:latex-document-source": "node tests/latexDocumentSource.test.mjs",
     "test:rubric-assessment": "node tests/rubricAssessment.test.mjs",
     "test:document-assessment": "node tests/documentAssessmentMatrix.test.mjs",

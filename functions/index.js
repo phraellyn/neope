@@ -26,6 +26,7 @@ import { curriculumPromptContext } from './curriculumContext.js'
 import { achievementGranularityInstructions } from './achievementGranularity.js'
 import { generateExerciseRaster, prepareVisualVariation, regenerateTikzFigure, visualMessageContent, visualModelCatalog, visualVariationFormat } from './visualGeneration.js'
 import { graphicReferences, tikzFigures } from './exerciseVisualsShared.js'
+import { documentVariationHandlers } from './documentVariations.js'
 import {
   ensureAlignedInDisplayMath,
   hasLegacyDisplayMathDelimiters,
@@ -64,6 +65,16 @@ function requireTeacherAccess(request) {
 
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
 const visualCallableOptions = { region: 'europe-west1', enforceAppCheck: true, secrets: [openRouterApiKey], memory: '512MiB' }
+
+const documentVariations = documentVariationHandlers({ db: adminDb, resolveModel: resolveAiModel, apiKey: () => openRouterApiKey.value(), requestModel: requestOpenRouterWithRetry, choiceContent, validateVariation: validateLatexVariation })
+export const planDocumentVariation = onCall({ ...visualCallableOptions, timeoutSeconds: 180 }, async (request) => {
+  requireTeacherAccess(request)
+  return documentVariations.plan(request)
+})
+export const generateDocumentExerciseVariation = onCall({ ...visualCallableOptions, timeoutSeconds: 270 }, async (request) => {
+  requireTeacherAccess(request)
+  return documentVariations.generate(request)
+})
 
 export const listAiModelCapabilities = onCall({ ...visualCallableOptions, timeoutSeconds: 60 }, async (request) => {
   requireTeacherAccess(request)

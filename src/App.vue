@@ -1830,7 +1830,7 @@ function resolvedLatex(code) {
     // apartadosc; aquí ese salto no es válido y debe ser inocuo.
     .replace(/\\begin\s*\{apartadosc\}/g, '\\begin{apartados}')
     .replace(/\\end\s*\{apartadosc\}/g, '\\end{apartados}')
-    .replace(/^/,'\\def\\columnbreak{}\n')
+    .replace(/^/,'\\def\\columnbreak{}\n\\def\\newcolumn{}\n')
 }
 
 function clearVersionPreview(version) {
@@ -4656,16 +4656,19 @@ function addProgrammingAssessmentToLoadedGroup({ groupId, item, initialResults =
   })
 }
 
-async function createProgrammingDocument({ date, ...session }) {
+async function createProgrammingDocument({ date, sourceDocument, ...session }) {
   const group = selectedCareerGroup.value
   if (!group) return
   await setActiveView('Documentos')
+  if (active.value !== 'Documentos') return
   await nextTick()
-  documentCreatorRef.value?.newDocumentWithContext?.({
+  const context = {
     groupId: group.id,
     date,
     ...session,
-  })
+  }
+  if (sourceDocument) documentCreatorRef.value?.copyDocumentWithContext?.(sourceDocument, context)
+  else documentCreatorRef.value?.newDocumentWithContext?.(context)
 }
 
 function fitClassroom() {
@@ -4681,24 +4684,29 @@ async function syncGradebookAccessCodes(group) {
   await httpsCallable(functions, 'syncStudentAccessCodes')({ groupId: group.id, codes })
 }
 
+const accessCodeSyncQueue = new Map()
+function scheduleGradebookAccessCodeSync(group) {
+  if (!group?.id) return
+  const previous = accessCodeSyncQueue.get(group.id) || Promise.resolve()
+  const next = previous.catch(() => {}).then(() => syncGradebookAccessCodes(group))
+  accessCodeSyncQueue.set(group.id, next)
+  void next.catch((error) => {
+    firestoreError.value = 'El cuaderno se ha guardado, pero no se han podido sincronizar los accesos de alumnos.'
+    console.error('Error al sincronizar los accesos de alumnos:', error)
+  }).finally(() => { if (accessCodeSyncQueue.get(group.id) === next) accessCodeSyncQueue.delete(group.id) })
+}
+
 async function saveGradebook({ includeIdentities = false, retryAccessCodes = false } = {}) {
-  if (!gradebookValid.value) {
+  if (gradebookSavePromise) await gradebookSavePromise
+  const changes = gradebookRef.value?.getStudentChanges?.() || { identities: includeIdentities, roster: retryAccessCodes }
+  const saveIdentities = includeIdentities && changes.identities
+  if (saveIdentities && !gradebookValid.value) {
     firestoreError.value = 'Completa correctamente los nombres antes de salir de la configuración.'
     return false
   }
-  if (gradebookSavePromise) await gradebookSavePromise
   if (!gradebookDirty.value) {
-    if (!retryAccessCodes) return true
-    const currentGroup = gradebookRef.value?.getGroup?.()
-    if (!currentGroup) return false
-    try {
-      await syncGradebookAccessCodes(currentGroup)
-      return true
-    } catch (error) {
-      firestoreError.value = 'No se han podido sincronizar los accesos de alumnos.'
-      console.error('Error al sincronizar los accesos de alumnos:', error)
-      return false
-    }
+    if (retryAccessCodes) scheduleGradebookAccessCodeSync(gradebookRef.value?.getGroup?.())
+    return true
   }
 
   const saveTask = (async () => {
@@ -4706,24 +4714,15 @@ async function saveGradebook({ includeIdentities = false, retryAccessCodes = fal
     firestoreError.value = ''
     const savedRevision = gradebookRef.value?.getRevision?.()
     try {
-      if (includeIdentities) await gradebookRef.value?.persistLocalIdentities?.()
+      if (saveIdentities) await gradebookRef.value?.persistLocalIdentities?.()
       const updatedGroup = gradebookRef.value?.getGroup?.()
       if (!updatedGroup) return false
       const previousGroup = teacherGroups.value.find((group) => group.id === updatedGroup.id)
       const previousStudentIds = (previousGroup?.alumnos || []).map((student) => student.id).filter(Boolean)
       const savedGroup = await saveGroup(updatedGroup, previousStudentIds, currentTeacherId.value)
-      try {
-        // También reintenta accesos que una versión anterior hubiera dejado
-        // pendientes tras guardar correctamente el cuaderno.
-        await syncGradebookAccessCodes(savedGroup)
-      } catch (error) {
-        // El grupo ya está guardado: el acceso del alumno puede reintentarse
-        // más tarde sin convertir un éxito en un falso fallo del cuaderno.
-        firestoreError.value = 'El cuaderno se ha guardado, pero no se han podido sincronizar los accesos de alumnos.'
-        console.error('Error al sincronizar los accesos de alumnos:', error)
-      }
+      scheduleGradebookAccessCodeSync(savedGroup)
       teacherGroups.value = teacherGroups.value.map((group) => group.id === savedGroup.id ? savedGroup : group)
-      if (includeIdentities) {
+      if (saveIdentities || changes.roster) {
         try {
           await gradebookRef.value?.finalizeIdentityDeletions?.()
         } catch (error) {
@@ -4731,7 +4730,7 @@ async function saveGradebook({ includeIdentities = false, retryAccessCodes = fal
           console.error('Error al limpiar identidades locales:', error)
         }
       }
-      gradebookRef.value?.markSaved?.(savedRevision)
+      gradebookRef.value?.markSaved?.(savedRevision, { identitiesSaved: saveIdentities })
       return true
     } catch (error) {
       firestoreError.value = 'No se ha podido guardar el cuaderno del grupo.'
@@ -4745,6 +4744,7 @@ async function saveGradebook({ includeIdentities = false, retryAccessCodes = fal
   gradebookSavePromise = saveTask
   const result = await saveTask
   if (gradebookSavePromise === saveTask) gradebookSavePromise = null
+  if (result && gradebookDirty.value) return gradebookRef.value ? saveGradebook({ includeIdentities, retryAccessCodes }) : false
   return result
 }
 
