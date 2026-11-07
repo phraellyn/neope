@@ -15,7 +15,8 @@ function collection(path) {
 }
 const db = { doc, collection, runTransaction: async (callback) => callback({ get: async (ref) => snapshot(ref.path), set: (ref, value) => store.set(ref.path, structuredClone(value)), update: (ref, value) => store.set(ref.path, { ...store.get(ref.path), ...structuredClone(value) }), delete: (ref) => store.delete(ref.path) }) }
 const files = new Map()
-const bucket = { name: 'bucket', file: (path) => ({ download: async () => [files.get(path) || Buffer.from(path)], save: async (bytes) => { files.set(path, bytes) }, delete: async () => { files.delete(path) } }) }
+const missingPaths = new Set()
+const bucket = { name: 'bucket', file: (path) => ({ download: async () => { if (missingPaths.has(path)) throw Object.assign(new Error('missing'), { code: 404 }); return [files.get(path) || Buffer.from(path)] }, save: async (bytes) => { files.set(path, bytes) }, delete: async () => { files.delete(path) } }) }
 const api = studentTrainingHandlers({ db, bucket })
 assert.equal(pdfStoragePath({ storagePath: 'ejercicios/ex1/revision.pdf' }, 'ex1', 'bucket'), 'ejercicios/ex1/revision.pdf')
 assert.equal(pdfStoragePath('https://evil.example/v0/b/bucket/o/ejercicios%2Fex1%2Ffile.pdf', 'ex1', 'bucket'), '')
@@ -49,6 +50,13 @@ const loaded = await api.load(request({}))
 assert.equal(loaded.progress.a.obtained, 2)
 assert.equal(loaded.session, null)
 await assert.rejects(() => api.start(request({ selectedConceptIds: ['a'] })), /No quedan ejercicios/)
+const original = store.get('ejercicios/ex1')
+store.set('ejercicios/ex2', { ...structuredClone(original), pdf: { statement: { storagePath: 'ejercicios/ex2/statement.pdf' }, solved: { storagePath: 'ejercicios/ex2/solved.pdf' } } })
+store.set('ejercicios/ex3', { ...structuredClone(original), pdf: { statement: { storagePath: 'ejercicios/ex3/statement.pdf' }, solved: { storagePath: 'ejercicios/ex3/solved.pdf' } } })
+missingPaths.add('ejercicios/ex2/solved.pdf')
+const nextAvailable = await api.start(request({ selectedConceptIds: ['a'] }))
+assert.equal(nextAvailable.exerciseId, 'ex3', 'An unavailable PDF does not prevent proposing another exercise')
+await api.update(request({ sessionId: nextAvailable.id, action: 'abandon' }))
 const sent = await api.studentMessages(request({ text: 'Tengo una duda' }))
 assert.equal(sent.messages.length, 1)
 const teacher = (data) => ({ auth: { uid: 'teacher', token: { role: 'teacher' } }, data: { groupId: 'g1', ...data } })

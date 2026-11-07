@@ -79,17 +79,26 @@ export function studentTrainingHandlers({ db, bucket }) {
     const completed = attempts.docs.map((doc) => doc.data()).filter((item) => item.status === 'completed').map((item) => item.key)
     const active = sessions.docs.map((doc) => doc.data()).filter((item) => ['active', 'review'].includes(item.status)).map((item) => item.key)
     if (sessions.docs.some((doc) => doc.id === data.groupId && ['active', 'review'].includes(doc.data().status))) throw new HttpsError('failed-precondition', 'Ya hay un ejercicio en curso.')
-    const candidate = selectTrainingCandidate(exercises, selected, nodes, completed, { repeat: data.repeat === true, active })
-    if (!candidate) throw new HttpsError('not-found', 'No quedan ejercicios disponibles para estos contenidos.')
-    const root = exercises.find((exercise) => exercise.id === candidate.exerciseId)
-    const version = candidate.variationId ? root.variaciones.find((item) => item.id === candidate.variationId) : root
-    const statementPath = pdfStoragePath(version.pdf?.statement || version.pdf?.enunciado, root.id, bucket.name)
-    const solutionPath = pdfStoragePath(version.pdf?.solved || version.pdf?.resuelto, root.id, bucket.name)
-    if (!statementPath || !solutionPath || statementPath === solutionPath) throw new HttpsError('failed-precondition', 'El ejercicio necesita volver a compilarse antes de practicarlo.')
+    let candidate, version, statement, solution
+    const unavailable = []
+    while (true) {
+      candidate = selectTrainingCandidate(exercises, selected, nodes, completed, { repeat: data.repeat === true, active: [...active, ...unavailable] })
+      if (!candidate) throw new HttpsError('not-found', unavailable.length ? 'No quedan ejercicios disponibles. Algunos necesitan volver a compilarse.' : 'No quedan ejercicios disponibles para estos contenidos.')
+      const root = exercises.find((exercise) => exercise.id === candidate.exerciseId)
+      version = candidate.variationId ? root.variaciones.find((item) => item.id === candidate.variationId) : root
+      const statementPath = pdfStoragePath(version.pdf?.statement || version.pdf?.enunciado, root.id, bucket.name)
+      const solutionPath = pdfStoragePath(version.pdf?.solved || version.pdf?.resuelto, root.id, bucket.name)
+      try {
+        ;[statement, solution] = await Promise.all([bucket.file(statementPath).download(), bucket.file(solutionPath).download()])
+        break
+      } catch (error) {
+        if (Number(error?.code) !== 404) throw error
+        unavailable.push(candidate.key)
+      }
+    }
     const id = context.attempts.doc().id
     const privateStatement = `studentTraining/${context.code}/${id}/statement.pdf`
     const privateSolution = `studentTraining/${context.code}/${id}/solution.pdf`
-    const [statement, solution] = await Promise.all([bucket.file(statementPath).download(), bucket.file(solutionPath).download()])
     if (statement[0].length > 7_000_000 || solution[0].length > 7_000_000) throw new HttpsError('resource-exhausted', 'El PDF es demasiado grande para la vista de práctica.')
     try {
       await Promise.all([bucket.file(privateStatement).save(statement[0], { resumable: false, contentType: 'application/pdf' }), bucket.file(privateSolution).save(solution[0], { resumable: false, contentType: 'application/pdf' })])
