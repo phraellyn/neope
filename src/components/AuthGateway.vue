@@ -6,7 +6,7 @@ import {
   signInWithEmailAndPassword,
 } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
-import { auth, functions } from '../services/firebase'
+import { auth, functions, isLocalStudentDemo } from '../services/firebase'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 
 const mode = ref('teacher')
@@ -47,8 +47,15 @@ async function run(task, fallback) {
 }
 
 async function teacherLogin() {
+  const entered = email.value.trim()
+  if (/^[A-HJ-NP-Za-km-z1-9]{6}$/.test(entered)) {
+    changeMode('student')
+    studentCode.value = entered
+    notice.value = 'Has introducido un código de alumno. Pulsa Continuar para acceder.'
+    return
+  }
   await run(async () => {
-    await signInWithEmailAndPassword(auth, email.value.trim(), password.value)
+    await signInWithEmailAndPassword(auth, entered, password.value)
   }, 'No se ha podido iniciar sesión.')
 }
 
@@ -166,6 +173,9 @@ onMounted(() => {
           <v-btn value="teacher">Profesor</v-btn>
           <v-btn value="student">Alumno</v-btn>
         </v-btn-toggle>
+        <v-alert v-if="isLocalStudentDemo" type="info" variant="tonal" density="compact" class="mb-4">
+          Prueba local: profesor <strong>profesor@ejemplo.test</strong> o alumno <strong>ABC234</strong>. Contraseña para ambos: <strong>neopeprueba</strong>.
+        </v-alert>
 
         <template v-if="mode === 'teacher'">
           <v-text-field v-model="email" label="Correo electrónico" type="email" autocomplete="username" variant="outlined" autofocus />
@@ -180,6 +190,7 @@ onMounted(() => {
         </template>
 
         <template v-else>
+          <v-alert v-if="notice" type="info" variant="tonal" class="mb-4">{{ notice }}</v-alert>
           <v-text-field
             v-model="studentCode"
             label="Código de 6 caracteres"

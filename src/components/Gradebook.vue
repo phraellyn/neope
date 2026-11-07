@@ -1,5 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { httpsCallable } from 'firebase/functions'
+import { functions } from '../services/firebase'
 import {
   deleteStudentIdentitiesForGroup,
   identityRecoveryMessage,
@@ -12,6 +14,8 @@ import { loadRubrics } from '../services/rubricRepository'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
 import RubricAlignmentBadges from './RubricAlignmentBadges.vue'
+import TeacherStudentMessages from './TeacherStudentMessages.vue'
+import { loadStudentPublications, setStudentPublication } from '../services/studentPublicationRepository'
 import { loadDocumentAssessmentExercises } from '../services/documentAssessmentLoader'
 import {
   createRubricAssessment,
@@ -112,6 +116,28 @@ function normalizeGroup(group) {
 }
 
 const localGroup = ref(normalizeGroup(props.group))
+const studentPublications = ref({})
+const publicationSaving = ref(false)
+async function changeResultPublication(id, visible) {
+  if (!id || publicationSaving.value) return
+  publicationSaving.value = true
+  try { await setStudentPublication(props.group.id, 'result', id, visible); studentPublications.value = { ...studentPublications.value, [`result-${id}`]: visible } }
+  catch (error) { showAppErrorToast(error.message || 'No se ha podido cambiar la publicación.') }
+  finally { publicationSaving.value = false }
+}
+const studentMessages = ref([])
+const selectedMessageStudent = ref(null)
+const messagesDialog = ref(false)
+let messagesTimer
+async function refreshStudentMessages() {
+  if (!props.group.id || !props.teacherId) return
+  try { studentMessages.value = (await httpsCallable(functions, 'manageTeacherStudentMessages')({ groupId: props.group.id })).data.messages }
+  catch (error) { console.error('No se han podido cargar los mensajes del alumnado:', error) }
+}
+function pendingStudentMessages(studentId) {
+  return studentMessages.value.filter((message) => message.studentCode === studentId && ['pending', 'waiting'].includes(message.status)).length
+}
+function openStudentMessages(student) { selectedMessageStudent.value = student; messagesDialog.value = true }
 const dirty = ref(false)
 const bulkStudentDialog = ref(false)
 const bulkStudentText = ref('')
@@ -1268,6 +1294,11 @@ function getRevision() {
 
 emitValidity()
 onMounted(async () => {
+  if (props.group.id && props.teacherId) loadStudentPublications(props.group.id).then((values) => { studentPublications.value = values }).catch((error) => console.error('No se han podido cargar las publicaciones:', error))
+  if (props.teacherId) {
+    void refreshStudentMessages()
+    messagesTimer = window.setInterval(refreshStudentMessages, 60000)
+  }
   identityLoading.value = true
   identityError.value = ''
   try {
@@ -1285,6 +1316,7 @@ onMounted(async () => {
 watch(students, scheduleLocalIdentitySave, { deep: true })
 
 onBeforeUnmount(() => {
+  window.clearInterval(messagesTimer)
   clearTimeout(localIdentitySaveTimer)
   if (!identityLoading.value) {
     void persistLocalIdentities().catch((error) => console.error('Error al guardar identidades locales al cerrar el grupo:', error))
@@ -1306,6 +1338,7 @@ defineExpose({
 
 <template>
   <div class="gradebook" :class="{ 'gradebook-disabled': disabled, 'gradebook-configuration': configurationMode }">
+    <TeacherStudentMessages v-if="selectedMessageStudent" v-model="messagesDialog" :group-id="group.id" :student="selectedMessageStudent" @changed="studentMessages = $event" />
     <div class="gradebook-scroller">
       <table class="gradebook-table" :style="tableStyle">
         <colgroup>
@@ -1414,6 +1447,7 @@ defineExpose({
                 <button v-else type="button" class="gradebook-student-name" @click="emit('student-selected', { ...student })">
                   {{ student.nombre || student.id }}
                 </button>
+                <v-btn v-if="pendingStudentMessages(student.id)" icon="mdi-message-text-outline" size="x-small" variant="text" color="primary" :aria-label="`${pendingStudentMessages(student.id)} mensajes de ${student.nombre || student.id}`" @click.stop="openStudentMessages(student)" />
                 <button
                   v-if="studentSourceGroups.length > 1"
                   type="button"
@@ -1571,6 +1605,7 @@ defineExpose({
           <v-text-field v-model="editNodeForm.nombre" label="Nombre completo" variant="outlined" density="compact" hide-details autofocus />
           <v-text-field v-model="editNodeForm.nombreCorto" label="Nombre corto" variant="outlined" density="compact" hide-details @keyup.enter="saveNodeEdit" />
           <v-text-field v-if="findNode(editNodeForm.id)?.node?.rubric" v-model="editNodeForm.programmingDate" type="date" label="Fecha de programación" variant="outlined" density="compact" hide-details />
+          <v-switch v-if="findNode(editNodeForm.id)?.node?.type === 'item'" :model-value="Boolean(studentPublications[`result-${editNodeForm.id}`])" :loading="publicationSaving" :disabled="publicationSaving" label="Mostrar resultado al alumno" color="primary" hide-details @update:model-value="changeResultPublication(editNodeForm.id, $event)" />
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
           <v-spacer />

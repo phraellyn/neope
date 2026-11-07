@@ -13,6 +13,7 @@ export {
   claimStudentAccount,
   createTeacherInvitation,
   getStudentDashboard,
+  getStudentDashboardV2,
   inspectStudentAccess,
   inspectTeacherInvitation,
   listTeacherInvitations,
@@ -27,6 +28,7 @@ import { achievementGranularityInstructions } from './achievementGranularity.js'
 import { generateExerciseRaster, prepareVisualVariation, regenerateTikzFigure, visualMessageContent, visualModelCatalog, visualVariationFormat } from './visualGeneration.js'
 import { graphicReferences, tikzFigures } from './exerciseVisualsShared.js'
 import { documentVariationHandlers } from './documentVariations.js'
+import { studentTrainingHandlers } from './studentTraining.js'
 import {
   ensureAlignedInDisplayMath,
   hasLegacyDisplayMathDelimiters,
@@ -65,6 +67,23 @@ function requireTeacherAccess(request) {
 
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
 const visualCallableOptions = { region: 'europe-west1', enforceAppCheck: true, secrets: [openRouterApiKey], memory: '512MiB' }
+
+// Resolve the default bucket only when an operation needs it: function discovery
+// can load this module before the runtime has supplied its storage configuration.
+const studentTrainingBucket = {
+  get name() { return adminStorage.bucket().name },
+  file(path) { return adminStorage.bucket().file(path) },
+}
+const studentTraining = studentTrainingHandlers({ db: adminDb, bucket: studentTrainingBucket })
+const studentTrainingOptions = { region: 'europe-west1', enforceAppCheck: true, memory: '512MiB', timeoutSeconds: 120 }
+export const loadStudentTraining = onCall(studentTrainingOptions, (request) => studentTraining.load(request))
+export const startStudentTraining = onCall(studentTrainingOptions, (request) => studentTraining.start(request))
+export const getStudentTrainingPdf = onCall(studentTrainingOptions, (request) => studentTraining.pdf(request))
+export const updateStudentTraining = onCall(studentTrainingOptions, (request) => studentTraining.update(request))
+export const manageStudentMessages = onCall(studentTrainingOptions, (request) => studentTraining.studentMessages(request))
+export const manageTeacherStudentMessages = onCall(studentTrainingOptions, (request) => studentTraining.teacherMessages(request))
+export const getTeacherStudentTrainingProgress = onCall(studentTrainingOptions, (request) => studentTraining.teacherProgress(request))
+export const getStudentTrainingReadiness = onCall(studentTrainingOptions, (request) => studentTraining.readiness(request))
 
 const documentVariations = documentVariationHandlers({ db: adminDb, resolveModel: resolveAiModel, apiKey: () => openRouterApiKey.value(), requestModel: requestOpenRouterWithRetry, choiceContent, validateVariation: validateLatexVariation })
 export const planDocumentVariation = onCall({ ...visualCallableOptions, timeoutSeconds: 180 }, async (request) => {

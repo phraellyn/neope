@@ -11,6 +11,7 @@ import {
 import { loadStudentCompetencyProgress } from '../services/studentCompetencyProgress'
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import StudentCompetencyRadar from './StudentCompetencyRadar.vue'
+import StudentConceptProgress from './StudentConceptProgress.vue'
 
 const props = defineProps({
   student: { type: Object, required: true },
@@ -284,6 +285,7 @@ defineExpose({ persist })
         <v-tabs v-model="activeTab" class="student-detail-tabs" density="compact" color="primary" grow>
           <v-tab value="personal">Datos personales y familiares</v-tab>
           <v-tab value="results">Resultados académicos</v-tab>
+          <v-tab value="concepts">Mapa de conceptos</v-tab>
           <v-tab value="interviews">Entrevistas</v-tab>
         </v-tabs>
         <v-window v-model="activeTab" class="student-detail-tab-content">
@@ -353,6 +355,10 @@ defineExpose({ persist })
               <h2>Resultados académicos</h2>
               <p>Aquí reuniremos la información académica del alumno cuando definamos esta parte de la ficha.</p>
             </div>
+          </v-window-item>
+
+          <v-window-item value="concepts">
+            <StudentConceptProgress v-if="activeTab === 'concepts'" :group="group" :student-id="student.id" />
           </v-window-item>
 
           <v-window-item value="interviews">

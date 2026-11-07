@@ -47,19 +47,14 @@ service cloud.firestore {
       allow update: if isTeacher()
         && resource.data.teacherId == request.auth.uid
         && request.resource.data.teacherId == request.auth.uid;
-      allow read: if isStudent()
-        && (
-          get(/databases/$(database)/documents/studentAccessCodes/$(request.auth.token.studentCode)).data.groupId == groupId
-          || get(/databases/$(database)/documents/studentAccessCodes/$(request.auth.token.studentCode)).data.groupIds.hasAny([groupId])
-        )
-        && get(/databases/$(database)/documents/studentAccessCodes/$(request.auth.token.studentCode)).data.active == true;
-
       match /alumnos/{code} {
         allow read, write: if ownsGroup(groupId);
-        allow read: if isOwnStudentRecord(groupId, code);
       }
 
       match /programmingDays/{date} {
+        allow read, write: if ownsGroup(groupId);
+      }
+      match /studentPublications/{publicationId} {
         allow read, write: if ownsGroup(groupId);
       }
     }

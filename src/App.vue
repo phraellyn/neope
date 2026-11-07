@@ -30,7 +30,7 @@ import { tags } from '@lezer/highlight'
 import { latex } from 'codemirror-lang-latex'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
-import { auth, db, functions, isAppCheckConfigured, storage } from './services/firebase'
+import { auth, db, functions, isAppCheckConfigured, isLocalStudentDemo, storage } from './services/firebase'
 import MasonryGrid from './components/MasonryGrid.vue'
 import ExerciseCurriculumPicker from './components/ExerciseCurriculumPicker.vue'
 import ExerciseGradingEditor from './components/ExerciseGradingEditor.vue'
@@ -4965,6 +4965,7 @@ onBeforeUnmount(() => {
 
 <template>
   <v-app>
+    <div v-if="isLocalStudentDemo" role="status" style="position: fixed; z-index: 9999; right: 8px; bottom: 8px; padding: 4px 10px; border-radius: 4px; background: #274f7d; color: white; font-size: 12px; pointer-events: none">Prueba local · Datos de ejemplo</div>
     <AuthGateway v-if="!authReady || !authUser || !authRole" />
     <StudentPortal v-else-if="authRole === 'student'" />
     <template v-else>
@@ -5315,6 +5316,7 @@ onBeforeUnmount(() => {
             />
           </template>
         </v-tooltip>
+        <v-tooltip v-if="groupView === 'programming'" text="Revisar ejercicios para entrenamiento" location="bottom"><template #activator="{ props }"><v-btn v-bind="props" icon="mdi-clipboard-check-outline" rounded="circle" variant="text" aria-label="Revisar ejercicios para entrenamiento" @click="programmingRef?.openReadiness?.()" /></template></v-tooltip>
         <v-tooltip v-if="groupView === 'classroom' && gradebookConfigurationMode" text="Configurar disposición" location="bottom">
           <template #activator="{ props }">
             <v-btn v-bind="props" icon="mdi-view-grid-plus-outline" rounded="circle" variant="text" class="ml-1" aria-label="Configurar disposición" @click="openClassroomLayoutDialog" />

@@ -1,9 +1,9 @@
 import { getApp, getApps, initializeApp } from 'firebase/app'
-import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check'
-import { getAuth } from 'firebase/auth'
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
-import { getFunctions } from 'firebase/functions'
-import { getStorage } from 'firebase/storage'
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, CustomProvider } from 'firebase/app-check'
+import { connectAuthEmulator, getAuth } from 'firebase/auth'
+import { connectFirestoreEmulator, getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
+import { connectFunctionsEmulator, getFunctions } from 'firebase/functions'
+import { connectStorageEmulator, getStorage } from 'firebase/storage'
 
 const firebaseConfig = {
   apiKey: 'AIzaSyCCmF0l2YSUOD4K0AR-3EKtMFbsrLy4BEM',
@@ -15,13 +15,19 @@ const firebaseConfig = {
   measurementId: 'G-THPBQFTGH2',
 }
 
+// La demostración es exclusivamente local y nunca conecta con el proyecto real.
+export const isLocalStudentDemo = import.meta.env.DEV && import.meta.env.VITE_NEOPE_STUDENT_DEMO === 'true'
+const demoConfig = { apiKey: 'demo-key', projectId: 'demo-neope-student', appId: 'demo-app', storageBucket: 'demo-neope-student.appspot.com' }
 // Reutiliza la instancia durante las recargas en desarrollo.
-export const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig)
+export const firebaseApp = getApps().length ? getApp() : initializeApp(isLocalStudentDemo ? demoConfig : firebaseConfig)
 
 const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APP_CHECK_KEY
-export const isAppCheckConfigured = Boolean(appCheckSiteKey)
+export const isAppCheckConfigured = isLocalStudentDemo || Boolean(appCheckSiteKey)
 
-if (appCheckSiteKey) {
+if (isLocalStudentDemo) {
+  // El token ficticio solo lo acepta el emulador local configurado para la demo.
+  initializeAppCheck(firebaseApp, { provider: new CustomProvider({ getToken: async () => ({ token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJmaXh0dXJlIn0.signature', expireTimeMillis: Date.now() + 3600000 }) }) })
+} else if (appCheckSiteKey) {
   if (import.meta.env.DEV) {
     const debugToken = import.meta.env.VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN
     // Vite expone las variables de entorno como cadenas. Firebase necesita el
@@ -50,3 +56,9 @@ export const auth = getAuth(firebaseApp)
 auth.useDeviceLanguage()
 export const storage = getStorage(firebaseApp)
 export const functions = getFunctions(firebaseApp, 'europe-west1')
+if (isLocalStudentDemo) {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true })
+  connectFirestoreEmulator(db, '127.0.0.1', 8089)
+  connectFunctionsEmulator(functions, '127.0.0.1', 5001)
+  connectStorageEmulator(storage, '127.0.0.1', 9199)
+}

@@ -13,6 +13,7 @@ const props = defineProps({
   subjectNodeIds: { type: Array, default: () => [] },
   selectionMode: { type: Boolean, default: false },
   selectedNodeIds: { type: Array, default: () => [] },
+  conceptProgress: { type: Object, default: () => ({}) },
   exerciseCounts: { type: Object, default: () => ({}) },
   centerTitle: { type: String, default: '' },
   showCurriculum: { type: Boolean, default: true },
@@ -20,7 +21,7 @@ const props = defineProps({
   fitAlignment: { type: String, default: 'center' },
 })
 
-const emit = defineEmits(['add-node', 'rename-node', 'delete-node', 'reorder-nodes', 'group-nodes', 'select-subject', 'update-subject-node-ids', 'update-selected-node-ids'])
+const emit = defineEmits(['add-node', 'rename-node', 'delete-node', 'reorder-nodes', 'group-nodes', 'select-subject', 'update-subject-node-ids', 'update-selected-node-ids', 'select-concept'])
 
 const width = 1800
 const height = 1300
@@ -154,6 +155,12 @@ function segmentPath(segment) {
     innerRadius: segment.innerRadius + 3,
     outerRadius: segment.outerRadius - 3,
   })
+}
+
+function progressPath(segment) {
+  const value = props.conceptProgress[segment.node.data.id]?.percentage
+  if (!Number.isFinite(value) || value <= 0) return ''
+  return segmentArc({ ...segment, outerRadius: segment.innerRadius + (segment.outerRadius - segment.innerRadius) * Math.min(100, value) / 100 })
 }
 
 function lighten(hex, amount) {
@@ -467,6 +474,7 @@ const countEntries = computed(() => [
 
 function toggleExerciseNode(nodeId) {
   if (!conceptSelectionMode.value) return
+  emit('select-concept', nodeId)
   emit('update-selected-node-ids', toggleHierarchySelection(props.nodes, props.selectedNodeIds, nodeId))
 }
 
@@ -844,6 +852,10 @@ defineExpose({ fitView })
               @keydown.enter.prevent="handleSegmentKey(segment, $event)"
               @keydown.space.prevent="handleSegmentKey(segment, $event)"
             ><title>{{ segment.node.data.title }}</title></path>
+          </g>
+
+          <g class="sunburst-progress" aria-hidden="true" style="pointer-events: none">
+            <path v-for="segment in segments" :key="`progress-${segment.node.data.id}`" :d="progressPath(segment)" fill="#102e53" fill-opacity=".35" />
           </g>
 
           <g class="sunburst-labels" :class="{ 'sunburst-labels-editable': configurationMode }">

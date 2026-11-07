@@ -3,6 +3,7 @@ import { getApps, initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { FieldValue, getFirestore } from 'firebase-admin/firestore'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
+import { publishedStudentData } from './studentPublication.js'
 
 const REGION = 'europe-west1'
 const ADMIN_EMAIL = 'carlos.s@educa.madrid.org'
@@ -464,7 +465,7 @@ export const claimStudentAccount = onCall(callableOptions, async (request) => {
   return { customToken: await auth.createCustomToken(user.uid) }
 })
 
-export const getStudentDashboard = onCall(callableOptions, async (request) => {
+async function studentDashboard(request) {
   if (!request.auth || request.auth.token.role !== 'student') {
     throw new HttpsError('permission-denied', 'Esta operación requiere una cuenta de alumno.')
   }
@@ -474,19 +475,29 @@ export const getStudentDashboard = onCall(callableOptions, async (request) => {
     throw new HttpsError('permission-denied', 'El acceso de este alumno ya no está activo.')
   }
   const groupIds = accessGroupIds(access.data())
-  const group = await db.doc(`grupos/${groupIds[0]}`).get()
-  const student = await group.ref.collection('alumnos').doc(code).get()
-  if (!group.exists || !student.exists) throw new HttpsError('not-found', 'No se han encontrado los datos académicos.')
-  const groupData = group.data()
+  const groups = (await Promise.all(groupIds.map(async (groupId) => {
+    const group = await db.doc(`grupos/${groupId}`).get()
+    if (!group.exists) return null
+    const student = await group.ref.collection('alumnos').doc(code).get()
+    if (!student.exists) return null
+    const data = group.data()
+    const [publications, planned, messages] = await Promise.all([
+      group.ref.collection('studentPublications').get(),
+      db.collection('documentos').where('programming.groupId', '==', groupId).get(),
+      db.collection('studentMessages').where('studentCode', '==', code).get(),
+    ])
+    const visible = publishedStudentData(data, student.data()?.results || {}, publications.docs.map((entry) => ({ id: entry.id, ...entry.data() })), planned.docs.map((entry) => ({ id: entry.id, ...entry.data() })))
+    const unreadMessages = messages.docs.filter((entry) => entry.data().groupId === groupId && entry.data().reply && entry.data().replyAt > (entry.data().studentSeenAt || '')).length
+    return { group: { id: group.id, name: data.name || '', subject: data.subject || '', subjectId: data.subjectId || '', academicYear: data.academicYear || '' }, ...visible, unreadMessages }
+  }))).filter(Boolean)
+  if (!groups.length) throw new HttpsError('not-found', 'No se han encontrado los datos académicos.')
   return {
     code,
-    group: {
-      id: group.id,
-      name: groupData.name || '',
-      subject: groupData.subject || '',
-      academicYear: groupData.academicYear || '',
-      evaluation: groupData.evaluation || { structure: [], weights: {} },
-    },
-    results: student.data()?.results || {},
+    groups,
+    ...groups[0],
   }
-})
+}
+
+// Ambas versiones aplican el mismo filtro y conservan los campos del portal anterior.
+export const getStudentDashboard = onCall(callableOptions, studentDashboard)
+export const getStudentDashboardV2 = onCall(callableOptions, studentDashboard)

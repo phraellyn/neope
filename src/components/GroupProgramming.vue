@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { auth } from '../services/firebase'
+import { httpsCallable } from 'firebase/functions'
+import { auth, functions } from '../services/firebase'
 import { loadRubrics } from '../services/rubricRepository'
 import {
   addRubricToProgrammingDay,
@@ -23,6 +24,7 @@ import { showAppErrorToast } from '../composables/useAppErrorToast'
 import { normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
 import { compilerDocumentSource, parseLatexDiagnostics } from '../utils/latexDiagnostics'
 import { documentMatchesGroupLevel } from '../utils/programmingDocuments'
+import { loadStudentPublications, setStudentPublication } from '../services/studentPublicationRepository'
 import ProgrammingLatexContent from './ProgrammingLatexContent.vue'
 
 const props = defineProps({
@@ -43,6 +45,27 @@ const documentLibrary = ref([])
 const documentSearch = ref('')
 const documentLoading = ref(false)
 const rubrics = ref([])
+const readinessDialog = ref(false)
+const readinessLoading = ref(false)
+const readinessResult = ref(null)
+const readinessError = ref('')
+async function openReadiness() {
+  readinessDialog.value = true; readinessLoading.value = true; readinessError.value = ''; readinessResult.value = null
+  try { readinessResult.value = (await httpsCallable(functions, 'getStudentTrainingReadiness')({ groupId: props.group.id })).data }
+  catch (error) { readinessError.value = error.message || 'No se ha podido revisar el banco de ejercicios.' }
+  finally { readinessLoading.value = false }
+}
+const studentPublications = ref({})
+const publicationSaving = ref('')
+async function toggleDatePublication(documentData) {
+  if (publicationSaving.value) return
+  const key = `date-${documentData.id}`
+  const visible = !studentPublications.value[key]
+  publicationSaving.value = key
+  try { await setStudentPublication(props.group.id, 'date', documentData.id, visible); studentPublications.value = { ...studentPublications.value, [key]: visible } }
+  catch (error) { showAppErrorToast(error.message || 'No se ha podido actualizar la fecha publicada.') }
+  finally { publicationSaving.value = '' }
+}
 const loading = ref(false)
 const editingDates = ref(new Set())
 const expandedDayIds = ref(new Set())
@@ -255,15 +278,20 @@ async function load() {
   if (!props.group?.id || !props.teacherId) return
   loading.value = true
   try {
-    const [loadedDays, loadedDocuments, loadedRubrics] = await Promise.all([
+    const [loadedDays, loadedDocuments, loadedRubrics, loadedPublications] = await Promise.all([
       loadAndSynchronizeProgrammingDays({ group: props.group, calendar: props.calendar, teacherId: props.teacherId }),
       loadProgrammingDocuments(props.group.id),
       loadRubrics(props.teacherId),
+      loadStudentPublications(props.group.id).catch((error) => {
+        console.warn('No se han podido cargar las publicaciones para alumnos:', error)
+        return {}
+      }),
     ])
     days.value = loadedDays
     documents.value = loadedDocuments
     referenceDocuments.value = await loadProgrammingDocumentReferences(loadedDays)
     rubrics.value = loadedRubrics
+    studentPublications.value = loadedPublications
     const current = todayIso()
     const target = loadedDays.find((day) => day.date >= current) || loadedDays.at(-1)
     focusedDayId.value = target?.id || null
@@ -661,7 +689,7 @@ onBeforeUnmount(() => {
   rubricDialog.value = false
   linkDialog.value = false
 })
-defineExpose({ flush })
+defineExpose({ flush, openReadiness })
 </script>
 
 <template>
@@ -768,6 +796,7 @@ defineExpose({ flush })
                 <span>{{ documentTitle(documentData) }}</span>
                 <small v-if="documentData.assessment?.evaluable && !documentData.programmingReference">Evaluable</small>
               </a>
+              <v-btn v-if="isEditing(day.id) && documentData.programming?.groupId === group.id && documentData.assessment?.evaluable" :icon="studentPublications[`date-${documentData.id}`] ? 'mdi-eye-outline' : 'mdi-eye-off-outline'" size="x-small" variant="text" :loading="publicationSaving === `date-${documentData.id}`" :aria-label="studentPublications[`date-${documentData.id}`] ? 'Ocultar fecha al alumno' : 'Publicar fecha para el alumno'" :title="studentPublications[`date-${documentData.id}`] ? 'Ocultar fecha al alumno' : 'Publicar fecha para el alumno'" @click="toggleDatePublication(documentData)" />
               <v-btn v-if="isEditing(day.id)" icon="mdi-close" size="x-small" rounded="circle" variant="text" color="error" aria-label="Retirar documento" @click="requestInstrumentRemoval(day, 'document', documentData)" />
             </div>
             <v-tooltip v-for="instrument in rubricsForDay(day)" :key="instrument.id" :text="rubricTooltip(instrument)" location="top">
@@ -805,6 +834,13 @@ defineExpose({ flush })
     </div>
     <div v-if="!loading && days.length" class="programming-scroll-end" aria-hidden="true" />
 
+    <v-dialog v-model="readinessDialog" max-width="700">
+      <v-card><v-card-title>Ejercicios para entrenamiento</v-card-title><v-card-text>
+        <v-progress-linear v-if="readinessLoading" indeterminate color="primary" />
+        <v-alert v-if="readinessError" type="error" variant="tonal">{{ readinessError }}</v-alert>
+        <template v-if="readinessResult"><p>{{ readinessResult.total }} ejercicios revisados. Los siguientes necesitan completarse o compilarse antes de poder proponerse:</p><v-list v-if="readinessResult.problems.length" lines="two"><v-list-item v-for="item in readinessResult.problems" :key="`${item.exerciseId}-${item.version}`" :title="`${item.title}${item.version ? ` · Variante ${item.version}` : ''}`" :subtitle="item.reasons.join(' ')" /></v-list><p v-else>Todos los ejercicios revisados están preparados.</p></template>
+      </v-card-text><v-card-actions><v-spacer /><v-btn variant="text" @click="readinessDialog = false">Cerrar</v-btn></v-card-actions></v-card>
+    </v-dialog>
     <v-dialog v-model="documentDialog" max-width="760">
       <v-card>
         <v-card-title>Añadir documento</v-card-title>
