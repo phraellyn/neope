@@ -111,12 +111,13 @@ async function studentLogin() {
     if (password.value.length < 8) throw new Error('La contraseña debe tener al menos 8 caracteres.')
     if (!studentClaimed.value) {
       if (password.value !== confirmation.value) throw new Error('Las contraseñas no coinciden.')
-      const result = await httpsCallable(functions, 'claimStudentAccount')({
-        code: studentCode.value,
-        password: password.value,
-      })
-      await signInWithCustomToken(auth, result.data.customToken)
-      return
+      try {
+        await httpsCallable(functions, 'claimStudentAccount')({ code: studentCode.value, password: password.value })
+        studentClaimed.value = true
+      } catch (error) {
+        if (error?.code !== 'functions/already-exists') throw error
+        studentClaimed.value = true
+      }
     }
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(studentCode.value))
     const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')

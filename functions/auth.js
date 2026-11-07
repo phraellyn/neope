@@ -462,7 +462,7 @@ export const claimStudentAccount = onCall(callableOptions, async (request) => {
     if (error instanceof HttpsError) throw error
     throw error
   }
-  return { customToken: await auth.createCustomToken(user.uid) }
+  return { activated: true }
 })
 
 async function studentDashboard(request) {
