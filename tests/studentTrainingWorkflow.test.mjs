@@ -8,6 +8,7 @@ const path = resolve('src/components/StudentTraining.vue')
 let source = compileScript(parse(readFileSync(path, 'utf8')).descriptor, { id: 'student-training-test' }).content
 source = source.replace(/import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2/g, (statement, bindings, quote, target) => {
   if (target === 'firebase/functions') return 'const httpsCallable = (_, name) => async (data) => ({ data: await globalThis.__trainingCall(name, data) });'
+  if (target === 'vuetify') return 'const useDisplay = () => ({ width: { value: 400 } });'
   if (!target.startsWith('.')) return statement
   if (target.endsWith('.vue')) return `const ${bindings.trim()} = {};`
   if (target.includes('/services/firebase')) return 'const functions = {};'
@@ -44,7 +45,13 @@ try {
   assert.equal(state.session.value.status, 'active')
   await state.action('reveal')
   assert.equal(state.session.value.status, 'review')
+  assert.equal(state.assessmentOpen.value, true)
   state.selectedCriteria.value = ['p1:c1']
+  state.toggleAssessment()
+  assert.equal(state.assessmentOpen.value, false)
+  state.toggleAssessment()
+  assert.equal(state.assessmentOpen.value, true)
+  assert.deepEqual(state.selectedCriteria.value, ['p1:c1'])
   await state.action('complete')
   assert.equal(state.session.value, null)
   assert.equal(calls.filter((call) => call.name === 'startStudentTraining').length, 1)

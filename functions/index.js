@@ -83,6 +83,7 @@ export const updateStudentTraining = onCall(studentTrainingOptions, (request) =>
 export const manageStudentMessages = onCall(studentTrainingOptions, (request) => studentTraining.studentMessages(request))
 export const manageTeacherStudentMessages = onCall(studentTrainingOptions, (request) => studentTraining.teacherMessages(request))
 export const getTeacherStudentTrainingProgress = onCall(studentTrainingOptions, (request) => studentTraining.teacherProgress(request))
+export const getStudentExam = onCall(studentTrainingOptions, (request) => studentTraining.publishedExam(request))
 export const getStudentTrainingReadiness = onCall(studentTrainingOptions, (request) => studentTraining.readiness(request))
 
 const documentVariations = documentVariationHandlers({ db: adminDb, resolveModel: resolveAiModel, apiKey: () => openRouterApiKey.value(), requestModel: requestOpenRouterWithRetry, choiceContent, validateVariation: validateLatexVariation })

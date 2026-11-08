@@ -1,6 +1,7 @@
 import { HttpsError } from 'firebase-functions/v2/https'
 import { createHash } from 'node:crypto'
 import { conceptProgress, selectTrainingCandidate, trainingSegments } from './studentTrainingLogic.js'
+import { examPdfCandidates, examResultItem, safeExamAssessment, safeExamExercise } from './studentExam.js'
 
 const validId = (value) => typeof value === 'string' && value.length > 0 && value.length <= 500 && value !== '.' && value !== '..' && !value.includes('/')
 const unique = (values) => [...new Set(Array.isArray(values) ? values.filter(validId) : [])]
@@ -233,6 +234,47 @@ export function studentTrainingHandlers({ db, bucket }) {
     ])
     return { nodes, progress: conceptProgress(attempts.docs.map((doc) => ({ id: doc.id, ...doc.data() })), nodes) }
   }
+  async function publishedExam(request) {
+    const { groupId, itemId } = request.data || {}
+    if (!validId(itemId)) throw new HttpsError('invalid-argument', 'Resultado no válido.')
+    const context = await identity(request, groupId)
+    const [publication, student] = await Promise.all([db.doc(`grupos/${groupId}/studentPublications/result-${itemId}`).get(), db.doc(`grupos/${groupId}/alumnos/${context.code}`).get()])
+    const item = examResultItem(context.group, itemId)
+    const results = student.data()?.results || {}
+    if (!publication.exists || publication.data()?.visible !== true || !item || !Object.hasOwn(results, itemId)) throw new HttpsError('permission-denied', 'Este resultado no está publicado.')
+    const documentId = item.documentAssessment.documentId
+    if (!validId(documentId)) throw new HttpsError('failed-precondition', 'El documento no está disponible.')
+    const snapshot = await db.doc(`documentos/${documentId}`).get()
+    if (!snapshot.exists) return { pdf: null, matrix: null }
+    const document = snapshot.data() || {}
+    let pdf = null
+    for (const candidate of examPdfCandidates(document, documentId, bucket.name)) {
+      try {
+        const [bytes] = await bucket.file(candidate.path).download()
+        if (bytes.length <= 7_000_000) { pdf = { data: bytes.toString('base64'), kind: candidate.solved ? 'solved' : 'statement' }; break }
+      } catch (error) { if (Number(error?.code) !== 404) throw error }
+    }
+    const result = results[itemId]
+    if (!result || typeof result !== 'object' || Number.isFinite(result.manualTotal) || !Array.isArray(result.selectedAchievementIds)) return { pdf, matrix: null }
+    const stored = (Array.isArray(document.ejercicios) ? document.ejercicios : []).map((reference, order) => ({ ...reference, order: reference.order ?? order }))
+    const requested = item.documentAssessment.exercises?.length ? item.documentAssessment.exercises : stored
+    const references = requested.map((reference, order) => {
+      const version = Number(reference.version) || 0
+      const embedded = stored.find((candidate) => reference.blockId && candidate.blockId === reference.blockId)
+        || stored.find((candidate) => candidate.order === (reference.order ?? order) && candidate.exerciseId === reference.exerciseId && (Number(candidate.version) || 0) === version)
+        || stored.find((candidate) => candidate.exerciseId === reference.exerciseId && (Number(candidate.version) || 0) === version)
+      return { ...embedded, ...reference, order: reference.order ?? embedded?.order ?? order, snapshot: reference.snapshot || embedded?.snapshot || null }
+    }).sort((a, b) => a.order - b.order)
+    const exercises = (await Promise.all(references.map(async (reference, order) => {
+      if (!validId(reference.exerciseId)) return null
+      let source = reference.snapshot
+      if (!source) { const exercise = await db.doc(`ejercicios/${reference.exerciseId}`).get(); if (!exercise.exists) return null; source = exercise.data() }
+      const version = Number(reference.version) || 0
+      const active = version ? source.variaciones?.[version - 1] || source : source
+      return { exerciseId: reference.exerciseId, version, order, source: safeExamExercise(active), assessment: safeExamAssessment(reference.snapshot?.assessment || reference.assessment || {}) }
+    }))).filter(Boolean)
+    return { pdf, matrix: exercises.length ? { exercises, selectedAchievementIds: result.selectedAchievementIds.filter((id) => typeof id === 'string') } : null }
+  }
   async function readiness(request) {
     const groupId = request.data?.groupId
     if (request.auth?.token?.role !== 'teacher' || !validId(groupId)) throw new HttpsError('permission-denied', 'Esta operación requiere una cuenta de profesor.')
@@ -255,5 +297,5 @@ export function studentTrainingHandlers({ db, bucket }) {
     })
     return { total: bank.docs.length, problems }
   }
-  return { load, start, pdf, update, studentMessages, teacherMessages, teacherProgress, readiness }
+  return { load, start, pdf, update, studentMessages, teacherMessages, teacherProgress, readiness, publishedExam }
 }

@@ -1,4 +1,7 @@
 <script setup>
+import MathText from './MathText.vue'
+import DocumentScoreEditor from './DocumentScoreEditor.vue'
+import { newDocumentAssessment, resetDocumentScore, setManualDocumentScore, toggleDocumentAchievement } from '../utils/documentAssessmentScore'
 import { computed, ref, watch } from 'vue'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
 import RubricAlignmentBadges from './RubricAlignmentBadges.vue'
@@ -67,7 +70,7 @@ async function initialize() {
   if (isDocument.value) {
     localResult.value = props.result?.type === 'document'
       ? clone(props.result)
-      : { type: 'document', total: 0, selectedAchievementIds: [], updatedAt: new Date().toISOString() }
+      : newDocumentAssessment(props.result)
     const matrixKey = documentMatrixKey(props.item)
     if (matrixKey && activeDocumentMatrix?.key === matrixKey) {
       // No vaciamos `exercises`: si Vuetify conserva el diálogo montado, los
@@ -122,14 +125,20 @@ function chooseCategoryScore(category, value) {
 
 function toggleAchievement(achievement) {
   if (!localResult.value) return
-  const selected = new Set(localResult.value.selectedAchievementIds || [])
-  if (selected.has(achievement.key)) selected.delete(achievement.key)
-  else selected.add(achievement.key)
-  localResult.value.selectedAchievementIds = [...selected]
-  const allAchievements = exercises.value.flatMap((exercise) => exercise.achievements || [])
-  localResult.value.total = allAchievements.reduce((sum, candidate) => (
-    selected.has(candidate.key) ? sum + (Number(candidate.points) || 0) : sum
-  ), 0)
+  toggleDocumentAchievement(localResult.value, achievement, exercises.value)
+  localResult.value.updatedAt = new Date().toISOString()
+  changed.value = true
+}
+
+function changeDocumentScore(value) {
+  if (!localResult.value || !setManualDocumentScore(localResult.value, value)) return
+  localResult.value.updatedAt = new Date().toISOString()
+  changed.value = true
+}
+
+function restoreDocumentScore() {
+  if (!localResult.value) return
+  resetDocumentScore(localResult.value, exercises.value)
   localResult.value.updatedAt = new Date().toISOString()
   changed.value = true
 }
@@ -155,10 +164,8 @@ watch(() => props.modelValue, (open) => {
           <strong>{{ isMerits ? 'Méritos' : isRubric ? item?.rubric?.title : student?.nombre || student?.nombreCorto || student?.id }}</strong>
           <span v-if="isRubric || isMerits">{{ student?.nombre || student?.nombreCorto || student?.id }}</span>
         </div>
-        <div class="student-assessment-total">
-          <span>{{ isDocument ? 'Nota' : 'Total' }}</span>
-          <strong>{{ new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(total) }}<template v-if="isDocument"> / {{ new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(Number(item?.documentAssessment?.maxPoints) || 0) }}</template></strong>
-        </div>
+        <DocumentScoreEditor v-if="isDocument" :total="total" :maximum="Number(item?.documentAssessment?.maxPoints) || 0" :manual="Number.isFinite(localResult?.manualTotal)" :disabled="loading || !localResult" @manual-score="changeDocumentScore" @reset-score="restoreDocumentScore" />
+        <div v-else class="student-assessment-total"><span>Total</span><strong>{{ new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(total) }}</strong></div>
         <v-btn icon="mdi-close" rounded="circle" variant="text" aria-label="Cerrar evaluación" @click="close" />
       </v-card-title>
       <v-divider />
@@ -172,14 +179,14 @@ watch(() => props.modelValue, (open) => {
         <article v-for="(category, categoryIndex) in item.rubric.categories" :key="category.id" class="student-rubric-category">
           <header><span>{{ categoryIndex + 1 }}</span><div><strong>{{ category.title }}</strong><small>{{ categoryScore(category)?.points === null ? 'Neutro' : `${categoryScore(category)?.points ?? 0} puntos` }}</small></div></header>
           <div v-if="category.type === 'range'" class="student-rubric-range">
-            <p>{{ category.range.description }}</p>
+            <p><MathText :text="category.range.description" /></p>
             <div class="student-rubric-buttons">
               <button v-for="points in rubricRangeValues(category)" :key="points" type="button" :class="{ selected: categoryScore(category)?.points === points }" @click="chooseCategoryScore(category, points)">{{ points }}</button>
             </div>
           </div>
           <div v-else class="student-rubric-levels">
             <button v-for="level in category.levels" :key="level.id" type="button" :class="{ selected: categoryScore(category)?.levelId === level.id }" @click="chooseCategoryScore(category, level.id)">
-              <span>{{ level.points === null ? 'Neutro' : `${level.points} pt` }}</span><strong>{{ level.description }}</strong>
+              <span>{{ level.points === null ? 'Neutro' : `${level.points} pt` }}</span><strong><MathText :text="level.description" /></strong>
             </button>
           </div>
           <RubricAlignmentBadges :alignment="category.alignment" />

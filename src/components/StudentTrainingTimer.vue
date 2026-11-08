@@ -39,9 +39,9 @@ onBeforeUnmount(() => { window.clearInterval(interval) })
 <template>
   <div class="student-timer" :class="{ expired }" role="timer" :aria-label="expired ? `Tiempo superado: ${display}` : `Tiempo restante: ${display}`">
     <strong>{{ display }}</strong>
-    <v-btn :icon="modelValue.runningSince ? 'mdi-pause' : 'mdi-play'" rounded="circle" variant="text" :disabled="disabled" :aria-label="modelValue.runningSince ? 'Pausar cronómetro' : 'Continuar cronómetro'" @click="toggle" />
-    <v-btn icon="mdi-restart" rounded="circle" variant="text" :disabled="disabled" aria-label="Reiniciar cronómetro" @click="reset" />
-    <v-btn :icon="muted ? 'mdi-volume-off' : 'mdi-volume-high'" rounded="circle" variant="text" :aria-label="muted ? 'Activar sonido' : 'Silenciar sonido'" @click="muted = !muted; unlockTrainingAudio()" />
+    <v-btn :icon="modelValue.runningSince ? 'mdi-pause' : 'mdi-play'" rounded="circle" variant="text" size="small" :disabled="disabled" :aria-label="modelValue.runningSince ? 'Pausar cronómetro' : 'Continuar cronómetro'" @click="toggle" />
+    <v-btn icon="mdi-restart" rounded="circle" variant="text" size="small" :disabled="disabled" aria-label="Reiniciar cronómetro" @click="reset" />
+    <v-btn :icon="muted ? 'mdi-volume-off' : 'mdi-volume-high'" rounded="circle" variant="text" size="small" :aria-label="muted ? 'Activar sonido' : 'Silenciar sonido'" @click="muted = !muted; unlockTrainingAudio()" />
   </div>
 </template>
 

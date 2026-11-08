@@ -3,7 +3,7 @@ import { getApps, initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { FieldValue, getFirestore } from 'firebase-admin/firestore'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
-import { publishedStudentData } from './studentPublication.js'
+import { publishedResultDocumentIds, publishedStudentData } from './studentPublication.js'
 
 const REGION = 'europe-west1'
 const ADMIN_EMAIL = 'carlos.s@educa.madrid.org'
@@ -486,7 +486,14 @@ async function studentDashboard(request) {
       db.collection('documentos').where('programming.groupId', '==', groupId).get(),
       db.collection('studentMessages').where('studentCode', '==', code).get(),
     ])
-    const visible = publishedStudentData(data, student.data()?.results || {}, publications.docs.map((entry) => ({ id: entry.id, ...entry.data() })), planned.docs.map((entry) => ({ id: entry.id, ...entry.data() })))
+    const results = student.data()?.results || {}
+    const publicationEntries = publications.docs.map((entry) => ({ id: entry.id, ...entry.data() }))
+    const plannedEntries = planned.docs.map((entry) => ({ id: entry.id, ...entry.data() }))
+    const plannedIds = new Set(plannedEntries.map((entry) => entry.id))
+    const missingIds = publishedResultDocumentIds(data, results, publicationEntries).filter((id) => !plannedIds.has(id))
+    const additional = await Promise.all(missingIds.map((id) => db.doc(`documentos/${id}`).get()))
+    const dateDocuments = [...plannedEntries, ...additional.filter((entry) => entry.exists).map((entry) => ({ id: entry.id, ...entry.data() }))]
+    const visible = publishedStudentData(data, results, publicationEntries, dateDocuments)
     const unreadMessages = messages.docs.filter((entry) => entry.data().groupId === groupId && entry.data().reply && entry.data().replyAt > (entry.data().studentSeenAt || '')).length
     return { group: { id: group.id, name: data.name || '', subject: data.subject || '', subjectId: data.subjectId || '', academicYear: data.academicYear || '' }, ...visible, unreadMessages }
   }))).filter(Boolean)

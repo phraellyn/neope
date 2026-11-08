@@ -45,8 +45,13 @@ async function main() {
   batch.set(db.doc(`studentAccessCodes/${studentCode}`), { active: true, authUid: 'demo-student', groupId: group, groupIds: [group], teacherId: 'demo-teacher' })
   batch.set(db.doc('especialidades/Matemáticas'), { nodes, asignaturas: { [subject]: nodes.map((node) => node.id) } })
   batch.set(db.doc('ejercicios/demo-exercise'), { titulo: 'Suma de fracciones', curriculum: { subjectId: subject }, contenidos: ['fracciones'], gradingCriteria: [{ id: 'calculo', description: 'Calcula el denominador común y la suma', points: 2 }], workedSolution: { latex: '1/2 + 1/4 = 3/4' }, pdf: { statement: { storagePath: statementPath }, solved: { storagePath: solvedPath } } })
+  const segmented = 'ejercicios/demo-segmented'
+  batch.set(db.doc(segmented), { titulo: 'Operaciones con fracciones', curriculum: { subjectId: subject }, parts: [
+    { id: 'a', contentIds: ['fracciones'], gradingCriteria: [{ id: 'a1', description: 'Calcula correctamente $\\frac12 + \\frac14$', points: 1 }], workedSolution: { latex: '1/2 + 1/4 = 3/4', pdf: { storagePath: `${segmented}/part-a.pdf` } } },
+    { id: 'b', contentIds: ['fracciones'], gradingCriteria: [{ id: 'b1', description: 'Calcula correctamente $\\frac23 - \\frac13$', points: 1 }], workedSolution: { latex: '2/3 - 1/3 = 1/3', pdf: { storagePath: `${segmented}/part-b.pdf` } } },
+  ], pdf: { statement: { storagePath: `${segmented}/statement.pdf` }, solved: { storagePath: `${segmented}/solved.pdf` } } })
   ;[{ id: 'one', concept: 'fracciones', obtained: 1 }, { id: 'two', concept: 'fracciones', obtained: 2 }, { id: 'three', concept: 'ecuaciones', obtained: 0.5 }].forEach((item, index) => batch.set(db.doc(`studentTraining/${studentCode}/attempts/demo-${item.id}`), { subjectId: subject, groupId: group, status: 'completed', key: `sample:${item.id}`, completedAt: new Date(Date.now() - (index + 1) * 86400000).toISOString(), segments: [{ conceptIds: [item.concept], maximum: 2, obtained: item.obtained }] }))
-  await Promise.all([batch.commit(), bucket.file(statementPath).save(pdf('Ejercicio: calcula 1/2 + 1/4'), { resumable: false }), bucket.file(solvedPath).save(pdf('Solucion: 1/2 + 1/4 = 3/4'), { resumable: false })])
+  await Promise.all([batch.commit(), bucket.file(statementPath).save(pdf('Ejercicio: calcula 1/2 + 1/4'), { resumable: false }), bucket.file(solvedPath).save(pdf('Solucion: 1/2 + 1/4 = 3/4'), { resumable: false }), ...[['statement', 'a) 1/2 + 1/4   b) 2/3 - 1/3'], ['solved', 'a) 3/4   b) 1/3'], ['part-a', 'a) 1/2 + 1/4 = 3/4'], ['part-b', 'b) 2/3 - 1/3 = 1/3']].map(([name, content]) => bucket.file(`${segmented}/${name}.pdf`).save(pdf(content), { resumable: false }))])
   console.log('Demo lista. Profesor: profesor@ejemplo.test / neopeprueba. Alumno: ABC234 / neopeprueba.')
 }
 main().catch((error) => { console.error(error); process.exitCode = 1 })

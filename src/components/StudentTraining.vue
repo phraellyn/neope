@@ -1,20 +1,26 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { httpsCallable } from 'firebase/functions'
+import { useDisplay } from 'vuetify'
 import { functions } from '../services/firebase'
 import { conceptAncestors } from '../../functions/studentTrainingLogic'
 import MathConceptMap from './MathConceptMap.vue'
 import DocumentPdfPreview from './DocumentPdfPreview.vue'
 import StudentTrainingTimer from './StudentTrainingTimer.vue'
+import MathText from './MathText.vue'
 import { unlockTrainingAudio } from '../utils/studentTrainingAudio'
 
-const props = defineProps({ group: { type: Object, required: true } })
+const props = defineProps({ group: { type: Object, required: true }, active: { type: Boolean, default: true } })
+const emit = defineEmits(['assessment-change'])
+const display = useDisplay()
+const assessmentWidth = computed(() => Math.min(400, Math.floor(display.width.value * 0.88)))
 const nodes = ref([])
 const selected = ref([])
 const progress = ref({})
 const session = ref(null)
 const pdfUrl = ref('')
 const selectedCriteria = ref([])
+const assessmentOpen = ref(false)
 const busy = ref(false)
 const error = ref('')
 const exhausted = ref(false)
@@ -23,6 +29,11 @@ let pendingAlert = false
 const displayedSelection = computed(() => [...new Set(selected.value.flatMap((id) => [id, ...conceptAncestors(id, nodes.value)]))])
 const callable = async (name, data) => (await httpsCallable(functions, name, { timeout: 130000 })({ groupId: props.group.id, ...data })).data
 function clearPdf() { if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value); pdfUrl.value = '' }
+function toggleCriterion(id) { selectedCriteria.value = selectedCriteria.value.includes(id) ? selectedCriteria.value.filter((value) => value !== id) : [...selectedCriteria.value, id] }
+function toggleAssessment() { if (session.value?.status === 'review') assessmentOpen.value = !assessmentOpen.value }
+function closeAssessment() { assessmentOpen.value = false }
+defineExpose({ toggleAssessment, closeAssessment })
+watch([() => session.value?.status, assessmentOpen], ([status, open]) => emit('assessment-change', { available: status === 'review', open: status === 'review' && open }), { immediate: true })
 function finishBusy() {
   busy.value = false
   if (pendingAlert && session.value?.status === 'active') { pendingAlert = false; void action('alerted') }
@@ -44,12 +55,12 @@ async function loadPdf(kind) {
 async function load() {
   const request = ++requestNumber
   pendingAlert = false
-  selected.value = []; selectedCriteria.value = []; session.value = null; clearPdf(); error.value = ''; exhausted.value = false; busy.value = true
+  selected.value = []; selectedCriteria.value = []; session.value = null; assessmentOpen.value = false; clearPdf(); error.value = ''; exhausted.value = false; busy.value = true
   try {
     const result = await callable('loadStudentTraining', {})
     if (request !== requestNumber) return
     nodes.value = result.nodes; progress.value = result.progress; session.value = result.session
-    if (session.value) { selected.value = session.value.selectedConceptIds || []; await loadPdf(session.value.status === 'review' ? 'solved' : 'statement') }
+    if (session.value) { selected.value = session.value.selectedConceptIds || []; await loadPdf(session.value.status === 'review' ? 'solved' : 'statement'); if (session.value?.status === 'review') assessmentOpen.value = true }
   } catch (cause) { if (request === requestNumber) error.value = cause.message || 'No se ha podido cargar el entrenamiento.' }
   finally { if (request === requestNumber) finishBusy() }
 }
@@ -75,8 +86,8 @@ async function action(name) {
     const result = await callable('updateStudentTraining', { sessionId: session.value.id, action: name, criteriaIds: selectedCriteria.value })
     session.value = result.session
     if (name === 'reset' || name === 'reveal' || name === 'abandon' || name === 'complete') pendingAlert = false
-    if (name === 'reveal') await loadPdf('solved')
-    if (name === 'complete' || name === 'abandon') { clearPdf(); selectedCriteria.value = []; const data = await callable('loadStudentTraining', {}); progress.value = data.progress }
+    if (name === 'reveal') { assessmentOpen.value = true; await loadPdf('solved') }
+    if (name === 'complete' || name === 'abandon') { assessmentOpen.value = false; clearPdf(); selectedCriteria.value = []; const data = await callable('loadStudentTraining', {}); progress.value = data.progress }
   } catch (cause) {
     error.value = cause.message || 'No se ha podido actualizar el intento.'
     if (name === 'alerted') { pendingAlert = true; busy.value = false; return }
@@ -84,7 +95,7 @@ async function action(name) {
   finally { if (busy.value) finishBusy() }
 }
 watch(() => props.group.id, load, { immediate: true })
-onBeforeUnmount(() => { requestNumber += 1; session.value = null; clearPdf() })
+onBeforeUnmount(() => { requestNumber += 1; session.value = null; clearPdf(); emit('assessment-change', { available: false, open: false }) })
 </script>
 
 <template>
@@ -96,18 +107,24 @@ onBeforeUnmount(() => { requestNumber += 1; session.value = null; clearPdf() })
       <MathConceptMap v-if="nodes.length" class="training-map" :nodes="nodes" :active-subject-id="group.subjectId" :subject-node-ids="nodes.map(node => node.id)" selection-mode :selected-node-ids="displayedSelection" :concept-progress="progress" :show-curriculum="false" :show-hint="false" @select-concept="toggleConcept" />
       <p v-else-if="!busy">Esta asignatura todavía no tiene contenidos disponibles.</p>
       <div class="training-buttons"><v-btn color="primary" :disabled="busy || !selected.length" @click="start()">Proponer ejercicio</v-btn><v-btn v-if="exhausted" variant="tonal" :disabled="busy" @click="start(true)">Repetir un ejercicio</v-btn></div>
-      <details v-if="Object.keys(progress).length"><summary>Mi progreso por contenido</summary><ul><li v-for="node in nodes.filter(item => progress[item.id])" :key="node.id">{{ node.title }}: {{ Math.round(progress[node.id].percentage) }} % · {{ progress[node.id].count }}/5 intentos{{ progress[node.id].provisional ? ' · provisional' : '' }}</li></ul></details>
     </template>
     <template v-else>
-      <div class="training-toolbar"><StudentTrainingTimer v-if="session.status === 'active'" :model-value="session.timer" :duration-minutes="session.durationMinutes" :disabled="busy" @action="action" /><v-spacer /><v-btn v-if="session.status === 'active'" color="primary" variant="tonal" :disabled="busy" @click="action('reveal')">Mostrar solución</v-btn><v-btn v-if="session.status === 'active'" variant="text" :disabled="busy" @click="action('abandon')">Abandonar</v-btn></div>
+      <div v-if="session.status === 'active'" class="training-toolbar"><StudentTrainingTimer :model-value="session.timer" :duration-minutes="session.durationMinutes" :disabled="busy" @action="action" /><v-spacer /><v-btn color="primary" variant="tonal" size="small" :disabled="busy" @click="action('reveal')">Mostrar solución</v-btn><v-btn icon="mdi-close" variant="text" size="small" :disabled="busy" aria-label="Abandonar ejercicio" title="Abandonar ejercicio" @click="action('abandon')" /></div>
       <DocumentPdfPreview v-if="pdfUrl" :key="pdfUrl" :src="pdfUrl" class="training-pdf" />
       <v-btn v-else-if="!busy" variant="tonal" @click="retryPdf">Reintentar PDF</v-btn>
-      <section v-if="session.status === 'review'" class="training-assessment"><h2>Autoevaluación</h2><p>Marca los criterios que has conseguido.</p><fieldset v-for="(segment, index) in session.segments" :key="segment.id"><legend>{{ session.segments.length === 1 && segment.id === 'exercise' ? 'Ejercicio' : `Apartado ${String.fromCharCode(97 + index)}` }}</legend><v-checkbox v-for="criterion in segment.criteria" :key="criterion.id" v-model="selectedCriteria" :value="`${segment.id}:${criterion.id}`" :label="`${criterion.description} · ${criterion.points} puntos`" density="comfortable" hide-details /></fieldset><v-btn color="primary" :disabled="busy" @click="action('complete')">Guardar autoevaluación</v-btn></section>
+      <v-navigation-drawer v-if="active && session.status === 'review'" v-model="assessmentOpen" location="right" temporary :scrim="false" :width="assessmentWidth" disable-resize-watcher class="training-assessment" aria-label="Matriz de autoevaluación">
+        <div class="assessment-content">
+        <header class="assessment-heading"><div><h2>Autoevaluación</h2><p>Marca los logros que has conseguido.</p></div><v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar autoevaluación" @click="assessmentOpen = false" /></header>
+        <div class="assessment-scroll"><article v-for="(segment, index) in session.segments" :key="segment.id" class="assessment-segment"><h3>{{ session.segments.length === 1 && segment.id === 'exercise' ? 'Ejercicio' : `Apartado ${String.fromCharCode(97 + index)}` }}</h3><div class="assessment-criteria"><button v-for="criterion in segment.criteria" :key="criterion.id" type="button" :class="{ selected: selectedCriteria.includes(`${segment.id}:${criterion.id}`) }" :aria-pressed="selectedCriteria.includes(`${segment.id}:${criterion.id}`)" @click="toggleCriterion(`${segment.id}:${criterion.id}`)"><MathText :text="criterion.description" /><b>{{ criterion.points }} pt</b></button></div></article></div>
+        <footer class="assessment-footer"><v-btn variant="text" @click="assessmentOpen = false">Ver solución completa</v-btn><v-btn color="primary" :disabled="busy" @click="action('complete')">Guardar autoevaluación</v-btn></footer>
+        </div>
+      </v-navigation-drawer>
     </template>
   </section>
 </template>
 
 <style scoped>
-.student-training { display: grid; gap: 14px; min-width: 0; }.training-map { height: min(70vh, 620px); min-height: 330px; }.training-buttons,.training-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.training-pdf { height: min(72vh, 750px); min-height: 350px; }.training-assessment { display: grid; gap: 12px; }.training-assessment fieldset { border: 1px solid #d6e1ed; border-radius: 8px; padding: 8px 12px; }.training-assessment h2 { font-size: 1rem; color: #315f96; }.student-training p { margin: 0; }.student-training details ul { padding-left: 20px; }
-@media (max-width: 600px) { .training-map { height: 52vh; min-height: 300px; }.training-pdf { height: 60vh; min-height: 280px; }.training-toolbar { align-items: center; } }
+.student-training { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }.student-training .training-map { height: 0; flex: 1 1 0; min-height: 220px; }.training-buttons,.training-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.student-training .training-pdf { height: 0; flex: 1 1 0; min-height: 220px; }.student-training p { margin: 0; }
+.training-assessment { background: #f3f6fa; }.training-assessment :deep(.v-navigation-drawer__content) { overflow: hidden; }.assessment-content { display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; }.assessment-heading,.assessment-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; background: #fff; }.assessment-heading h2 { font-size: 1rem; color: #315f96; }.assessment-heading p { font-size: .8rem; color: #71839a; }.assessment-scroll { overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }.assessment-segment { background: #fff; border-bottom: 5px solid #dce5ef; }.assessment-segment h3 { padding: 7px 12px; font-size: .8rem; color: #385d86; background: #f8fafc; }.assessment-criteria { display: grid; align-content: start; gap: 6px; padding: 8px; }.assessment-criteria button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 44px; padding: 8px; border: 1px solid #d6e0eb; border-radius: 7px; background: #f8fafc; color: #506b87; text-align: left; }.assessment-criteria button.selected { background: #315f94; border-color: #315f94; color: #fff; }.assessment-criteria b { white-space: nowrap; font-size: .75rem; }.assessment-footer { flex-wrap: wrap; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+@media (max-width: 600px) { .training-toolbar { align-items: center; }.assessment-criteria button { font-size: .85rem; } }
 </style>

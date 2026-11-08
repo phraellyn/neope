@@ -1,4 +1,6 @@
 <script setup>
+import DocumentScoreEditor from './DocumentScoreEditor.vue'
+import { newDocumentAssessment, resetDocumentScore, setManualDocumentScore, toggleDocumentAchievement } from '../utils/documentAssessmentScore'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../services/firebase'
@@ -864,7 +866,7 @@ function ensureDocumentAssessment(studentId, item) {
   localGroup.value.evaluaciones.resultados[studentId] ||= {}
   const previous = localGroup.value.evaluaciones.resultados[studentId][item.id]
   if (previous?.type === 'document') return previous
-  const assessment = { type: 'document', total: 0, selectedAchievementIds: [], updatedAt: new Date().toISOString() }
+  const assessment = newDocumentAssessment(previous)
   localGroup.value.evaluaciones.resultados[studentId][item.id] = assessment
   return assessment
 }
@@ -892,18 +894,27 @@ async function openDocumentAssessment(student, item) {
 function chooseDocumentAchievement(achievement) {
   const result = activeDocumentAssessmentResult.value
   if (!result) return
-  const selected = new Set(result.selectedAchievementIds || [])
-  if (selected.has(achievement.key)) selected.delete(achievement.key)
-  else selected.add(achievement.key)
-  result.selectedAchievementIds = [...selected]
-  const allAchievements = documentAssessmentExercises.value.flatMap((exercise) => exercise.achievements)
-  result.total = allAchievements.reduce((total, candidate) => (
-    selected.has(candidate.key) ? total + (Number(candidate.points) || 0) : total
-  ), 0)
+  toggleDocumentAchievement(result, achievement, documentAssessmentExercises.value)
+  markDocumentAssessmentChanged(result)
+}
+
+function markDocumentAssessmentChanged(result) {
   result.updatedAt = new Date().toISOString()
   result.evaluatedAt = result.updatedAt
   documentAssessmentChanged.value = true
   markDirty()
+}
+
+function changeDocumentScore(value) {
+  const result = activeDocumentAssessmentResult.value
+  if (result && setManualDocumentScore(result, value)) markDocumentAssessmentChanged(result)
+}
+
+function restoreDocumentScore() {
+  const result = activeDocumentAssessmentResult.value
+  if (!result) return
+  resetDocumentScore(result, documentAssessmentExercises.value)
+  markDocumentAssessmentChanged(result)
 }
 
 function formattedDocumentResult(studentId, item) {
@@ -1447,21 +1458,23 @@ defineExpose({
                 <button v-else type="button" class="gradebook-student-name" @click="emit('student-selected', { ...student })">
                   {{ student.nombre || student.id }}
                 </button>
-                <v-btn v-if="pendingStudentMessages(student.id)" icon="mdi-message-text-outline" size="x-small" variant="text" color="primary" :aria-label="`${pendingStudentMessages(student.id)} mensajes de ${student.nombre || student.id}`" @click.stop="openStudentMessages(student)" />
-                <button
-                  v-if="studentSourceGroups.length > 1"
-                  type="button"
-                  class="gradebook-student-source"
-                  :style="studentSourceStyle(student)"
-                  :class="{ 'gradebook-student-source-editable': configurationMode }"
-                  :disabled="disabled || !configurationMode"
-                  :aria-label="configurationMode ? `Cambiar subgrupo de ${student.nombre || student.id}` : `Subgrupo ${studentSourceGroup(student)}`"
-                  :title="configurationMode ? 'Cambiar subgrupo' : `Subgrupo ${studentSourceGroup(student)}`"
-                  @click="cycleStudentSourceGroup(student)"
-                >{{ studentSourceGroup(student) }}</button>
-                <button v-if="configurationMode" type="button" class="gradebook-student-remove" :aria-label="`Eliminar ${student.nombre || 'alumno'}`" @click="removeStudent(student.id)">
-                  <v-icon icon="mdi-delete-outline" size="16" />
-                </button>
+                <div class="gradebook-student-actions">
+                  <v-btn v-if="pendingStudentMessages(student.id)" icon="mdi-message-text-outline" size="x-small" variant="text" color="primary" :aria-label="`${pendingStudentMessages(student.id)} mensajes de ${student.nombre || student.id}`" @click.stop="openStudentMessages(student)" />
+                  <button
+                    v-if="studentSourceGroups.length > 1"
+                    type="button"
+                    class="gradebook-student-source"
+                    :style="studentSourceStyle(student)"
+                    :class="{ 'gradebook-student-source-editable': configurationMode }"
+                    :disabled="disabled || !configurationMode"
+                    :aria-label="configurationMode ? `Cambiar subgrupo de ${student.nombre || student.id}` : `Subgrupo ${studentSourceGroup(student)}`"
+                    :title="configurationMode ? 'Cambiar subgrupo' : `Subgrupo ${studentSourceGroup(student)}`"
+                    @click="cycleStudentSourceGroup(student)"
+                  >{{ studentSourceGroup(student) }}</button>
+                  <button v-if="configurationMode" type="button" class="gradebook-student-remove" :aria-label="`Eliminar ${student.nombre || 'alumno'}`" @click="removeStudent(student.id)">
+                    <v-icon icon="mdi-delete-outline" size="16" />
+                  </button>
+                </div>
               </div>
             </th>
             <td v-for="column in resultColumns" :key="column.key" :class="{ 'gradebook-mean-cell': column.kind === 'mean', 'gradebook-rubric-cell': column.kind === 'item' && (column.node.rubric || column.node.merits), 'gradebook-document-cell': column.kind === 'item' && column.node.documentAssessment }">
@@ -1712,10 +1725,7 @@ defineExpose({
             <small>{{ documentAssessmentItem?.nombre }}</small>
             <strong>{{ documentAssessmentStudent?.nombre || documentAssessmentStudent?.id }}</strong>
           </div>
-          <div class="gradebook-rubric-total">
-            <span>Nota</span>
-            <strong>{{ new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(Number(activeDocumentAssessmentResult?.total) || 0) }} / {{ new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(Number(documentAssessmentItem?.documentAssessment?.maxPoints) || 0) }}</strong>
-          </div>
+          <DocumentScoreEditor :total="Number(activeDocumentAssessmentResult?.total) || 0" :maximum="Number(documentAssessmentItem?.documentAssessment?.maxPoints) || 0" :manual="Number.isFinite(activeDocumentAssessmentResult?.manualTotal)" :disabled="documentAssessmentLoading || !activeDocumentAssessmentResult" @manual-score="changeDocumentScore" @reset-score="restoreDocumentScore" />
           <v-btn icon="mdi-close" rounded="circle" variant="text" aria-label="Cerrar corrección" @click="documentAssessmentDialog = false" />
         </v-card-title>
         <v-divider />

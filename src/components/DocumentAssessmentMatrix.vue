@@ -1,4 +1,5 @@
 <script setup>
+import MathText from './MathText.vue'
 import { computed } from 'vue'
 import ExercisePdfPreview from './ExercisePdfPreview.vue'
 import lomloeMathLaw from '../data/lomloeMathLaw.json'
@@ -125,7 +126,7 @@ function achievementAlignment(achievement) {
                   @click="emit('toggle-achievement', achievement)"
                 >
                   <span class="assessment-matrix-achievement-copy">
-                    <strong>{{ achievement.description }}</strong>
+                    <strong><MathText :text="achievement.description" /></strong>
                     <span v-if="achievementAlignment(achievement).criteria.length || achievementAlignment(achievement).evidence.length" class="assessment-matrix-alignment">
                       <span v-if="achievementAlignment(achievement).criteria.length" class="assessment-matrix-reference-group">
                         <small>Criterios</small>
@@ -155,7 +156,7 @@ function achievementAlignment(achievement) {
               <template v-else>
                 <div v-for="achievement in row.achievements" :key="achievement.key" class="assessment-matrix-achievement">
                   <span class="assessment-matrix-achievement-copy">
-                    <strong>{{ achievement.description }}</strong>
+                    <strong><MathText :text="achievement.description" /></strong>
                     <span v-if="achievementAlignment(achievement).criteria.length || achievementAlignment(achievement).evidence.length" class="assessment-matrix-alignment">
                       <span v-if="achievementAlignment(achievement).criteria.length" class="assessment-matrix-reference-group">
                         <small>Criterios</small>
