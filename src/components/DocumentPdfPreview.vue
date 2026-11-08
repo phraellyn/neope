@@ -7,6 +7,7 @@ import { showAppErrorToast } from '../composables/useAppErrorToast'
 const props = defineProps({
   src: { type: String, default: '' },
   title: { type: String, default: 'Vista previa del documento' },
+  interactiveZoom: { type: Boolean, default: false },
 })
 
 const userAgent = navigator.userAgent || ''
@@ -44,6 +45,48 @@ let renderVersion = 0
 let observedWidth = 0
 let pdfJsModulePromise = null
 let renderPipeline = Promise.resolve()
+let zoom = 1
+let pinch = null
+
+function touchDistance(touches) {
+  return Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY)
+}
+
+function onTouchStart(event) {
+  if (!props.interactiveZoom || event.touches.length !== 2 || !container.value) return
+  if (event.cancelable) event.preventDefault()
+  const rect = container.value.getBoundingClientRect()
+  const x = (event.touches[0].clientX + event.touches[1].clientX) / 2 - rect.left
+  const y = (event.touches[0].clientY + event.touches[1].clientY) / 2 - rect.top
+  pinch = { distance: touchDistance(event.touches), zoom, x: (container.value.scrollLeft + x) / zoom, y: (container.value.scrollTop + y) / zoom }
+}
+
+function onTouchMove(event) {
+  if (!props.interactiveZoom || !pinch || event.touches.length !== 2 || !container.value) return
+  if (event.cancelable) event.preventDefault()
+  zoom = Math.min(4, Math.max(1, pinch.zoom * touchDistance(event.touches) / Math.max(pinch.distance, 1)))
+  const availableWidth = Math.max(container.value.clientWidth - 22, 1)
+  for (const canvas of canvases.value) {
+    if (!canvas?.dataset.pageRatio) continue
+    canvas.style.width = `${availableWidth * zoom}px`
+    canvas.style.height = `${availableWidth * zoom * Number(canvas.dataset.pageRatio)}px`
+  }
+  const rect = container.value.getBoundingClientRect()
+  const x = (event.touches[0].clientX + event.touches[1].clientX) / 2 - rect.left
+  const y = (event.touches[0].clientY + event.touches[1].clientY) / 2 - rect.top
+  container.value.scrollLeft = pinch.x * zoom - x
+  container.value.scrollTop = pinch.y * zoom - y
+}
+
+function onTouchEnd(event) {
+  if (!pinch || event.touches.length >= 2) return
+  pinch = null
+  scheduleRender()
+}
+
+function preventBrowserGesture(event) {
+  if (props.interactiveZoom && event.cancelable) event.preventDefault()
+}
 
 async function loadPdfJs() {
   if (!pdfJsModulePromise) {
@@ -113,7 +156,7 @@ async function renderDocument(version) {
     }
 
     const availableWidth = Math.max(container.value.clientWidth - 22, 1)
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2, (isAppleTouchDevice ? 2048 : 4096) / (availableWidth * zoom))
     await cancelRenderTasks()
     if (version !== renderVersion) return
 
@@ -123,7 +166,8 @@ async function renderDocument(version) {
       if (!canvas) continue
       const page = await pdfDocument.getPage(pageNumber)
       const initialViewport = page.getViewport({ scale: 1 })
-      const viewport = page.getViewport({ scale: availableWidth / initialViewport.width })
+      const viewport = page.getViewport({ scale: availableWidth * zoom / initialViewport.width })
+      canvas.dataset.pageRatio = String(initialViewport.height / initialViewport.width)
       canvas.width = Math.floor(viewport.width * pixelRatio)
       canvas.height = Math.floor(viewport.height * pixelRatio)
       canvas.style.width = `${Math.floor(viewport.width)}px`
@@ -163,6 +207,8 @@ function queueRender() {
 }
 
 watch(() => props.src, async () => {
+  zoom = 1
+  pinch = null
   await clearDocument()
   if (props.src) {
     await nextTick()
@@ -196,7 +242,7 @@ watch(container, (element) => {
 </script>
 
 <template>
-  <div ref="container" class="document-pdf-preview" :aria-label="title" :aria-busy="isLoading">
+  <div ref="container" class="document-pdf-preview" :class="{ 'document-pdf-interactive': interactiveZoom }" :aria-label="title" :aria-busy="isLoading" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd" @touchcancel="onTouchEnd" @gesturestart="preventBrowserGesture" @gesturechange="preventBrowserGesture" @gestureend="preventBrowserGesture">
     <div v-if="src" class="document-pdf-pages">
       <canvas
         v-for="pageNumber in pageNumbers"
@@ -241,6 +287,10 @@ watch(container, (element) => {
   background: #fff;
   box-shadow: 0 3px 12px rgba(16, 35, 61, .2);
 }
+
+.document-pdf-interactive { touch-action: pan-x pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.document-pdf-interactive .document-pdf-pages { width: max-content; min-width: 100%; }
+.document-pdf-interactive .document-pdf-pages canvas { max-width: none; }
 
 .document-pdf-status {
   position: absolute;

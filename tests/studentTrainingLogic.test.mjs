@@ -1,15 +1,34 @@
 import assert from 'node:assert/strict'
 import { conceptProgress, exerciseMatchesSelection, selectTrainingCandidate, trainingSegments } from '../functions/studentTrainingLogic.js'
+import { calculateConceptProgress } from '../src/utils/conceptProgressLabel.js'
 import { pauseTimer, resetTimer, resumeTimer, timerElapsed, timerWarning } from '../src/utils/studentTrainingTimer.js'
 
 const nodes = [{ id: 'root' }, { id: 'a', parentId: 'root' }, { id: 'b', parentId: 'root' }, { id: 'a1', parentId: 'a' }, { id: 'a2', parentId: 'a' }]
 assert.equal(exerciseMatchesSelection([['a1']], ['a'], nodes), true)
 assert.equal(exerciseMatchesSelection([['a1'], ['b']], ['a'], nodes), false)
 assert.equal(exerciseMatchesSelection([['a2']], ['a1'], nodes), false)
-const result = conceptProgress([{ id: '1', status: 'completed', segments: [{ conceptIds: ['a1', 'a2'], maximum: 2, obtained: 1 }] }], nodes)
-assert.equal(result.a.maximum, 2)
-assert.equal(result.root.maximum, 2)
+const result = calculateConceptProgress(nodes, conceptProgress([{ id: '1', status: 'completed', segments: [{ conceptIds: ['a1', 'a2'], maximum: 2, obtained: 1 }] }], nodes))
+assert.equal(result.a.percentage, 50)
+assert.equal(result.root.percentage, 25, 'Los hijos no trabajados cuentan como cero')
+assert.equal(result.root.workedChildCount, 1)
 assert.equal(result.a.provisional, true)
+assert.equal(result.b.worked, false)
+const history = Array.from({ length: 6 }, (_, index) => ({
+  id: String(index), status: 'completed', completedAt: `2026-01-0${index + 1}`,
+  segments: [{ conceptIds: ['a1'], maximum: 1, obtained: index === 0 ? 0 : 1 }],
+}))
+history.push({ id: 'zero', status: 'completed', completedAt: '2026-02-01', segments: [{ conceptIds: ['a2'], maximum: 1, obtained: 0 }] })
+history.push({ id: 'parent', status: 'completed', segments: [{ conceptIds: ['a'], maximum: 1, obtained: 1 }] })
+const detailed = calculateConceptProgress(nodes, conceptProgress(history, nodes))
+assert.equal(detailed.a1.count, 5)
+assert.equal(detailed.a1.percentage, 100, 'Solo se usan los cinco intentos más recientes')
+assert.equal(detailed.a2.percentage, 0)
+assert.equal(detailed.a2.worked, true, 'Un cero obtenido no es un concepto sin trabajar')
+assert.equal(detailed.a.percentage, 50)
+assert.equal(detailed.root.percentage, 25, 'Cada hijo inmediato pesa lo mismo, incluso con ramas de distinta profundidad')
+assert.equal(detailed.b.worked, false)
+const parentOnly = calculateConceptProgress(nodes, conceptProgress([{ status: 'completed', segments: [{ conceptIds: ['a'], maximum: 1, obtained: 1 }] }], nodes))
+assert.equal(parentOnly.a.worked, false, 'Un concepto padre no se atribuye a hijos desconocidos')
 const exercise = { parts: [{ id: 'p1', contentIds: ['a1'], gradingCriteria: [{ id: 'c1', description: 'Calcula', points: 2 }], workedSolution: { latex: 'Solución', pdf: { storagePath: 'ejercicios/x/sol.pdf' } } }] }
 assert.equal(trainingSegments(exercise)[0].maximum, 2)
 assert.deepEqual(trainingSegments({ ...exercise, contenidosGenerales: ['b'] })[0].conceptIds, ['a1'])

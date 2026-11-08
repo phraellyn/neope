@@ -4,6 +4,7 @@ import { arc, hierarchy, partition, select, zoom, zoomIdentity } from 'd3'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { mathCurriculum, toggleHierarchySelection } from '../data/mathCurriculum'
+import { conceptProgressLabel } from '../utils/conceptProgressLabel'
 
 const props = defineProps({
   nodes: { type: Array, required: true },
@@ -851,7 +852,7 @@ defineExpose({ fitView })
               @pointercancel="cancelSegmentPointer"
               @keydown.enter.prevent="handleSegmentKey(segment, $event)"
               @keydown.space.prevent="handleSegmentKey(segment, $event)"
-            ><title>{{ segment.node.data.title }}</title></path>
+            ><title>{{ segment.node.data.title }}{{ conceptProgress[segment.node.data.id] ? ` · ${conceptProgressLabel(conceptProgress[segment.node.data.id])}` : '' }}</title></path>
           </g>
 
           <g class="sunburst-progress" aria-hidden="true" style="pointer-events: none">

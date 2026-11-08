@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../services/firebase'
 import MathConceptMap from './MathConceptMap.vue'
+import { calculateConceptProgress, conceptProgressLabel } from '../utils/conceptProgressLabel'
 
 const props = defineProps({ group: { type: Object, required: true }, studentId: { type: String, required: true } })
 const loading = ref(false)
@@ -10,7 +11,7 @@ const error = ref('')
 const nodes = ref([])
 const progress = ref({})
 let sequence = 0
-const hasEvidence = computed(() => Object.values(progress.value).some((entry) => entry.count > 0))
+const hasEvidence = computed(() => Object.values(progress.value).some((entry) => entry.worked))
 
 async function load() {
   const current = ++sequence
@@ -19,7 +20,7 @@ async function load() {
     const result = await httpsCallable(functions, 'getTeacherStudentTrainingProgress')({ groupId: props.group.id, studentId: props.studentId })
     if (current !== sequence) return
     nodes.value = result.data.nodes || []
-    progress.value = result.data.progress || {}
+    progress.value = calculateConceptProgress(nodes.value, result.data.progress || {})
   } catch (cause) {
     if (current === sequence) error.value = cause.message || 'No se ha podido cargar el progreso por conceptos.'
   } finally { if (current === sequence) loading.value = false }
@@ -34,10 +35,10 @@ onBeforeUnmount(() => { sequence += 1 })
     <v-progress-linear v-if="loading" indeterminate color="primary" />
     <v-alert v-else-if="error" type="error" variant="tonal">{{ error }} <v-btn size="small" variant="text" @click="load">Reintentar</v-btn></v-alert>
     <template v-else-if="nodes.length">
-      <p class="student-concepts-help">El área oscurecida representa el porcentaje conseguido en los últimos cinco intentos de cada concepto. Con menos de cinco, el resultado es provisional.</p>
+      <p class="student-concepts-help">Los conceptos finales reflejan los últimos cinco intentos. Cada categoría es la media de sus contenidos inmediatos; los no trabajados cuentan como cero. Con menos de cinco intentos, el resultado es provisional.</p>
       <p v-if="!hasEvidence" class="student-concepts-help">El alumno todavía no tiene intentos completados en esta asignatura.</p>
       <MathConceptMap class="student-concepts-map" :nodes="nodes" :active-subject-id="group.subjectId" :subject-node-ids="nodes.map(node => node.id)" :concept-progress="progress" :show-curriculum="false" :show-hint="false" />
-      <details class="student-concepts-list"><summary>Ver detalle por concepto</summary><ul><li v-for="node in nodes.filter(item => item.id !== 'matematicas')" :key="node.id"><span>{{ node.title }}</span><strong v-if="progress[node.id]">{{ Math.round(progress[node.id].percentage) }} % · {{ progress[node.id].count }}/5 intentos{{ progress[node.id].provisional ? ' · provisional' : '' }}</strong><span v-else>Sin intentos</span></li></ul></details>
+      <details class="student-concepts-list"><summary>Ver detalle por concepto</summary><ul><li v-for="node in nodes.filter(item => item.id !== 'matematicas')" :key="node.id"><span>{{ node.title }}</span><strong>{{ conceptProgressLabel(progress[node.id]) }}</strong></li></ul></details>
     </template>
     <p v-else>Esta asignatura todavía no tiene conceptos configurados.</p>
   </section>
