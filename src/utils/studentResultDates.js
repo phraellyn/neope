@@ -1,5 +1,8 @@
 import moment from 'moment'
-import 'moment/locale/es.js'
+
+const spanishDateFormatter = new Intl.DateTimeFormat('es-ES', {
+  day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+})
 
 export function orderedStudentResults(results = {}, dates = {}) {
   return Object.entries(results).map(([id, value], index) => ({ id, value, index, date: /^\d{4}-\d{2}-\d{2}$/.test(dates[id] || '') ? dates[id] : '' }))
@@ -7,6 +10,7 @@ export function orderedStudentResults(results = {}, dates = {}) {
 }
 
 export function formatStudentResultDate(value) {
-  const date = moment(String(value || ''), 'YYYY-MM-DD', true)
-  return date.isValid() ? date.locale('es').format('D [de] MMMM [de] YYYY') : ''
+  const source = String(value || '')
+  const date = moment(source, 'YYYY-MM-DD', 'en', true)
+  return date.isValid() ? spanishDateFormatter.format(new Date(`${source}T12:00:00Z`)) : ''
 }
