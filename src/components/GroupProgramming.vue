@@ -566,7 +566,6 @@ async function compileContent(day, content) {
       diagnostics: parseLatexDiagnostics(error.message, { source: editorSource, compiledSource: compilerDocumentSource(preamble, code), bodyOnly: true }),
     }
     content.codeVisible = true
-    showAppErrorToast(`${error.message || 'No se ha podido compilar el contenido.'}\n\nLaTeX enviado al compilador:\n\n${code}`)
   } finally {
     setContentCompiling(content.id, false)
   }

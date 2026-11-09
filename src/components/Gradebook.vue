@@ -7,7 +7,6 @@ import { functions } from '../services/firebase'
 import {
   deleteStudentIdentitiesForGroup,
   identityRecoveryMessage,
-  inspectLocalStudentIdentityCodeMatch,
   loadStudentIdentitiesForGroup,
   saveStudentIdentities,
   studentIdentityDiagnostics,
@@ -167,6 +166,7 @@ const touchDrag = ref(null)
 const dragPreview = ref(null)
 const identityLoading = ref(true)
 const identityError = ref('')
+const generatingAccessCards = ref(false)
 watch(identityError, (message) => {
   if (message) showAppErrorToast(message)
 })
@@ -1261,19 +1261,6 @@ async function hydrateStudentIdentities() {
   if (diagnostics.failed) {
     showAppErrorToast(identityRecoveryMessage(diagnostics), { color: 'warning', copy: false })
   }
-  if (students.value.length && storedIdentities.size < students.value.length) {
-    const audit = await inspectLocalStudentIdentityCodeMatch(students.value.map((student) => student.id))
-    const summarizeCodes = (codes) => `${codes.slice(0, 12).join(', ')}${codes.length > 12 ? ` … (+${codes.length - 12})` : ''}`
-    const details = [
-      `${audit.matchedStudentIds.length} de ${audit.requestedStudentIds.length} códigos del grupo coinciden con el almacén local.`,
-      `El almacén contiene ${audit.recordCount} registros y ${audit.localStudentIds.length} códigos distintos.`,
-      audit.missingStudentIds.length ? `Códigos del grupo sin ficha: ${summarizeCodes(audit.missingStudentIds)}` : '',
-      audit.orphanStudentIds.length ? `Muestra de códigos locales ajenos al grupo: ${summarizeCodes(audit.orphanStudentIds)}` : '',
-      audit.recordKeySamples.length ? `Claves técnicas: ${audit.recordKeySamples.map((entry) => `${entry.key} [id=${entry.studentId || '∅'}; grupo=${entry.groupId || '∅'}]`).join(' · ')}` : '',
-    ].filter(Boolean).join('\n')
-    console.warn('Auditoría de códigos pseudónimos:', details)
-    showAppErrorToast(details, { color: 'warning' })
-  }
 }
 
 function scheduleLocalIdentitySave() {
@@ -1301,6 +1288,37 @@ function markSaved(savedRevision = revision, { identitiesSaved = false } = {}) {
 
 function getRevision() {
   return revision
+}
+
+async function downloadStudentAccessCards() {
+  if (generatingAccessCards.value) return
+  if (identityLoading.value) {
+    showAppErrorToast('Espera a que se carguen los nombres guardados en este dispositivo.', { color: 'warning', copy: false })
+    return
+  }
+  if (identityError.value) {
+    showAppErrorToast('No se han podido cargar las identidades locales. Revísalas antes de generar las tarjetas.', { color: 'warning', copy: false })
+    return
+  }
+  if (!students.value.length) {
+    showAppErrorToast('Este grupo todavía no tiene alumnos.', { color: 'info', copy: false })
+    return
+  }
+  generatingAccessCards.value = true
+  try {
+    const [{ createStudentAccessCardsPdf }, { default: fontData }] = await Promise.all([
+      import('../utils/studentAccessCards'),
+      import('../assets/fonts/DejaVuSans.ttf?inline'),
+    ])
+    const result = createStudentAccessCardsPdf(students.value, fontData.slice(fontData.indexOf(',') + 1))
+    if (result.pdf) result.pdf.save('codigos-alumnado.pdf')
+    else showAppErrorToast('No hay fichas disponibles en este dispositivo para generar las tarjetas.', { color: 'warning', copy: false })
+  } catch (error) {
+    console.error('No se ha podido generar el PDF de códigos en este dispositivo:', error)
+    showAppErrorToast('No se ha podido generar el PDF en este dispositivo.', { color: 'error', copy: false })
+  } finally {
+    generatingAccessCards.value = false
+  }
 }
 
 emitValidity()
@@ -1344,6 +1362,7 @@ defineExpose({
   finalizeIdentityDeletions,
   getRevision,
   getStudentChanges,
+  downloadStudentAccessCards,
 })
 </script>
 

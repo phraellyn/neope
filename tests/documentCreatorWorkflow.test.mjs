@@ -10,6 +10,7 @@ import { nextTick } from 'vue'
 const componentPath = resolve('src/components/DocumentCreator.vue')
 let source = compileScript(parse(readFileSync(componentPath, 'utf8')).descriptor, { id: 'workflow-test' }).content
 source = source.replace(/import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2/g, (statement, bindings, quote, target) => {
+  if (target.endsWith('/templates/ejercicios.tex?raw')) return `const ${bindings.trim()} = ${JSON.stringify(readFileSync(resolve('templates/ejercicios.tex'), 'utf8'))};`
   if (!target.startsWith('.')) return statement
   if (target.endsWith('.vue')) return `const ${bindings.trim()} = {};`
   if (target.endsWith('/composables/useExerciseImages')) return 'const exerciseVisualReferences = async () => [];'
@@ -148,6 +149,110 @@ try {
   bank.fieldValues.includeSolutions = true
   assert.doesNotMatch(documentBody(), /\\lsol\{2\}|\\info\{Origen\}/)
   assert.match(documentBody(), /\\begin\{solucion\}/)
+  const realExerciseTemplate = { id: 'exercises-real', nombre: 'Ejercicios', archivo: 'ejercicios.tex', codigo: readFileSync(resolve('templates/ejercicios.tex'), 'utf8') }
+  const structuredExercise = {
+    id: 'structured', schemaVersion: 3, statement: { latex: 'Calcula.' },
+    parts: [
+      { id: 'a', statement: { latex: 'Primero.' }, answer: { latex: '$1$' } },
+      { id: 'b', statement: { latex: 'Segundo.' }, answer: { latex: '$2$' } },
+    ],
+    curriculum: { course: '2ºBTO', subjectId: '2bto-matematicas-ii' },
+  }
+  const realBank = component.setup({ ...props, templates: [realExerciseTemplate], exercises: [structuredExercise] }, { expose() {}, emit() {} })
+  realBank.newDocument()
+  realBank.selectTemplate(realBank.documentTemplates.value[0])
+  const columnTool = realBank.documentTools.value.find((tool) => tool.id === 'salto-columna')
+  assert.ok(columnTool, 'La plantilla de ejercicios ofrece el salto de columna')
+  realBank.fieldValues.includeAnswers = true
+  realBank.exerciseQueue.value = [realBank.createExerciseDocumentBlock('structured')]
+  realBank.currentStep.value = 3
+  await realBank.compileDocument(true)
+  const realCompiledBody = requests.filter((entry) => entry.url.endsWith('/compile')).at(-1).body.code
+  assert.match(realCompiledBody, /\\lsol\{\$1\$\}/, 'La respuesta del primer apartado se incluye al compilar')
+  assert.match(realCompiledBody, /\\sol\{\$2\$\}/, 'La respuesta del segundo apartado se incluye al compilar')
+  assert.match(realCompiledBody, /\\soluciones\s*\\end\{ejercicios\}/, 'Se imprimen las respuestas al final del entorno de ejercicios')
+  const legacyFullCode = realBank.activeDocumentCode(realBank.selectedTemplates.value[0]).replace(/\\soluciones\s*(\\end\{ejercicios\})/, '$1')
+  const oldCollectionDocument = { id: 'legacy-collection', plantillas: [{ ...realExerciseTemplate, key: 'exercises-real' }], campos: { includeAnswers: true, title: 'Números enteros', level: '1ºESO', subject: 'Matemáticas' }, codigo: legacyFullCode }
+  const legacyRecompile = component.setup({ ...props, templates: [realExerciseTemplate], exercises: [structuredExercise] }, { expose() {}, emit() {} })
+  legacyRecompile.editDocument(oldCollectionDocument)
+  legacyRecompile.openFinalCode('exercises-real')
+  assert.doesNotMatch(legacyRecompile.editingDocumentContent.value, /\\soluciones\b/)
+  await legacyRecompile.compileEditingFinalCode()
+  assert.match(legacyRecompile.editingDocumentContent.value, /\\soluciones\s*\\end\{ejercicios\}/, 'Recompilar un documento antiguo aplica la opción de respuestas guardada')
+  assert.match(requests.filter((entry) => entry.url.endsWith('/compile')).at(-1).body.code, /\\soluciones\b/)
+  await legacyRecompile.compileEditingFinalCode()
+  assert.equal((legacyRecompile.editingDocumentContent.value.match(/\\soluciones\b/g) || []).length, 1, 'Recompilar no duplica la sección de respuestas')
+  const legacyMigration = component.setup({ ...props, templates: [realExerciseTemplate], exercises: [structuredExercise] }, { expose() {}, emit() {} })
+  legacyMigration.editDocument(oldCollectionDocument)
+  legacyMigration.openFinalCode('exercises-real')
+  legacyMigration.updateDocumentTemplate()
+  assert.match(legacyMigration.editingDocumentContent.value, /\\soluciones\s*\\end\{ejercicios\}/, 'Actualizar la plantilla respeta la opción de respuestas')
+  assert.match(legacyMigration.editingDocumentContent.value, /Primero\./, 'Actualizar la plantilla conserva el contenido')
+  realBank.openFinalCode('exercises-real')
+  assert.match(realBank.editingDocumentContent.value, /\\begin\{ejercicios\}/)
+  assert.doesNotMatch(realBank.editingDocumentContent.value, /\\documentclass|\\begin\{document\}|\\logo\{/)
+  const originalFullCode = realBank.editingFinalCode.value
+  realBank.editingDocumentContent.value = realBank.editingDocumentContent.value.replace('Primero.', 'Primero modificado.')
+  assert.match(realBank.editingFinalCode.value, /Primero modificado\./)
+  assert.match(realBank.editingFinalCode.value, /\\documentclass\[a4paper/)
+  assert.match(realBank.editingFinalCode.value, /\\logo\{/)
+  assert.equal(realBank.editingCodeIsCompiled.value, false)
+  await realBank.compileEditingFinalCode()
+  assert.match(requests.filter((entry) => entry.url.endsWith('/compile')).at(-1).body.code, /Primero modificado\./)
+  realBank.editingFinalCode.value = realBank.editingFinalCode.value.replace('\\documentclass', '% preámbulo anterior\n\\documentclass')
+  assert.match(realBank.editingFinalCode.value, /preámbulo anterior/)
+  realBank.updateDocumentTemplate()
+  assert.doesNotMatch(realBank.editingFinalCode.value, /preámbulo anterior/)
+  assert.match(realBank.editingDocumentContent.value, /Primero modificado\./, 'Actualizar plantilla conserva el contenido editado')
+  assert.equal(realBank.editingCodeIsCompiled.value, false)
+  assert.notEqual(realBank.editingFinalCode.value, originalFullCode)
+  const firstBlock = realBank.createExerciseDocumentBlock('structured')
+  const secondBlock = realBank.createExerciseDocumentBlock('structured')
+  realBank.exerciseQueue.value = [firstBlock]
+  realBank.addTool(columnTool)
+  realBank.exerciseQueue.value.push(secondBlock)
+  const columnBody = realBank.generatedCodeForTemplate(realBank.selectedTemplates.value[0]).split('\\begin{document}').at(-1)
+  assert.match(columnBody, /\\begin\{ejercicios\}[\s\S]*\\ej[\s\S]*\\columnbreak[\s\S]*\\ej[\s\S]*\\end\{ejercicios\}/, 'El salto se genera entre ejercicios dentro de multicols')
+  realBank.exerciseQueue.value = [realBank.createExerciseDocumentBlock('structured')]
+  realBank.addTool(columnTool)
+  const columnBeforeSolutions = realBank.generatedCodeForTemplate(realBank.selectedTemplates.value[0]).split('\\begin{document}').at(-1)
+  assert.match(columnBeforeSolutions, /\\columnbreak\s*\\soluciones\s*\\end\{ejercicios\}/, 'Puede añadirse un salto justo antes de las soluciones')
+  realBank.fieldValues.includeAnswers = false
+  const columnWithoutSolutions = realBank.generatedCodeForTemplate(realBank.selectedTemplates.value[0]).split('\\begin{document}').at(-1)
+  assert.doesNotMatch(columnWithoutSolutions, /\\columnbreak/, 'Un salto final vacío no se imprime si no hay soluciones')
+  realBank.fieldValues.includeAnswers = true
+  const oldCollection = { ...realExerciseTemplate, codigo: realExerciseTemplate.codigo.replace(/^% neope:tool .*salto-columna.*\r?\n/m, '') }
+  const legacyBank = component.setup({ ...props, templates: [oldCollection], exercises: [structuredExercise] }, { expose() {}, emit() {} })
+  legacyBank.selectTemplate(legacyBank.documentTemplates.value[0])
+  assert.ok(legacyBank.documentTools.value.some((tool) => tool.id === 'salto-columna'), 'Las plantillas antiguas con multicols también ofrecen la herramienta')
+  const multiBank = component.setup({ ...props, templates: [realExerciseTemplate, bankTemplate], exercises: [structuredExercise] }, { expose() {}, emit() {} })
+  multiBank.selectTemplate(multiBank.documentTemplates.value.find((template) => template.key === 'exercises-real'))
+  multiBank.addTemplateToQueue(multiBank.documentTemplates.value.find((template) => template.key === 'bank'))
+  multiBank.exerciseQueue.value = [multiBank.createExerciseDocumentBlock('structured')]
+  multiBank.addTool(multiBank.documentTools.value.find((tool) => tool.id === 'salto-columna'))
+  multiBank.exerciseQueue.value.push(multiBank.createExerciseDocumentBlock('structured'))
+  const otherTemplateCode = multiBank.generatedCodeForTemplate(multiBank.selectedTemplates.value.find((template) => template.key === 'bank'))
+  assert.doesNotMatch(otherTemplateCode.split('\\begin{document}').at(-1), /\\columnbreak/, 'No se añade un salto a plantillas que no lo admiten')
+  realBank.exerciseQueue.value = [realBank.createExerciseDocumentBlock('structured')]
+  const schoolBank = component.setup({ ...props, templates: [realExerciseTemplate], exercises: [structuredExercise], teacherProfile: { centros: [{ centro: 'IES Prueba', curso: '2026-2027', imagenes: [{ url: 'https://example.invalid/logo.png' }] }, { centro: 'Otro centro', curso: '2025-2026', imagenes: [{ url: 'https://example.invalid/otro.png' }] }] } }, { expose() {}, emit() {} })
+  schoolBank.selectTemplate(schoolBank.documentTemplates.value[0])
+  assert.equal(schoolBank.fieldValues.center, 'IES Prueba')
+  assert.equal(schoolBank.currentCenterLogo.value, 'https://example.invalid/logo.png')
+  schoolBank.fieldValues.subject = 'Matemáticas II'
+  schoolBank.fieldValues.level = '2ºBTO'
+  schoolBank.fieldValues.title = 'Derivadas'
+  assert.match(schoolBank.generatedCodeForTemplate(schoolBank.selectedTemplates.value[0]), /\\logo\{Matemáticas II\}\{Derivadas\}\{\}\{2ºBTO\}\{IES Prueba\}/)
+  schoolBank.fieldValues.center = 'Otro centro'
+  assert.equal(schoolBank.currentCenterLogo.value, 'https://example.invalid/otro.png')
+  schoolBank.fieldValues.center = 'Centro sin logotipo'
+  assert.equal(schoolBank.currentCenterLogo.value, '')
+  structuredExercise.parts.forEach((part) => { part.answer = null })
+  const withoutAnswers = realBank.generatedCodeForTemplate(realBank.selectedTemplates.value[0])
+  const withoutAnswersBody = withoutAnswers.split('\\begin{document}').at(-1)
+  assert.match(withoutAnswersBody, /\\soluciones\s*\\end\{ejercicios\}/, 'La opción incluye el comando incluso si aún no hay respuestas breves')
+  realBank.fieldValues.includeAnswers = false
+  const disabledBody = realBank.generatedCodeForTemplate(realBank.selectedTemplates.value[0]).split('\\begin{document}').at(-1)
+  assert.doesNotMatch(disabledBody, /\\soluciones\b/, 'La opción desactivada no incluye soluciones')
   const examTemplate = makeTemplate('exam', 'Asignatura')
   examTemplate.codigo = examTemplate.codigo.replace('"assessment":false', '"assessment":true') + String.raw`
 % neope:field {"key":"level","type":"level","formOnly":true}
@@ -193,6 +298,27 @@ Contenido recuperado.
   notes.openFinalCode('notes')
   assert.doesNotMatch(notes.editingFinalCode.value, /\\input\{\.\.\/teoria\}/)
   assert.equal(notes.editingCodeIsCompiled.value, false, 'Recovered code must be compiled before treating an old PDF as current')
+  const currentNotes = makeTemplate('migrate-notes', 'Asignatura')
+  const oldNotes = { ...currentNotes, codigo: currentNotes.codigo.replace('%%% previo: \\begin{document}', '%%% previo: \\begin{document}\n%%% previo: \\begin{preview}').replace('%%% final: \\end{document}', '%%% final: \\end{preview}\n%%% final: \\end{document}') }
+  const migration = component.setup({ ...props, templates: [currentNotes] }, { expose() {}, emit() {} })
+  const oldNotesDoc = { id: 'legacy-preview', plantillas: [{ ...oldNotes, key: 'migrate-notes' }], campos: { title: 'Antiguo' }, codigo: String.raw`\documentclass{article}
+\newcommand{\antiguo}{Personalizado}
+\begin{document}
+\begin{preview}
+Antiguo
+
+Contenido conservado.
+\end{preview}
+\end{document}` }
+  migration.editDocument(oldNotesDoc)
+  migration.openFinalCode('migrate-notes')
+  assert.equal(migration.editingDocumentContent.value, 'Contenido conservado.', 'Los envoltorios antiguos no aparecen como contenido')
+  migration.editingDocumentContent.value = 'Contenido modificado.'
+  assert.match(migration.editingFinalCode.value, /\\newcommand\{\\antiguo\}/, 'Editar conserva el preámbulo antiguo')
+  assert.match(migration.editingFinalCode.value, /\\begin\{preview\}/)
+  migration.updateDocumentTemplate()
+  assert.equal(migration.editingDocumentContent.value, 'Contenido modificado.')
+  assert.doesNotMatch(migration.editingFinalCode.value, /\\newcommand\{\\antiguo\}|\\begin\{preview\}/, 'La actualización usa la plantilla vigente sin duplicar envoltorios')
   const copy = component.setup({ ...props, templates: [bankTemplate, { id: 'copy-internal', archivo: 'ejercicio.tex', nombre: 'ejercicio', codigo: '\\documentclass{article}' }], exercises: [{ ...exercise, curriculum: { ...exercise.curriculum, conceptIds: ['arithmetic'] } }], conceptNodes: [{ id: 'arithmetic', title: 'Cálculo' }] }, { expose() {}, emit() {} })
   copy.selectTemplate(copy.documentTemplates.value[0])
   copy.selectedDocumentId.value = 'original-document'

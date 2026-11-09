@@ -3,10 +3,12 @@
 % neope:field {"key":"title","label":"Título","argument":2,"type":"text","placeholder":"Bloque o tema","required":false,"hidden":false}
 % neope:field {"key":"date","label":"Fecha","argument":3,"type":"date","required":false,"hidden":true}
 % neope:field {"key":"level","label":"Nivel","argument":4,"type":"level","placeholder":"2ºBTO B","required":true}
+% neope:field {"key":"center","label":"Centro","argument":5,"type":"center","required":false}
 % neope:field {"key":"includeInfo","label":"Información de los ejercicios","default":true,"type":"checkbox","formOnly":true,"required":false}
 % neope:field {"key":"includeAnswers","label":"Respuestas breves (sol / lsol)","default":true,"type":"checkbox","formOnly":true,"required":false}
 % neope:field {"key":"includeSolutions","label":"Soluciones detalladas","default":false,"type":"checkbox","formOnly":true,"required":false}
 % neope:field {"key":"includeCriteria","label":"Criterios de calificación","default":true,"type":"checkbox","formOnly":true,"required":false}
+% neope:tool {"id":"salto-columna","label":"Salto de columna","description":"Pasa el siguiente ejercicio o las soluciones a la siguiente columna.","icon":"mdi-view-column-outline","behavior":"column-break","code":"\\columnbreak"}
 
 \documentclass[a4paper,twoside,fleqn,dvipsnames]{book}
 \pagestyle{empty}
@@ -48,6 +50,8 @@
 \usepackage{pgfplots}
 \usetikzlibrary{3d,babel,positioning,arrows,shapes,calc}
 \usetikzlibrary{arrows.meta,shapes.geometric}
+% Compatibilidad con gráficos que usan padding en las respuestas breves.
+\tikzset{padding/.style={inner sep=#1}}
 \usepackage{multirow,array}
 \usepackage{apacite}
 \usepackage{fontawesome5}
@@ -214,19 +218,16 @@
 \def\theejercicio{\arabic{ejercicio}.}
 \def\theapartado{\theejercicio\alph{apartado}.}
 
-\newcommand{\logo}[4]{%
+\newcommand{\logo}[5]{%
   \setcounter{ejercicio}{0}%
   \setcounter{apartado}{0}%
   \vspace{2mm}%
-  \large
   \tikz{%
-    \draw (-0.8,-0.8) rectangle (0.8,0.8);
-    \draw (0.8,0.2) -- (17.8,0.2);
-    \node at (0,0) {\IfFileExists{./logo.png}{\includegraphics[width=1.6cm]{logo.png}}{\fbox{\scriptsize LOGO}}};
-    \node at (0.8,0.55) [right] {\sffamily\textbf{#1}}; %% asignatura %%
-    \node at (0.8,-0.28) [right] {\sffamily\large\textbf{#2}}; %% título %%
-    \node at (13.0,0.55) [right] {\sffamily #4}; %% grupo %%
-    \node at (13.0,-0.28) [right] {\sffamily #3}; %% fecha %%
+    \draw[line width=0.4pt] (-0.8,-0.8) rectangle (0.8,0.8);
+    \node[inner sep=0pt] at (0,0) {\IfFileExists{logo.png}{\includegraphics[width=1.45cm,height=1.45cm,keepaspectratio]{logo.png}}{\phantom{\rule{1.45cm}{1.45cm}}}};
+    \node[anchor=west,inner sep=0pt,text width=16.4cm] at (0.95,0.48) {\sffamily\large\if\relax\detokenize{#5}\relax\else #5 / \fi #4 / #1};
+    \draw[line width=0.4pt] (0.95,0.2) -- (17.5,0.2);
+    \node[anchor=west,inner sep=0pt,text width=16.4cm] at (0.95,-0.27) {\sffamily\large\bfseries #2};
   }%
   \normalsize
   \vspace{2mm}%
@@ -491,6 +492,23 @@
 }
 
 \makeatother
+
+% Las respuestas se almacenan para mostrarlas más tarde. Con babel español,
+% los signos de las flechas TikZ deben leerse sin atajos activos al guardarlas.
+\ifdefined\shorthandoff
+\let\neopeOriginalSol\sol
+\def\sol{\begingroup\shorthandoff{<>}\neopeReadSol}
+\long\def\neopeReadSol#1{\neopeOriginalSol{#1}\endgroup}
+\let\neopeOriginalLsol\lsol
+\def\lsol{\begingroup\shorthandoff{<>}\neopeReadLsol}
+\long\def\neopeReadLsol#1{\neopeOriginalLsol{#1}\endgroup}
+\let\neopeOriginalCsol\csol
+\def\csol{\begingroup\shorthandoff{<>}\neopeReadCsol}
+\long\def\neopeReadCsol#1{\neopeOriginalCsol{#1}\endgroup}
+\let\neopeOriginalEsol\esol
+\def\esol{\begingroup\shorthandoff{<>}\neopeReadEsol}
+\long\def\neopeReadEsol#1{\neopeOriginalEsol{#1}\endgroup}
+\fi
 
 \def\talque{\ |\ }
 

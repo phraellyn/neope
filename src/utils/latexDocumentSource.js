@@ -94,3 +94,60 @@ export function repairNestedLegacyDocument(code = '') {
   if (repaired === body) return source
   return source.slice(0, bodyStart) + repaired + source.slice(bounds.end.index)
 }
+
+// Preserve the exact saved preamble and wrappers while exposing only the body
+// between the template's opening and closing material for editing.
+export function editableDocumentParts(code = '', { before = '', after = '', headerCommand = '' } = {}) {
+  const source = String(code)
+  const bounds = documentBounds(source)
+  if (!bounds) return { prefix: '', content: source, suffix: '' }
+  const bodyStart = bounds.begin.index + bounds.begin[0].length
+  const bodyEnd = bounds.end.index
+  const beforeCode = String(before)
+  const afterCode = String(after)
+  const beforeBegin = /\\begin\s*\{document\}/.exec(executableLatex(beforeCode))
+  const afterEnd = /\\end\s*\{document\}/.exec(executableLatex(afterCode))
+  const opening = (beforeBegin ? beforeCode.slice(beforeBegin.index + beforeBegin[0].length) : beforeCode).trim()
+  const closing = (afterEnd ? afterCode.slice(0, afterEnd.index) : afterCode).trim()
+  let start = bodyStart
+  let end = bodyEnd
+  while (start < end && /\s/.test(source[start])) start += 1
+  while (end > start && /\s/.test(source[end - 1])) end -= 1
+  if (opening && source.startsWith(opening, start)) {
+    start += opening.length
+    while (start < end && /\s/.test(source[start])) start += 1
+  } else if (headerCommand && opening.includes(`\\${headerCommand}`)) {
+    // An older saved header may use different arguments or field values. Keep
+    // it intact but hide it if it is the first standalone command in the body.
+    const header = new RegExp(`^\\\\${String(headerCommand).replace(/[^A-Za-z@]/g, '')}(?![A-Za-z@])`).exec(source.slice(start, end))
+    if (header) {
+      let cursor = start + header[0].length
+      let count = 0
+      while (cursor < end) {
+        let next = cursor
+        while (next < end && /[ \t]/.test(source[next])) next += 1
+        if (source[next] !== '{') break
+        let depth = 1
+        let at = next + 1
+        while (at < end && depth) {
+          if (source[at] === '\\') { at += 2; continue }
+          if (source[at] === '{') depth += 1
+          if (source[at] === '}') depth -= 1
+          at += 1
+        }
+        if (depth) break
+        cursor = at
+        count += 1
+      }
+      if (count) {
+        start = cursor
+        while (start < end && /\s/.test(source[start])) start += 1
+      }
+    }
+  }
+  if (closing && source.slice(start, end).endsWith(closing)) {
+    end -= closing.length
+    while (end > start && /\s/.test(source[end - 1])) end -= 1
+  }
+  return { prefix: source.slice(0, start), content: source.slice(start, end), suffix: source.slice(end) }
+}

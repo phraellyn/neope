@@ -1,3 +1,5 @@
+import { executableLatex } from './latexDocumentSource.js'
+
 // The comments travel with the .tex file and remain harmless to LaTeX.
 const aliases = { asignatura: 'subject', subject: 'subject', titulo: 'title', title: 'title', fecha: 'date', date: 'date', grupo: 'course', curso: 'course', course: 'course', nivel: 'level', level: 'level' }
 const labels = { subject: 'Asignatura', title: 'Título', date: 'Fecha', course: 'Grupo', level: 'Nivel' }
@@ -8,6 +10,23 @@ export function canonicalFieldKey(key) {
 }
 export function isInternalTemplate(template = {}) {
   return /(?:^|[\\/])ejercicio(?:\.tex)?$/i.test(String(template.archivo || template.nombre || '').trim())
+}
+
+// Upgrade only the known built-in collection header, preserving custom templates
+// and the rest of the preamble stored in Firestore or in older documents.
+export function upgradeExerciseCollectionHeader(template, standardCode) {
+  if (String(template?.archivo || '').toLowerCase() !== 'ejercicios.tex') return template
+  const code = String(template.codigo || '')
+  if (!code.includes('\\newcommand{\\logo}[4]') || !code.includes('\\node at (13.0,0.55)')) return template
+  const pattern = /\\newcommand\{\\logo\}\[\d+\]\{[\s\S]*?\n\}\s*(?=\\newenvironment\{ejercicios\})/
+  const replacement = String(standardCode || '').match(pattern)?.[0]
+  const centerField = String(standardCode || '').match(/^% neope:field \{"key":"center"[^\r\n]*$/m)?.[0]
+  if (!replacement || !centerField || !pattern.test(code)) return template
+  let updated = code.replace(pattern, () => replacement)
+  if (!/^% neope:field \{"key":"center"/m.test(updated)) {
+    updated = updated.replace(/^(% neope:document \{[^\r\n]*\})/m, `$1\n${centerField}`)
+  }
+  return { ...template, codigo: updated }
 }
 function declarations(code, type) {
   return [...code.matchAll(new RegExp(`^\\s*%\\s*neope:${type}\\s+(\\{.*\\})\\s*$`, 'gm'))].map((match) => {
@@ -121,6 +140,98 @@ export function templateHeader(metadata, valueFor) {
 export function renderTemplateWrapper(source, metadata, valueFor) {
   const values = new Map(metadata.fields.map((field) => [field.key, valueFor(field)]))
   return source.replace(/\{\{([\w]+)\}\}/g, (_, key) => key === 'header' ? templateHeader(metadata, valueFor) : String(values.get(canonicalFieldKey(key)) ?? ''))
+}
+
+export function appendShortAnswers(body, { enabled = false, supported = false, after = '' } = {}) {
+  if (!supported) return body
+  const source = String(body || '')
+  const executable = executableLatex(source)
+  const documentStart = /\\begin\s*\{document\}/.exec(executable)
+  const offset = documentStart ? documentStart.index + documentStart[0].length : 0
+  const tokens = [...executable.matchAll(/\\(begin|end)\s*\{ejercicios\}|\\soluciones\b/g)].filter((token) => token.index >= offset)
+  const stack = []
+  const environments = []
+  const solutions = []
+  for (const token of tokens) {
+    if (token[1] === 'begin') stack.push(token)
+    else if (token[1] === 'end') {
+      const begin = stack.pop()
+      if (begin) environments.push({ begin: begin.index, end: token.index, endAfter: token.index + token[0].length })
+    } else solutions.push(token)
+  }
+  if (!environments.length) return source
+  if (solutions.some((token) => environments.some((env) => token.index > env.begin && token.index < env.end))) return source
+  const environment = environments.reduce((latest, env) => env.end > latest.end ? env : latest)
+  const outside = solutions.find((token) => {
+    if (token.index < environment.endAfter) return false
+    const between = executable.slice(environment.endAfter, token.index)
+    const linePrefix = executable.slice(executable.lastIndexOf('\n', token.index) + 1, token.index)
+    return /^\s*(?:\\(?:columnbreak|newcolumn)\s*)?$/.test(between) || /^\s*$/.test(linePrefix)
+  })
+  if (!outside && /\\soluciones\b/.test(executableLatex(String(after)))) return source
+  if (!outside && !enabled) return source
+  let cleaned = source
+  let columnBreak = ''
+  if (outside) {
+    let removeFrom = outside.index
+    const between = executable.slice(environment.endAfter, outside.index)
+    const breakMatch = /^\s*(\\(?:columnbreak|newcolumn))\s*$/.exec(between)
+    if (breakMatch) {
+      columnBreak = `${breakMatch[1]}\n`
+      removeFrom = environment.endAfter
+    }
+    cleaned = source.slice(0, removeFrom) + source.slice(outside.index + outside[0].length)
+  }
+  return `${cleaned.slice(0, environment.end)}\n${columnBreak}\\soluciones\n${cleaned.slice(environment.end)}`
+}
+
+// Old documents keep a snapshot of their preamble. Add the TikZ compatibility
+// key to those snapshots too, without changing the exercise or its answer.
+export function ensureTikzPaddingCompatibility(source) {
+  const code = String(source || '')
+  const executable = executableLatex(code)
+  const begin = /\\begin\s*\{document\}/.exec(executable)
+  if (!begin) return code
+  const preamble = executable.slice(0, begin.index)
+  const body = executable.slice(begin.index + begin[0].length)
+  if (!/\\(?:tikzset|usetikzlibrary)\b|\\usepackage(?:\[[^\]]*\])?\s*\{[^}]*\btikz\b/.test(preamble)) return code
+  if (/\bpadding\s*\/\.(?:style|code|style\s+args|code\s+args)\b/.test(preamble)) return code
+  if (!/\[[^\]]*\bpadding\s*=/s.test(body)) return code
+  return `${code.slice(0, begin.index)}\\tikzset{padding/.style={inner sep=#1}}\n${code.slice(begin.index)}`
+}
+
+// Babel's Spanish angle-bracket shortcuts break TikZ arrows when an answer is
+// read now but expanded later by the legacy collection's \soluciones macro.
+export function ensureShortAnswerTikzCompatibility(source) {
+  const code = String(source || '')
+  const executable = executableLatex(code)
+  const begin = /\\begin\s*\{document\}/.exec(executable)
+  if (!begin) return code
+  const preamble = executable.slice(0, begin.index)
+  const body = executable.slice(begin.index + begin[0].length)
+  if (/\\neopeReadLsol\b/.test(preamble) || !/\\g@addto@macro/.test(preamble)) return code
+  if (!/\\def\s*\\sol\s*#1/.test(preamble) || !/\\def\s*\\lsol\s*#1/.test(preamble)) return code
+  if (!/\\(?:sol|lsol|esol|csol)\s*\{/.test(body) || !/\\(?:tikz\b|begin\s*\{tikzpicture\})/.test(body) || !/(?:->|<-|>=|<=)/.test(body)) return code
+  const fix = String.raw`\ifdefined\shorthandoff
+\let\neopeOriginalSol\sol
+\def\sol{\begingroup\shorthandoff{<>}\neopeReadSol}
+\long\def\neopeReadSol#1{\neopeOriginalSol{#1}\endgroup}
+\let\neopeOriginalLsol\lsol
+\def\lsol{\begingroup\shorthandoff{<>}\neopeReadLsol}
+\long\def\neopeReadLsol#1{\neopeOriginalLsol{#1}\endgroup}
+\ifdefined\csol
+\let\neopeOriginalCsol\csol
+\def\csol{\begingroup\shorthandoff{<>}\neopeReadCsol}
+\long\def\neopeReadCsol#1{\neopeOriginalCsol{#1}\endgroup}
+\fi
+\ifdefined\esol
+\let\neopeOriginalEsol\esol
+\def\esol{\begingroup\shorthandoff{<>}\neopeReadEsol}
+\long\def\neopeReadEsol#1{\neopeOriginalEsol{#1}\endgroup}
+\fi
+\fi
+`
+  return `${code.slice(0, begin.index)}${fix}${code.slice(begin.index)}`
 }
 export function splitFinalDocumentCode(code, fallbackPreamble = '') {
   const activeMatch = (match) => !/^\s*%/.test(code.slice(code.lastIndexOf('\n', match.index) + 1, match.index))

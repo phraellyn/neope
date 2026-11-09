@@ -334,12 +334,6 @@ const compilerError = ref('')
 const exerciseDiagnostics = ref([])
 const exerciseDiagnosticSource = ref('')
 const exerciseDiagnosticsStale = computed(() => exerciseDiagnosticSource.value !== activeExerciseCode.value)
-const exerciseCompilerErrorSnackbar = computed({
-  get: () => Boolean(compilerError.value && exerciseView.value === 'edit'),
-  set: (visible) => {
-    if (!visible) compilerError.value = ''
-  },
-})
 const isCompiling = ref(false)
 const exerciseCompilationStatus = ref('ready')
 let stopExerciseCompilationWatch = null
@@ -1791,26 +1785,6 @@ function compilationErrorWithLatex(error, options = {}) {
     bodyOnly: true,
   })
   return `${message}\n\nLaTeX enviado al compilador (${artifact.title}):\n\n${body}`
-}
-
-async function copyTextToClipboard(value) {
-  if (!value) return
-  try {
-    await navigator.clipboard.writeText(value)
-  } catch {
-    const textarea = document.createElement('textarea')
-    textarea.value = value
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    textarea.remove()
-  }
-}
-
-async function copyCompilerError() {
-  await copyTextToClipboard(compilerError.value)
 }
 
 function hasExerciseSolutions(code) {
@@ -3815,7 +3789,7 @@ async function saveExercise(options = {}) {
     }
     return savedExercise
   } catch (error) {
-    exercisesError.value = error.message || 'No se ha podido guardar el ejercicio.'
+    if (!compilerError.value || error.message !== compilerError.value) exercisesError.value = error.message || 'No se ha podido guardar el ejercicio.'
     console.error('Error al guardar ejercicio:', error)
     return null
   } finally {
@@ -5371,6 +5345,11 @@ onBeforeUnmount(() => {
             <v-btn v-bind="props" variant="text" prepend-icon="mdi-table-column-plus-after" @click="addGradebookColumn">Ítem</v-btn>
           </template>
         </v-tooltip>
+        <v-tooltip v-if="groupView === 'evaluation'" text="Descargar tarjetas con los códigos del alumnado" location="bottom">
+          <template #activator="{ props }">
+            <v-btn v-bind="props" icon="mdi-card-account-details-outline" variant="text" class="mr-6" :disabled="!selectedCareerGroup" aria-label="Descargar tarjetas con los códigos del alumnado" @click="gradebookRef?.downloadStudentAccessCards?.()" />
+          </template>
+        </v-tooltip>
         <v-tooltip text="Calendario" location="bottom">
           <template #activator="{ props }"><v-badge :content="calendarNotifications" :model-value="calendarNotifications > 0" color="primary" offset-x="7" offset-y="7"><v-btn v-bind="props" icon="mdi-calendar-month-outline" variant="text" aria-label="Calendario" @click="setActiveView('Calendario')" /></v-badge></template>
         </v-tooltip>
@@ -6355,14 +6334,6 @@ onBeforeUnmount(() => {
       </v-card>
     </v-dialog>
 
-    <v-snackbar v-model="exerciseCompilerErrorSnackbar" location="bottom" color="error" timeout="-1" class="exercise-error-snackbar">
-      <div class="exercise-error-snackbar-message">{{ compilerError }}</div>
-      <template #actions>
-        <v-btn variant="text" size="small" @click="locateExerciseError()">Ver errores</v-btn>
-        <v-btn variant="text" size="small" @click="copyCompilerError">Copiar</v-btn>
-        <v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar error de compilación" @click="exerciseCompilerErrorSnackbar = false" />
-      </template>
-    </v-snackbar>
     </template>
     <ExerciseImageDialog :state="exerciseVisuals" :text-model="selectedAiModel" :text-models="aiModelOptions" :generating-variation="isGeneratingVariation" :variation-error="exercisesError" :pending-variation="Boolean(pendingVisualVariant)" @update:text-model="selectedAiModel = $event" @generate-variation="addExerciseVariation(exerciseVisuals.form.experimental)" />
     <AppErrorToast />

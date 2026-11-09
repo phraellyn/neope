@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
+import standardExerciseTemplate from '../../templates/ejercicios.tex?raw'
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { auth, db, functions, storage } from '../services/firebase'
 import { mathSubjects } from '../data/mathCurriculum'
@@ -18,8 +19,8 @@ import MasonryGrid from './MasonryGrid.vue'
 import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, exerciseStructureFromDocument, mergeExerciseStructure, normalizeCriteriaUnicode, parseExerciseLatex } from '../utils/exerciseStructure'
 import { compactExerciseConceptLabel, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
 import { normalizeAlignedLineBreaks, normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
-import { canonicalFieldKey, isInternalTemplate, migrateDocumentTemplate, readDocumentTemplate, renderTemplateWrapper, splitFinalDocumentCode, templateHeader } from '../utils/documentTemplate'
-import { documentSourceContent, repairNestedLegacyDocument } from '../utils/latexDocumentSource'
+import { appendShortAnswers, canonicalFieldKey, ensureShortAnswerTikzCompatibility, ensureTikzPaddingCompatibility, isInternalTemplate, migrateDocumentTemplate, readDocumentTemplate, renderTemplateWrapper, splitFinalDocumentCode, templateHeader, upgradeExerciseCollectionHeader } from '../utils/documentTemplate'
+import { documentSourceContent, editableDocumentParts, repairNestedLegacyDocument } from '../utils/latexDocumentSource'
 import { compilerDocumentSource, diagnoseLatexStructure, parseLatexDiagnostics } from '../utils/latexDiagnostics'
 import { graphicReferences, imageReferenceName, replaceGraphicReference, versionImageFiles, exerciseImageAssets } from '../utils/exerciseImages'
 import { exerciseVisualReferences } from '../composables/useExerciseImages'
@@ -183,6 +184,7 @@ const isSaving = ref(false)
 const dragPayload = ref(null)
 const viewedDocument = ref(null)
 const storedTemplateSnapshots = ref([])
+const updatedDocumentTemplates = reactive({})
 const viewerAssessmentExercises = ref([])
 const viewerAssessmentLoading = ref(false)
 const documentVariation = reactive(useDocumentVariation({
@@ -529,6 +531,16 @@ function inferTemplateTools(code = '') {
     code: '\\tipo{{{title}}}',
     arguments: [{ key: 'title', label: 'Título', type: 'text', default: '' }],
   })
+  // Legacy collection templates already wrap the exercise list in multicols.
+  // The package provides \columnbreak even though the template does not define it.
+  if (/\\(?:new|renew)environment\s*\{ejercicios\}[\s\S]{0,500}?\\begin\s*\{multicols\}/.test(uncommentedTemplateCode(code))) tools.push({
+    id: 'salto-columna',
+    label: 'Salto de columna',
+    description: 'Pasa el siguiente ejercicio o las soluciones a la siguiente columna.',
+    icon: 'mdi-view-column-outline',
+    behavior: 'column-break',
+    code: '\\columnbreak',
+  })
   return tools
 }
 
@@ -644,15 +656,17 @@ const documentTemplates = computed(() => {
   return sources.flatMap((template) => {
     if (isInternalTemplate(template)) return []
     let metadata
+    let adapted
     try {
-      const converted = migrateDocumentTemplate(template)
+      adapted = upgradeExerciseCollectionHeader(template, standardExerciseTemplate)
+      const converted = migrateDocumentTemplate(adapted)
       metadata = readDocumentTemplate(converted.codigo, parseLegacyTemplateMetadata(converted.codigo))
     } catch (error) {
       console.warn(`Plantilla ${template.nombre}:`, error)
       return []
     }
     return [{
-      ...template,
+      ...adapted,
       key: template.id || template.archivo,
       metadata: {
         ...metadata,
@@ -802,7 +816,11 @@ const currentCenter = computed(() => {
   const normalizedYear = currentAcademicYear.value.replace(/\D/g, '')
   return centers.find((center) => String(center.curso || '').replace(/\D/g, '') === normalizedYear) || centers[0]
 })
-const currentCenterLogo = computed(() => currentCenter.value?.imagenes?.find((image) => image?.url)?.url || '')
+const centerOptions = computed(() => (props.teacherProfile?.centros || []).map((center) => center.centro).filter(Boolean))
+const selectedCenter = computed(() => fieldValues.center
+  ? (props.teacherProfile?.centros || []).find((center) => center.centro === fieldValues.center) || null
+  : currentCenter.value)
+const currentCenterLogo = computed(() => selectedCenter.value?.imagenes?.find((image) => image?.url)?.url || '')
 const teacherSignatureImages = computed(() => (Array.isArray(props.teacherProfile?.firmas) ? props.teacherProfile.firmas : [])
   .filter((image) => image?.url))
 const filteredDocuments = computed(() => {
@@ -1262,7 +1280,6 @@ async function generateOrRegenerateContent() {
   } catch (error) {
     compileError.value = error?.message || 'No se ha podido generar el contenido con IA.'
     compileErrorVisible.value = true
-    showAppErrorToast(compileError.value, { copyText: compileError.value })
   } finally {
     isGeneratingContent.value = false
     emit('busy-change', false)
@@ -2125,6 +2142,7 @@ function fillToolTemplate(value, args) {
 function toolCode(item, index = -1, template = selectedTemplate.value, siblings = exerciseQueue.value) {
   const sharedTool = toolForQueue(item)
   if (!sharedTool) return ''
+  if (sharedTool.behavior === 'column-break' && !sharedTool.templateDefinitions?.[template?.key]) return ''
   const tool = sharedTool.templateDefinitions?.[template?.key] || sharedTool
   const args = toolArguments(item, tool)
   if (tool.behavior === 'required-section') {
@@ -2133,6 +2151,11 @@ function toolCode(item, index = -1, template = selectedTemplate.value, siblings 
   }
   if (tool.behavior === 'page-break') {
     if (index >= 0 && (!exercisesBeforeTool(index, siblings) || !exercisesAfterAnyBoundary(index, siblings))) return ''
+    return fillToolTemplate(tool.code, args)
+  }
+  if (tool.behavior === 'column-break') {
+    const solutionsFollow = templateOption(template, 'includeAnswers', false) && templateDefinesCommand(template, 'soluciones')
+    if (index >= 0 && (!exercisesBeforeTool(index, siblings) || (!exercisesAfterAnyBoundary(index, siblings) && !solutionsFollow))) return ''
     return fillToolTemplate(tool.code, args)
   }
   if (tool.behavior === 'optional-section') {
@@ -2309,21 +2332,26 @@ function generatedCodeForTemplate(template, options = {}) {
     : ''
   const beforeExercises = normalizeDisplayMathDelimiters(documentContent.value.beforeExercisesLatex || '')
   const afterExercises = normalizeDisplayMathDelimiters(documentContent.value.afterExercisesLatex || '')
-  const bodyContent = usesStructuredBlocks
+  let bodyContent = usesStructuredBlocks
     ? [
       beforeExercises,
       exercises ? (template.metadata.exerciseEnvironment ? [`\\begin{${template.metadata.exerciseEnvironment}}`, exercises, `\\end{${template.metadata.exerciseEnvironment}}`].join('\n') : exercises) : '',
       afterExercises,
     ].filter((entry) => entry.trim()).join('\n\n')
     : directSourceCodeForTemplate(hasDirectSource ? options.directSourceCode : sourceLatexCode.value, template)
+  bodyContent = appendShortAnswers(bodyContent, {
+    enabled: template.metadata.content === 'exercises' && templateOption(template, 'includeAnswers', false),
+    supported: templateDefinesCommand(template, 'soluciones'),
+    after: template.metadata.after,
+  })
   const preambleRequirements = exercisePreambleRequirements(bodyContent)
   const valueFor = (field) => documentFieldValue(field, template)
-  return normalizeAlignedLineBreaks([template.codigo, preambleRequirements,
+  return ensureDocumentShortAnswers(ensureShortAnswerTikzCompatibility(ensureTikzPaddingCompatibility(normalizeAlignedLineBreaks([template.codigo, preambleRequirements,
     templateDefinesCommand(template, 'criterios') ? '' : criteriaCommandFallback(),
     renderTemplateWrapper(template.metadata.before, template.metadata, valueFor),
     bodyContent,
     renderTemplateWrapper(template.metadata.after, template.metadata, valueFor),
-  ].filter(Boolean).join('\n\n'))
+  ].filter(Boolean).join('\n\n')))), template)
 }
 
 function generatedCode() {
@@ -2429,6 +2457,9 @@ async function documentAssets(blocks = exerciseQueue.value, codes = Object.value
   if (currentCenterLogo.value) {
     try {
       assets['logo.png'] = await grayscaleLogoAsset(currentCenterLogo.value)
+      if (selectedTemplates.value.some((template) => template.codigo.includes('logo-color.png')) || storedImageNames.has('logo-color.png')) {
+        assets['logo-color.png'] = assets['logo.png']
+      }
     } catch (error) {
       throw new Error(`No se ha podido preparar el logotipo del centro: ${error?.message || 'error desconocido'}`)
     }
@@ -2514,6 +2545,37 @@ function activeDocumentCode(template = previewTemplate.value || selectedTemplate
   return finalCodes[template?.key] ?? normalizeCriteriaUnicode(generatedCodeForTemplate(template))
 }
 
+function editablePartsForTemplate(code, template) {
+  if (!template) return { prefix: '', content: String(code || ''), suffix: '' }
+  const valueFor = (field) => documentFieldValue(field, template)
+  try {
+    const candidates = [template.metadata]
+    const snapshot = !updatedDocumentTemplates[template.key] && storedTemplateSnapshots.value.find((item) => item.archivo === template.archivo && item.codigo)
+    if (snapshot) {
+      try { candidates.push(readDocumentTemplate(snapshot.codigo, parseLegacyTemplateMetadata(snapshot.codigo))) } catch { /* Conserva el contenido si el formato antiguo no se reconoce. */ }
+    }
+    return candidates.map((metadata) => editableDocumentParts(code, {
+      before: renderTemplateWrapper(metadata.before, metadata, valueFor),
+      after: renderTemplateWrapper(metadata.after, metadata, valueFor),
+      headerCommand: metadata.command,
+    })).sort((a, b) => b.prefix.length + b.suffix.length - a.prefix.length - a.suffix.length)[0]
+  } catch {
+    return { prefix: '', content: String(code || ''), suffix: '' }
+  }
+}
+
+function joinEditableParts(parts, content) {
+  const before = parts.prefix && !/\s$/.test(parts.prefix) ? '\n' : ''
+  const after = parts.suffix && !/^\s/.test(parts.suffix) ? '\n' : ''
+  return `${parts.prefix}${before}${content}${after}${parts.suffix}`
+}
+
+function ensureDocumentShortAnswers(code, template) {
+  if (template?.metadata.content !== 'exercises') return code
+  if (!templateDefinesCommand({ codigo: code }, 'soluciones')) return code
+  return appendShortAnswers(code, { enabled: templateOption(template, 'includeAnswers', false), supported: true })
+}
+
 function revokePreview() {
   if (previewUrl.value.startsWith('blob:')) URL.revokeObjectURL(previewUrl.value)
   previewDocuments.value.forEach((entry) => {
@@ -2528,7 +2590,7 @@ function revokePreview() {
 
 function resetFields() {
   Object.keys(fieldValues).forEach((key) => delete fieldValues[key])
-  unifiedFields.value.forEach((field) => { fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : (field.default ?? '') })
+  unifiedFields.value.forEach((field) => { fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : (field.type === 'center' ? currentCenter.value?.centro || '' : (field.default ?? '')) })
 }
 
 function applyCreationContext() {
@@ -2552,7 +2614,7 @@ function applyCreationContext() {
 
 function ensureFields() {
   unifiedFields.value.forEach((field) => {
-    if (fieldValues[field.key] === undefined) fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : (field.default ?? '')
+    if (fieldValues[field.key] === undefined) fieldValues[field.key] = field.type === 'checkbox' ? Boolean(field.default) : (field.type === 'center' ? currentCenter.value?.centro || '' : (field.default ?? ''))
   })
 }
 
@@ -2762,6 +2824,7 @@ function resetWorkflow() {
   documentCodeNeedsRegeneration.value = true
   viewedDocument.value = null
   storedTemplateSnapshots.value = []
+  Object.keys(updatedDocumentTemplates).forEach((key) => delete updatedDocumentTemplates[key])
   viewerAssessmentExercises.value = []
   viewerAssessmentLoading.value = false
   revokePreview()
@@ -3065,9 +3128,9 @@ async function compileDocument(force = false, options = {}) {
   const templatesToCompile = options.templateKey ? selectedTemplates.value.filter((template) => template.key === options.templateKey) : selectedTemplates.value
   const assetSignature = documentAssetSignature()
   const directSourceCode = typeof options.directSourceCode === 'string' ? options.directSourceCode : null
-  const codeForTemplate = (template) => directSourceCode === null
+  const codeForTemplate = (template) => ensureDocumentShortAnswers(directSourceCode === null
     ? activeDocumentCode(template)
-    : generatedCodeForTemplate(template, { directSourceCode })
+    : generatedCodeForTemplate(template, { directSourceCode }), template)
   if (!force && previewDocuments.value.length === templatesToCompile.length && previewDocuments.value.every((entry) => entry.assetSignature === assetSignature && entry.code === codeForTemplate(templatesToCompile.find((template) => template.key === entry.templateKey)))) return
   isCompiling.value = true
   emit('busy-change', true)
@@ -3085,8 +3148,9 @@ async function compileDocument(force = false, options = {}) {
       let inputSource = null
       try {
         code = codeForTemplate(template)
+        if (directSourceCode === null && code !== activeDocumentCode(template)) finalCodes[template.key] = code
         inputSource = directSourceCode ?? (contentWorkspaceMode.value === 'latex' ? sourceLatexCode.value : null)
-        const repairedCode = normalizeAlignedLineBreaks(repairNestedLegacyDocument(code))
+        const repairedCode = ensureShortAnswerTikzCompatibility(ensureTikzPaddingCompatibility(normalizeAlignedLineBreaks(repairNestedLegacyDocument(code))))
         if (repairedCode !== code) {
           finalCodes[template.key] = repairedCode
           code = repairedCode
@@ -3111,6 +3175,8 @@ async function compileDocument(force = false, options = {}) {
         const message = error.message || 'error de compilación'
         const compiledSource = compilerDocumentSource(compilerPreamble, compilerBody)
         const diagnostics = parseLatexDiagnostics(message, { source: code, compiledSource })
+        const contentSource = editablePartsForTemplate(code, template).content
+        const contentDiagnostics = parseLatexDiagnostics(message, { source: contentSource, compiledSource, bodyOnly: true })
         const localDiagnostics = !compilerPreamble && !compilerBody ? diagnoseLatexStructure(code) : []
         templateCompileErrors[template.key] = {
           templateKey: template.key,
@@ -3118,6 +3184,8 @@ async function compileDocument(force = false, options = {}) {
           message,
           source: code,
           diagnostics: localDiagnostics.length ? localDiagnostics : diagnostics,
+          contentSource,
+          contentDiagnostics,
           inputSource,
           inputDiagnostics: inputSource === null ? [] : parseLatexDiagnostics(message, { source: inputSource, compiledSource, bodyOnly: true }),
         }
@@ -3176,20 +3244,31 @@ function selectPreviewTemplate(templateKey) {
 }
 
 const editingTemplate = computed(() => selectedTemplates.value.find((template) => template.key === codeEditorKey.value))
+const currentTemplateAvailable = computed(() => Boolean(editingTemplate.value && props.templates.some((template) => template.archivo === editingTemplate.value.archivo)))
 const editingFinalCode = computed({
   get: () => finalCodes[codeEditorKey.value] ?? (previewEntryForTemplate(codeEditorKey.value)?.code || activeDocumentCode(editingTemplate.value)),
   set: (value) => { finalCodes[codeEditorKey.value] = value },
 })
+const editingDocumentContent = computed({
+  get: () => editablePartsForTemplate(editingFinalCode.value, editingTemplate.value).content,
+  set: (value) => {
+    const parts = editablePartsForTemplate(editingFinalCode.value, editingTemplate.value)
+    finalCodes[codeEditorKey.value] = joinEditableParts(parts, value)
+  },
+})
 const editingCodeIsCompiled = computed(() => previewEntryForTemplate(codeEditorKey.value)?.code === editingFinalCode.value)
-const editingCompilationError = computed(() => templateCompileErrors[codeEditorKey.value] || null)
+const editingCompilationError = computed(() => {
+  const error = templateCompileErrors[codeEditorKey.value]
+  return error ? { ...error, source: error.contentSource, diagnostics: error.contentDiagnostics || [] } : null
+})
 async function locateDocumentCompileError() {
   const error = Object.values(templateCompileErrors)[0]
   if (!error) return
   openFinalCode(error.templateKey)
   compileErrorVisible.value = false
   await nextTick()
-  const diagnostic = error.diagnostics.find((item) => item.line)
-  if (diagnostic && editingFinalCode.value === error.source) finalCodeEditor.value?.goToLine(diagnostic.line, diagnostic.column)
+  const diagnostic = (error.contentDiagnostics || []).find((item) => item.line)
+  if (diagnostic && editingDocumentContent.value === error.contentSource) finalCodeEditor.value?.goToLine(diagnostic.line, diagnostic.column)
 }
 function openFinalCode(templateKey) {
   if (!selectedTemplates.value.some((template) => template.key === templateKey)) {
@@ -3208,8 +3287,22 @@ function regenerateFinalCode() {
   if (!window.confirm('Se sustituirá el código de este documento por el generado desde sus campos, contenido y plantilla. ¿Continuar?')) return
   const layoutSource = editingFinalCode.value
   delete finalCodes[codeEditorKey.value]
+  updatedDocumentTemplates[codeEditorKey.value] = true
   // Keep the regenerated code stable until another explicit regeneration.
   finalCodes[codeEditorKey.value] = generatedCodeForTemplate(editingTemplate.value, { layoutSource })
+}
+function updateDocumentTemplate() {
+  if (!editingTemplate.value || !currentTemplateAvailable.value) return
+  if (!window.confirm('Se sustituirá la plantilla guardada por la versión actual. El contenido se conservará y tendrás que recompilar el documento. ¿Continuar?')) return
+  const content = appendShortAnswers(editingDocumentContent.value, {
+    enabled: editingTemplate.value.metadata.content === 'exercises' && templateOption(editingTemplate.value, 'includeAnswers', false),
+    supported: templateDefinesCommand(editingTemplate.value, 'soluciones'),
+    after: editingTemplate.value.metadata.after,
+  })
+  updatedDocumentTemplates[codeEditorKey.value] = true
+  const fresh = generatedCodeForTemplate(editingTemplate.value, { directSourceCode: '' })
+  const parts = editablePartsForTemplate(fresh, editingTemplate.value)
+  finalCodes[codeEditorKey.value] = joinEditableParts(parts, content)
 }
 async function compileEditingFinalCode() {
   if (!editingFinalCode.value.trim() || isCompiling.value) return
@@ -3270,7 +3363,7 @@ function storedFinalCode(documentData, template, index) {
 
 function editDocument(documentData) {
   resetWorkflow()
-  storedTemplateSnapshots.value = (documentData.plantillas || []).filter((template) => template.codigo)
+  storedTemplateSnapshots.value = (documentData.plantillas?.length ? documentData.plantillas : [documentData.plantilla]).filter((template) => template?.codigo)
   const storedTemplates = Array.isArray(documentData.plantillas) && documentData.plantillas.length
     ? documentData.plantillas
     : (documentData.plantilla ? [documentData.plantilla] : [])
@@ -3917,6 +4010,17 @@ defineExpose({
                 hide-details
                 @update:model-value="onFieldInput(field)"
               />
+              <v-combobox
+                v-for="field in unifiedFields.filter((item) => item.type === 'center')"
+                :key="field.key"
+                v-model="fieldValues[field.key]"
+                :items="centerOptions"
+                :label="field.label"
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                @update:model-value="onFieldInput(field)"
+              />
               <v-select
                 v-for="field in unifiedFields.filter((item) => item.type === 'group' || item.type === 'course')"
                 :key="field.key"
@@ -3966,7 +4070,7 @@ defineExpose({
                 @update:model-value="onFieldInput(field)"
               />
               <v-text-field
-                v-for="field in unifiedFields.filter((item) => !['group', 'course', 'subject', 'level', 'date', 'checkbox'].includes(item.type))"
+                v-for="field in unifiedFields.filter((item) => !['group', 'course', 'subject', 'level', 'date', 'checkbox', 'center'].includes(item.type))"
                 :key="field.key"
                 v-model="fieldValues[field.key]"
                 :label="field.label"
@@ -4313,6 +4417,12 @@ defineExpose({
                   class="document-tool-card"
                   :class="`document-tool-${tool.id}`"
                   draggable="true"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="`Añadir ${tool.label}`"
+                  @click="addTool(tool)"
+                  @keydown.enter.prevent="addTool(tool)"
+                  @keydown.space.prevent="addTool(tool)"
                   @dragstart="startToolDrag($event, tool)"
                 >
                   <v-icon v-if="tool.icon" :icon="tool.icon" size="20" />
@@ -4425,34 +4535,24 @@ defineExpose({
           </div>
         </div>
       </div>
-      <v-snackbar
-        v-model="compileErrorVisible"
-        location="bottom"
-        color="error"
-        :timeout="-1"
-        multi-line
-        class="document-compile-snackbar"
-      >
-        <div class="document-compile-snackbar-message">{{ compileError }}</div>
-        <template #actions>
-          <v-btn v-if="Object.keys(templateCompileErrors).length" variant="text" size="small" @click="locateDocumentCompileError">Localizar</v-btn>
-          <v-btn variant="text" size="small" @click="copyCompileError">Copiar</v-btn>
-          <v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar error" @click="compileErrorVisible = false" />
-        </template>
-      </v-snackbar>
+      <v-alert v-if="compileErrorVisible && !codeEditorVisible && !(currentStep === 2 && contentWorkspaceMode === 'latex' && sourceCompilationError.log)" type="error" variant="tonal" closable class="document-inline-error" @click:close="compileErrorVisible = false">
+        <span>{{ compileError }}</span>
+        <v-btn v-if="Object.keys(templateCompileErrors).length" variant="text" size="small" @click="locateDocumentCompileError">Ver errores en el código</v-btn>
+      </v-alert>
     </section>
   </div>
   <v-dialog v-model="codeEditorVisible" fullscreen :persistent="isCompiling || isSaving">
     <v-card class="final-code-dialog">
       <v-card-title class="final-code-toolbar">
-        <span>{{ editingTemplate?.nombre }} · Código final</span>
+        <span>{{ editingTemplate?.nombre }} · Contenido LaTeX</span>
         <v-spacer />
         <v-btn prepend-icon="mdi-restore" variant="text" size="small" :disabled="isCompiling || isSaving" @click="regenerateFinalCode">Regenerar desde los datos</v-btn>
+        <v-btn prepend-icon="mdi-file-replace-outline" variant="text" size="small" :disabled="isCompiling || isSaving || !currentTemplateAvailable" :title="currentTemplateAvailable ? 'Actualizar a la plantilla actual conservando el contenido' : 'La plantilla original ya no está disponible'" @click="updateDocumentTemplate">Actualizar plantilla</v-btn>
         <v-btn prepend-icon="mdi-content-save-outline" variant="tonal" size="small" :loading="isSaving" :disabled="isCompiling" @click="saveEditingFinalCode">Guardar documento</v-btn>
         <v-btn icon="mdi-close" variant="text" aria-label="Cerrar código" :disabled="isCompiling || isSaving" @click="codeEditorVisible = false" />
       </v-card-title>
       <div class="final-code-layout">
-        <DocumentCodeEditor ref="finalCodeEditor" v-model="editingFinalCode" :compiling="isCompiling" :diagnostics="editingCompilationError?.diagnostics || []" :error-log="editingCompilationError?.message || ''" :diagnostic-source="editingCompilationError?.source ?? null" @compile="compileEditingFinalCode" />
+        <DocumentCodeEditor ref="finalCodeEditor" v-model="editingDocumentContent" :compiling="isCompiling" :diagnostics="editingCompilationError?.diagnostics || []" :error-log="editingCompilationError?.message || ''" :diagnostic-source="editingCompilationError?.source ?? null" @compile="compileEditingFinalCode" />
         <div class="final-code-result">
           <div v-if="!editingCodeIsCompiled" class="final-code-pending">Código pendiente de compilar. El visor muestra el último resultado válido.</div>
           <div v-if="editingCompilationError" class="final-code-error">La compilación ha fallado. Selecciona un error en el editor para localizarlo.<v-btn variant="text" size="small" @click="copyCompileError">Copiar error</v-btn></div>
@@ -4833,7 +4933,7 @@ defineExpose({
 .document-preview-with-code .document-preview-render { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); }
 .document-preview-with-code .document-preview-render .document-pdf-preview { border-left: 1px solid #cbd7e5; }
 .document-compile-error { position: absolute; z-index: 4; top: 53px; right: 12px; left: 12px; max-height: 38%; overflow: auto; }
-.document-compile-snackbar-message { max-width: min(70vw, 920px); max-height: 28vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem; line-height: 1.35; }
+.document-inline-error { flex: 0 0 auto; max-height: 28vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .document-assessment-loading { display: flex; width: 100%; height: 100%; min-height: 220px; align-items: center; justify-content: center; gap: 12px; color: #6f8298; font-size: .74rem; }
 
 @media (max-width: 900px) {
