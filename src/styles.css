@@ -131,6 +131,7 @@ body { margin: 0; background: #f8f9fe; }
 .gradebook-student-name { min-width: 0; padding: 4px 0; border: 0; background: transparent; color: #29496f; font: inherit; font-weight: 650; line-height: 1.15; text-align: left; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
 .gradebook-student-content { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; }
 .gradebook-student-actions { display: flex; align-items: center; justify-content: flex-end; gap: 3px; }
+.gradebook-training-count { display: inline-flex; align-items: center; gap: 2px; padding: 2px 5px; border-radius: 4px; color: #55789d; background: #edf3f9; font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gradebook-student-source { display: grid; width: 24px; height: 24px; flex: 0 0 24px; justify-self: end; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--student-source-color, #b5cfe9) 72%, #315f93); border-radius: 50%; background: var(--student-source-color, #b5cfe9); color: var(--student-source-text-color, #315f93); font-size: .68rem; font-weight: 800; line-height: 1; }
 .gradebook-student-source:disabled { opacity: 1; }
 .gradebook-student-source-editable { cursor: pointer; }

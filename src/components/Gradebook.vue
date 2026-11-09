@@ -127,16 +127,26 @@ async function changeResultPublication(id, visible) {
   finally { publicationSaving.value = false }
 }
 const studentMessages = ref([])
+const studentTrainingCounts = ref({})
 const selectedMessageStudent = ref(null)
 const messagesDialog = ref(false)
 let messagesTimer
+let trainingCountsRefreshedAt = 0
 async function refreshStudentMessages() {
   if (!props.group.id || !props.teacherId) return
-  try { studentMessages.value = (await httpsCallable(functions, 'manageTeacherStudentMessages')({ groupId: props.group.id })).data.messages }
+  try {
+    const includeTrainingCounts = Date.now() - trainingCountsRefreshedAt >= 5 * 60 * 1000
+    const result = (await httpsCallable(functions, 'manageTeacherStudentMessages')({ groupId: props.group.id, includeTrainingCounts })).data
+    studentMessages.value = result.messages
+    if (result.trainingCounts) { studentTrainingCounts.value = result.trainingCounts; trainingCountsRefreshedAt = Date.now() }
+  }
   catch (error) { console.error('No se han podido cargar los mensajes del alumnado:', error) }
 }
 function pendingStudentMessages(studentId) {
-  return studentMessages.value.filter((message) => message.studentCode === studentId && ['pending', 'waiting'].includes(message.status)).length
+  return studentMessages.value.filter((message) => message.studentCode === studentId).length
+}
+function unreadStudentMessages(studentId) {
+  return studentMessages.value.filter((message) => message.studentCode === studentId && (message.studentLastAt || message.createdAt || '') > (message.teacherSeenAt || message.replyAt || (message.status !== 'pending' ? message.updatedAt : '') || '')).length
 }
 function openStudentMessages(student) { selectedMessageStudent.value = student; messagesDialog.value = true }
 const dirty = ref(false)
@@ -1478,7 +1488,8 @@ defineExpose({
                   {{ student.nombre || student.id }}
                 </button>
                 <div class="gradebook-student-actions">
-                  <v-btn v-if="pendingStudentMessages(student.id)" icon="mdi-message-text-outline" size="x-small" variant="text" color="primary" :aria-label="`${pendingStudentMessages(student.id)} mensajes de ${student.nombre || student.id}`" @click.stop="openStudentMessages(student)" />
+                  <span v-if="!configurationMode && Object.hasOwn(studentTrainingCounts, student.id)" class="gradebook-training-count" :title="`${studentTrainingCounts[student.id]} ejercicios de entrenamiento completados`" :aria-label="`${studentTrainingCounts[student.id]} ejercicios de entrenamiento completados`"><v-icon icon="mdi-pencil-outline" size="14" aria-hidden="true" /> {{ studentTrainingCounts[student.id] }}</span>
+                  <v-badge v-if="pendingStudentMessages(student.id)" :model-value="Boolean(unreadStudentMessages(student.id))" dot color="error"><v-btn icon="mdi-message-text-outline" size="x-small" variant="text" color="primary" :aria-label="`${pendingStudentMessages(student.id)} conversaciones de ${student.nombre || student.id}`" @click.stop="openStudentMessages(student)" /></v-badge>
                   <button
                     v-if="studentSourceGroups.length > 1"
                     type="button"

@@ -13,6 +13,7 @@ const dashboard = ref(null)
 const loading = ref(true)
 const drawer = ref(false)
 const tab = ref('training')
+const expandedResultId = ref('')
 const trainingRef = ref(null)
 const assessment = ref({ available: false, open: false })
 watch(drawer, (open) => { if (open) trainingRef.value?.closeAssessment() })
@@ -23,6 +24,7 @@ const groups = computed(() => dashboard.value?.groups || (dashboard.value?.group
 const selectedGroup = computed(() => groups.value.find((entry) => entry.group.id === selectedGroupId.value) || groups.value[0] || null)
 
 const resultEntries = computed(() => orderedStudentResults(selectedGroup.value?.results, selectedGroup.value?.resultDates))
+watch(selectedGroupId, () => { expandedResultId.value = '' })
 const upcoming = computed(() => {
   const now = new Date()
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -58,14 +60,15 @@ onBeforeUnmount(() => window.clearInterval(refreshTimer))
       <div class="student-navigation">
         <v-tabs v-model="tab" color="primary" class="student-tabs" :show-arrows="false">
           <v-tab value="training" aria-label="Entrenamiento" title="Entrenamiento"><span class="tab-icon"><v-icon icon="mdi-school-outline" /></span><span class="tab-label">Entrenamiento</span></v-tab>
+          <v-tab value="history" aria-label="Historial" title="Historial"><span class="tab-icon"><v-icon icon="mdi-history" /></span><span class="tab-label">Historial</span></v-tab>
           <v-tab value="results" aria-label="Resultados" title="Resultados"><span class="tab-icon"><v-icon icon="mdi-chart-bar" /></span><span class="tab-label">Resultados</span></v-tab>
           <v-tab value="messages" aria-label="Sugerencias" title="Sugerencias"><v-badge :model-value="Boolean(selectedGroup.unreadMessages)" :content="selectedGroup.unreadMessages" color="error" floating><span class="tab-icon"><v-icon icon="mdi-message-text-outline" /></span><span class="tab-label">Sugerencias</span></v-badge></v-tab>
         </v-tabs>
         <v-btn class="assessment-toggle" icon="mdi-format-list-checks" :color="assessment.open && tab === 'training' ? 'primary' : undefined" variant="text" rounded="circle" :disabled="tab !== 'training' || !assessment.available" :aria-label="assessment.open && tab === 'training' ? 'Cerrar autoevaluación' : 'Abrir autoevaluación'" :aria-pressed="tab === 'training' && assessment.open" :title="assessment.available ? 'Autoevaluación' : 'Disponible al mostrar la solución'" @click="trainingRef?.toggleAssessment()" />
       </div>
-      <StudentTraining v-show="tab === 'training'" :key="selectedGroup.group.id" ref="trainingRef" :active="tab === 'training'" :group="selectedGroup.group" class="student-tab" @assessment-change="updateAssessment" />
-      <StudentMessages v-if="tab === 'messages'" :key="selectedGroup.group.id" :group="selectedGroup.group" class="student-tab student-other-tab" @read="selectedGroup.unreadMessages = 0" />
-      <div v-else-if="tab === 'results'" class="student-tab student-other-tab student-results-view"><section v-if="upcoming.length" class="student-results-section"><h2>Próximas fechas</h2><v-list bg-color="transparent"><v-list-item v-for="item in upcoming" :key="item.id" :title="item.title" :subtitle="formatStudentResultDate(item.date)" /></v-list></section><section class="student-results-section"><h2>Mis resultados</h2><div v-if="resultEntries.length" class="student-result-cards"><template v-for="entry in resultEntries" :key="entry.id"><StudentExamResult v-if="selectedGroup.resultDocuments?.[entry.id]" :group-id="selectedGroup.group.id" :item-id="entry.id" :title="selectedGroup.resultLabels?.[entry.id] || 'Resultado'" :grade="String(displayResult(entry.value))" :date="entry.date" :result="entry.value" /><div v-else class="student-plain-result"><div><small v-if="entry.date">{{ formatStudentResultDate(entry.date) }}</small><strong>{{ selectedGroup.resultLabels?.[entry.id] || 'Resultado' }}</strong></div><b>{{ displayResult(entry.value) }}</b></div></template></div><p v-else class="student-results-empty">Todavía no hay resultados publicados.</p></section></div>
+      <StudentTraining v-show="tab === 'training' || tab === 'history'" :key="selectedGroup.group.id" ref="trainingRef" :active="tab" :group="selectedGroup.group" class="student-tab" @assessment-change="updateAssessment" @open-training="tab = 'training'" />
+      <StudentMessages v-if="tab === 'messages'" :key="selectedGroup.group.id" :group="selectedGroup.group" class="student-tab student-other-tab" @unread="selectedGroup.unreadMessages = $event" />
+      <div v-else-if="tab === 'results'" class="student-tab student-other-tab student-results-view" :class="{ 'student-results-view--expanded': expandedResultId }"><section v-if="upcoming.length && !expandedResultId" class="student-results-section"><h2>Próximas fechas</h2><v-list bg-color="transparent"><v-list-item v-for="item in upcoming" :key="item.id" :title="item.title" :subtitle="formatStudentResultDate(item.date)" /></v-list></section><section class="student-results-section" :class="{ 'student-results-section--expanded': expandedResultId }"><h2 v-if="!expandedResultId">Mis resultados</h2><div v-if="resultEntries.length" class="student-result-cards" :class="{ 'student-result-cards--expanded': expandedResultId }"><template v-for="entry in resultEntries.filter(item => !expandedResultId || item.id === expandedResultId)" :key="entry.id"><StudentExamResult v-if="selectedGroup.resultDocuments?.[entry.id]" :group-id="selectedGroup.group.id" :item-id="entry.id" :title="selectedGroup.resultLabels?.[entry.id] || 'Resultado'" :grade="String(displayResult(entry.value))" :date="entry.date" :result="entry.value" :expanded="expandedResultId === entry.id" @toggle="expandedResultId = expandedResultId === entry.id ? '' : entry.id" /><div v-else class="student-plain-result"><div><small v-if="entry.date">{{ formatStudentResultDate(entry.date) }}</small><strong>{{ selectedGroup.resultLabels?.[entry.id] || 'Resultado' }}</strong></div><b>{{ displayResult(entry.value) }}</b></div></template></div><p v-else class="student-results-empty">Todavía no hay resultados publicados.</p></section></div>
     </template></div></v-main>
   </div>
 </template>
@@ -76,4 +79,6 @@ onBeforeUnmount(() => window.clearInterval(refreshTimer))
 .student-results-view { padding: 4px 3px 16px; }.student-results-section + .student-results-section { margin-top: 20px; }.student-results-section h2 { margin: 0 0 10px; color: #315f94; font-size: 1rem; }.student-results-section :deep(.v-list) { padding: 0; }.student-results-empty { padding: 20px 0; color: #8393a5; text-align: center; }.student-result-cards { display: grid; gap: 12px; }.student-plain-result { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 12px; border-radius: 2px; background: #fff; box-shadow: 0 2px 8px rgba(29, 55, 84, .1); color: #315f94; }.student-plain-result > div { display: grid; gap: 3px; }.student-plain-result small { color: #71839a; }.student-plain-result strong { font-size: .86rem; }.student-plain-result b { font-size: 1.35rem; }
 @media (min-width: 700px) { .student-result-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
 @media (max-width: 600px) { .student-content { width: calc(100% - 16px); }.student-tabs :deep(.v-tab) { min-width: 48px; padding: 0 12px; }.tab-label { display: none; }.tab-icon { margin-right: 0; } }
+@media (min-width: 601px) and (max-width: 850px) { .student-tabs :deep(.v-tab) { min-width: 0; padding: 0 8px; font-size: .75rem; }.tab-icon { margin-right: 4px; } }
+.student-results-view--expanded { display:flex; flex-direction:column; overflow:hidden; }.student-results-section--expanded { display:flex; flex-direction:column; flex:1 1 0; min-height:0; }.student-result-cards--expanded { display:flex !important; flex:1 1 0; min-height:0; }
 </style>

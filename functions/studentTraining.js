@@ -6,6 +6,22 @@ import { examPdfCandidates, examResultItem, safeExamAssessment, safeExamExercise
 const validId = (value) => typeof value === 'string' && value.length > 0 && value.length <= 500 && value !== '.' && value !== '..' && !value.includes('/')
 const unique = (values) => [...new Set(Array.isArray(values) ? values.filter(validId) : [])]
 
+function legacyConversationFields(message) {
+  if (message.conversationVersion === 2) return {}
+  return { conversationVersion: 2, legacyReply: message.reply ? { text: message.reply, createdAt: message.replyAt || message.updatedAt || message.createdAt } : null }
+}
+
+async function conversationEntries(db, snapshot) {
+  const message = snapshot.data()
+  const entries = []
+  if (message.text) entries.push({ id: 'original', sender: 'student', text: message.text, createdAt: message.createdAt || '' })
+  const legacy = message.conversationVersion === 2 ? message.legacyReply : message.reply ? { text: message.reply, createdAt: message.replyAt || message.updatedAt || message.createdAt } : null
+  if (legacy?.text) entries.push({ id: 'legacy-reply', sender: 'teacher', ...legacy })
+  const stored = await db.collection(`studentMessages/${snapshot.id}/entries`).get()
+  entries.push(...stored.docs.map((doc) => ({ id: doc.id, ...doc.data() })))
+  return entries.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
+}
+
 export function pdfStoragePath(reference, exerciseId, bucketName) {
   let path = typeof reference === 'object' && reference ? reference.storagePath || reference.path : ''
   const url = typeof reference === 'string' ? reference : reference?.downloadUrl || reference?.url
@@ -19,7 +35,7 @@ export function pdfStoragePath(reference, exerciseId, bucketName) {
   return typeof path === 'string' && path.startsWith(`ejercicios/${exerciseId}/`) && !path.includes('..') ? path : ''
 }
 
-export function studentTrainingHandlers({ db, bucket }) {
+export function studentTrainingHandlers({ db, bucket, auth }) {
   async function identity(request, groupId) {
     const code = request.auth?.token?.studentCode
     if (request.auth?.token?.role !== 'student' || !/^[A-HJ-NP-Za-km-z1-9]{6}$/.test(code || '') || !validId(groupId)) throw new HttpsError('permission-denied', 'Acceso de alumno no válido.')
@@ -43,16 +59,32 @@ export function studentTrainingHandlers({ db, bucket }) {
 
   function publicSession(session) {
     if (!session || !['active', 'review'].includes(session.status)) return null
-    return { id: session.id, status: session.status, exerciseId: session.exerciseId, durationMinutes: session.durationMinutes,
+    return { id: session.id, status: session.status, exerciseId: session.exerciseId, key: session.key, durationMinutes: session.durationMinutes,
       timer: session.timer, selectedConceptIds: session.selectedConceptIds,
-      ...(session.status === 'review' ? { segments: session.segments } : {}) }
+      ...(session.status === 'review' ? { segments: session.segments, criteriaIds: session.criteriaIds || [], legacyAssessment: session.legacyAssessment === true } : {}) }
+  }
+
+  function usedRef(context, subjectId, key) {
+    return db.doc(`studentTraining/${context.code}/used/${createHash('sha256').update(`${subjectId}:${key}`).digest('hex')}`)
   }
 
   async function load(request) {
     const context = await identity(request, request.data?.groupId)
     const [nodes, session, attempts] = await Promise.all([catalog(context.group.subjectId), context.session.get(), context.attempts.where('subjectId', '==', context.group.subjectId).get()])
     const history = attempts.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
-    return { nodes, session: publicSession(session.data()), progress: conceptProgress(history, nodes), completedCount: history.filter((item) => item.status === 'completed').length }
+    const completed = history.filter((item) => item.status === 'completed')
+    const exerciseIds = [...new Set(completed.map((item) => item.exerciseId).filter(validId))]
+    const exercises = new Map(await Promise.all(exerciseIds.map(async (id) => [id, (await db.doc(`ejercicios/${id}`).get()).data() || {}])))
+    const items = completed.map((item) => {
+      const root = exercises.get(item.exerciseId) || {}
+      const version = item.variationId ? (Array.isArray(root.variaciones) ? root.variaciones : []).find((entry) => entry.id === item.variationId) || {} : root
+      const structure = version.structure || version
+      const parts = Array.isArray(structure.parts) ? structure.parts : Array.isArray(structure.apartados) ? structure.apartados : []
+      const source = structure.statement?.latex || structure.enunciado || parts.map((part) => part?.statement?.latex || part?.enunciado).find((value) => typeof value === 'string' && value.trim()) || version.codigo || version.latex || version.titulo || root.titulo || 'Ejercicio de entrenamiento'
+      const title = String(source).replace(/%[^\n]*/g, '').replace(/\\(?:ej|M|p)\s*(?:\{[^{}]*\})?/g, '').replace(/\s+/g, ' ').trim().slice(0, 180) || 'Ejercicio de entrenamiento'
+      return { id: item.id, title, completedAt: item.completedAt || '', obtained: (item.segments || []).reduce((sum, part) => sum + (Number(part.obtained) || 0), 0), maximum: (item.segments || []).reduce((sum, part) => sum + (Number(part.maximum) || 0), 0) }
+    }).sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)) || b.id.localeCompare(a.id))
+    return { nodes, session: publicSession(session.data()), progress: conceptProgress(history, nodes), completedCount: completed.length, history: items }
   }
 
   async function start(request) {
@@ -74,14 +106,14 @@ export function studentTrainingHandlers({ db, bucket }) {
         const solution = pdfStoragePath(version.pdf?.solved || version.pdf?.resuelto, doc.id, bucket.name)
         return Boolean(statement && solution && statement !== solution)
       }
-      exercise.variaciones = (exercise.variaciones || []).filter(usable)
+      exercise.variaciones = (Array.isArray(exercise.variaciones) ? exercise.variaciones : []).filter((item) => item && usable(item))
       return usable(exercise) ? exercise : { ...exercise, pdf: null }
     })
     const completed = attempts.docs.map((doc) => doc.data()).filter((item) => item.status === 'completed').map((item) => item.key)
     const active = sessions.docs.map((doc) => doc.data()).filter((item) => ['active', 'review'].includes(item.status)).map((item) => item.key)
     if (sessions.docs.some((doc) => doc.id === data.groupId && ['active', 'review'].includes(doc.data().status))) throw new HttpsError('failed-precondition', 'Ya hay un ejercicio en curso.')
     let candidate, version, statement, solution
-    const unavailable = []
+    const unavailable = Array.isArray(data.excludeKeys) ? data.excludeKeys.filter((key) => typeof key === 'string' && key.length <= 1000).slice(0, 50) : []
     while (true) {
       candidate = selectTrainingCandidate(exercises, selected, nodes, completed, { repeat: data.repeat === true, active: [...active, ...unavailable] })
       if (!candidate) throw new HttpsError('not-found', unavailable.length ? 'No quedan ejercicios disponibles. Algunos necesitan volver a compilarse.' : 'No quedan ejercicios disponibles para estos contenidos.')
@@ -91,6 +123,7 @@ export function studentTrainingHandlers({ db, bucket }) {
       const solutionPath = pdfStoragePath(version.pdf?.solved || version.pdf?.resuelto, root.id, bucket.name)
       try {
         ;[statement, solution] = await Promise.all([bucket.file(statementPath).download(), bucket.file(solutionPath).download()])
+        if (!statement[0]?.length || !solution[0]?.length || statement[0].length > 7_000_000 || solution[0].length > 7_000_000) { unavailable.push(candidate.key); continue }
         break
       } catch (error) {
         if (Number(error?.code) !== 404) throw error
@@ -100,7 +133,6 @@ export function studentTrainingHandlers({ db, bucket }) {
     const id = context.attempts.doc().id
     const privateStatement = `studentTraining/${context.code}/${id}/statement.pdf`
     const privateSolution = `studentTraining/${context.code}/${id}/solution.pdf`
-    if (statement[0].length > 7_000_000 || solution[0].length > 7_000_000) throw new HttpsError('resource-exhausted', 'El PDF es demasiado grande para la vista de práctica.')
     try {
       await Promise.all([bucket.file(privateStatement).save(statement[0], { resumable: false, contentType: 'application/pdf' }), bucket.file(privateSolution).save(solution[0], { resumable: false, contentType: 'application/pdf' })])
     } catch (error) {
@@ -127,13 +159,35 @@ export function studentTrainingHandlers({ db, bucket }) {
 
   async function pdf(request) {
     const context = await identity(request, request.data?.groupId)
+    if (request.data?.attemptId) {
+      if (!validId(request.data.attemptId) || request.data?.kind !== 'statement') throw new HttpsError('invalid-argument', 'La solicitud del enunciado no es válida.')
+      const attempt = (await context.attempts.doc(request.data.attemptId).get()).data()
+      if (!attempt || attempt.status !== 'completed' || attempt.subjectId !== context.group.subjectId || !validId(attempt.exerciseId)) throw new HttpsError('not-found', 'El intento ya no está disponible.')
+      const root = (await db.doc(`ejercicios/${attempt.exerciseId}`).get()).data()
+      const version = attempt.variationId ? (Array.isArray(root?.variaciones) ? root.variaciones : []).find((item) => item.id === attempt.variationId) : root
+      const path = pdfStoragePath(version?.pdf?.statement || version?.pdf?.enunciado, attempt.exerciseId, bucket.name)
+      if (!path) throw new HttpsError('not-found', 'El enunciado de este ejercicio ya no está disponible.')
+      let bytes
+      try { [bytes] = await bucket.file(path).download() }
+      catch (error) {
+        if (Number(error?.code) === 404) throw new HttpsError('not-found', 'El enunciado de este ejercicio ya no está disponible.')
+        throw error
+      }
+      if (bytes.length > 7_000_000) throw new HttpsError('resource-exhausted', 'El PDF es demasiado grande para mostrarlo.')
+      return { data: bytes.toString('base64') }
+    }
     const session = (await context.session.get()).data()
     if (!session || session.id !== request.data?.sessionId || !['active', 'review'].includes(session.status)) throw new HttpsError('not-found', 'El intento ya no está disponible.')
     const solved = request.data?.kind === 'solved'
     if (solved && session.status !== 'review') throw new HttpsError('permission-denied', 'Solicita primero la solución.')
     const path = solved ? session.solutionPath : session.statementPath
     if (path !== `studentTraining/${context.code}/${session.id}/${solved ? 'solution' : 'statement'}.pdf`) throw new HttpsError('failed-precondition', 'El PDF no está disponible.')
-    const [bytes] = await bucket.file(path).download()
+    let bytes
+    try { [bytes] = await bucket.file(path).download() }
+    catch (error) {
+      if (Number(error?.code) === 404) throw new HttpsError('not-found', 'El PDF de este ejercicio ya no está disponible.')
+      throw error
+    }
     if (bytes.length > 7_000_000) throw new HttpsError('resource-exhausted', 'El PDF es demasiado grande para la vista de práctica.')
     return { data: bytes.toString('base64') }
   }
@@ -141,6 +195,54 @@ export function studentTrainingHandlers({ db, bucket }) {
   async function update(request) {
     const data = request.data || {}
     const context = await identity(request, data.groupId)
+    if (['history-reset', 'history-reevaluate', 'history-redo'].includes(data.action)) {
+      if (!validId(data.attemptId)) throw new HttpsError('invalid-argument', 'El intento no es válido.')
+      const attemptRef = context.attempts.doc(data.attemptId)
+      const attempt = (await attemptRef.get()).data()
+      if (!attempt || attempt.status !== 'completed' || attempt.subjectId !== context.group.subjectId) throw new HttpsError('not-found', 'El intento ya no está disponible.')
+      if (data.action === 'history-reset') {
+        await db.runTransaction(async (tx) => {
+          const [current, stored, matching, reservation] = await Promise.all([tx.get(context.session), tx.get(attemptRef), tx.get(context.attempts.where('subjectId', '==', context.group.subjectId)), tx.get(usedRef(context, attempt.subjectId, attempt.key))])
+          if (!stored.exists || stored.data()?.status !== 'completed') throw new HttpsError('not-found', 'El intento ya no está disponible.')
+          if ((['active', 'review'].includes(current.data()?.status) && current.data()?.key === attempt.key) || reservation.data()?.status === 'active') throw new HttpsError('failed-precondition', 'Termina primero el ejercicio que tienes en curso.')
+          matching.docs.filter((item) => item.data().status === 'completed' && item.data().key === attempt.key).forEach((item) => tx.delete(item.ref))
+          tx.delete(usedRef(context, attempt.subjectId, attempt.key))
+        })
+        return { session: null }
+      }
+      if (!validId(attempt.exerciseId)) throw new HttpsError('not-found', 'Este ejercicio ya no está disponible.')
+      const root = (await db.doc(`ejercicios/${attempt.exerciseId}`).get()).data()
+      const version = attempt.variationId ? (Array.isArray(root?.variaciones) ? root.variaciones : []).find((item) => item.id === attempt.variationId) : root
+      if (!version) throw new HttpsError('not-found', 'Este ejercicio ya no está disponible.')
+      const segments = Array.isArray(attempt.assessmentSegments) && attempt.assessmentSegments.length ? attempt.assessmentSegments : trainingSegments(version)
+      if (!segments.length) throw new HttpsError('failed-precondition', 'La matriz de este ejercicio ya no está disponible.')
+      const statementPath = pdfStoragePath(version.pdf?.statement || version.pdf?.enunciado, attempt.exerciseId, bucket.name)
+      const solutionPath = pdfStoragePath(version.pdf?.solved || version.pdf?.resuelto, attempt.exerciseId, bucket.name)
+      if (!statementPath || !solutionPath) throw new HttpsError('not-found', 'Los PDF de este ejercicio ya no están disponibles.')
+      const [[statement], [solution]] = await Promise.all([bucket.file(statementPath).download(), bucket.file(solutionPath).download()])
+      if (!statement.length || !solution.length || statement.length > 7_000_000 || solution.length > 7_000_000) throw new HttpsError('resource-exhausted', 'Los PDF de este ejercicio no se pueden abrir.')
+      const id = context.attempts.doc().id
+      const privateStatement = `studentTraining/${context.code}/${id}/statement.pdf`
+      const privateSolution = `studentTraining/${context.code}/${id}/solution.pdf`
+      const review = data.action === 'history-reevaluate'
+      const duration = Number(version.durationMinutes || version.structure?.tiempo)
+      const session = { id, groupId: data.groupId, subjectId: attempt.subjectId, status: review ? 'review' : 'active', key: attempt.key, exerciseId: attempt.exerciseId, variationId: attempt.variationId || null, selectedConceptIds: Array.isArray(attempt.selectedConceptIds) ? attempt.selectedConceptIds : [...new Set((attempt.segments || []).flatMap((segment) => segment.conceptIds || []))], segments, statementPath: privateStatement, solutionPath: privateSolution, durationMinutes: Number.isFinite(duration) && duration > 0 ? duration : 15, timer: { elapsedMs: 0, runningSince: review ? null : Date.now(), alerted: false }, ...(review ? { historyAttemptId: data.attemptId, criteriaIds: Array.isArray(attempt.criteriaIds) ? attempt.criteriaIds : [], legacyAssessment: !Array.isArray(attempt.criteriaIds) } : {}) }
+      try {
+        await Promise.all([bucket.file(privateStatement).save(statement, { resumable: false, contentType: 'application/pdf' }), bucket.file(privateSolution).save(solution, { resumable: false, contentType: 'application/pdf' })])
+        await db.runTransaction(async (tx) => {
+          const [current, stored, used] = await Promise.all([tx.get(context.session), tx.get(attemptRef), tx.get(usedRef(context, attempt.subjectId, attempt.key))])
+          if (['active', 'review'].includes(current.data()?.status)) throw new HttpsError('failed-precondition', 'Termina o abandona primero el ejercicio que tienes en curso.')
+          if (!stored.exists || stored.data()?.status !== 'completed') throw new HttpsError('not-found', 'El intento ya no está disponible.')
+          if (used.data()?.status === 'active') throw new HttpsError('failed-precondition', 'Este ejercicio está en curso en otra asignatura.')
+          tx.set(usedRef(context, attempt.subjectId, attempt.key), { key: attempt.key, subjectId: attempt.subjectId, status: 'active', sessionId: id })
+          tx.set(context.session, session)
+        })
+      } catch (error) {
+        await Promise.allSettled([bucket.file(privateStatement).delete({ ignoreNotFound: true }), bucket.file(privateSolution).delete({ ignoreNotFound: true })])
+        throw error
+      }
+      return { session: publicSession(session) }
+    }
     let result
     let cleanup = []
     await db.runTransaction(async (tx) => {
@@ -163,7 +265,9 @@ export function studentTrainingHandlers({ db, bucket }) {
         const all = session.segments.flatMap((segment) => segment.criteria.map((criterion) => `${segment.id}:${criterion.id}`))
         if ([...selected].some((id) => !all.includes(id))) throw new HttpsError('invalid-argument', 'Hay criterios no válidos.')
         const segments = session.segments.map((segment) => ({ conceptIds: segment.conceptIds, maximum: segment.maximum, obtained: segment.criteria.reduce((sum, criterion) => sum + (selected.has(`${segment.id}:${criterion.id}`) ? criterion.points : 0), 0) }))
-        tx.set(context.attempts.doc(session.id), { groupId: session.groupId, subjectId: session.subjectId, key: session.key, exerciseId: session.exerciseId, variationId: session.variationId, status: 'completed', segments, completedAt: new Date(now).toISOString() })
+        const previous = session.historyAttemptId ? (await tx.get(context.attempts.doc(session.historyAttemptId))).data() : null
+        if (session.historyAttemptId && (!previous || previous.subjectId !== session.subjectId)) throw new HttpsError('not-found', 'El intento original ya no está disponible.')
+        tx.set(context.attempts.doc(session.historyAttemptId || session.id), { groupId: session.groupId, subjectId: session.subjectId, key: session.key, exerciseId: session.exerciseId, variationId: session.variationId, status: 'completed', segments, assessmentSegments: session.segments, criteriaIds: [...selected], selectedConceptIds: session.selectedConceptIds || [], completedAt: previous?.completedAt || new Date(now).toISOString(), updatedAt: new Date(now).toISOString() })
         tx.set(usedRef, { key: session.key, subjectId: session.subjectId, status: 'completed', completedAt: new Date(now).toISOString() })
         session.status = 'completed'
         cleanup = [session.statementPath, session.solutionPath]
@@ -183,19 +287,39 @@ export function studentTrainingHandlers({ db, bucket }) {
       const text = String(data.text || '').trim()
       if (!text || text.length > 2000) throw new HttpsError('invalid-argument', 'Escribe un mensaje de hasta 2000 caracteres.')
       const limit = db.doc(`studentTraining/${context.code}/messageLimits/${data.groupId}`)
-      const message = messages.doc()
+      if (data.messageId !== undefined && !validId(data.messageId)) throw new HttpsError('invalid-argument', 'Conversación no válida.')
+      const message = messages.doc(data.messageId || undefined)
+      const entry = db.collection(`studentMessages/${message.id}/entries`).doc()
       await db.runTransaction(async (tx) => {
         const previous = await tx.get(limit)
+        const conversation = data.messageId ? await tx.get(message) : null
+        if (data.messageId && (!conversation.exists || conversation.data().groupId !== data.groupId || conversation.data().studentCode !== context.code)) throw new HttpsError('not-found', 'No se ha encontrado la conversación.')
+        if (conversation && ['resolved', 'dismissed'].includes(conversation.data().status)) throw new HttpsError('failed-precondition', 'Esta conversación está cerrada. El profesor debe reabrirla para seguir escribiendo.')
         const now = Date.now()
-        if (now - (Number(previous.data()?.lastSentAt) || 0) < 10000) throw new HttpsError('resource-exhausted', 'Espera unos segundos antes de enviar otro mensaje.')
+        if (now - (Number(previous.data()?.lastSentAt) || 0) < 2000) throw new HttpsError('resource-exhausted', 'Espera un momento antes de enviar otro mensaje.')
+        const timestamp = new Date(now).toISOString()
         tx.set(limit, { lastSentAt: now })
-        tx.set(message, { groupId: data.groupId, studentCode: context.code, subjectId: context.group.subjectId, text, status: 'pending', reply: '', createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() })
+        if (conversation) {
+          tx.set(entry, { sender: 'student', text, createdAt: timestamp })
+          tx.update(message, { ...legacyConversationFields(conversation.data()), status: 'pending', updatedAt: timestamp, studentLastAt: timestamp, lastText: text })
+        } else tx.set(message, { groupId: data.groupId, studentCode: context.code, subjectId: context.group.subjectId, text, status: 'pending', reply: '', createdAt: timestamp, updatedAt: timestamp, studentLastAt: timestamp, lastText: text })
       })
+      data.messageId = message.id
     }
     const snapshot = await messages.where('studentCode', '==', context.code).get()
     const own = snapshot.docs.filter((doc) => doc.data().groupId === data.groupId)
-    if (data.markRead === true) await Promise.all(own.filter((doc) => doc.data().replyAt && doc.data().replyAt > (doc.data().studentSeenAt || '')).map((doc) => doc.ref.update({ studentSeenAt: doc.data().replyAt })))
-    return { messages: own.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) }
+    const selected = data.messageId ? own.find((doc) => doc.id === data.messageId) : null
+    if (data.messageId && !selected) throw new HttpsError('not-found', 'No se ha encontrado la conversación.')
+    if (data.markRead === true) await Promise.all((selected ? [selected] : own).filter((doc) => doc.data().replyAt && doc.data().replyAt > (doc.data().studentSeenAt || '')).map((doc) => doc.ref.update({ studentSeenAt: doc.data().replyAt })))
+    const entries = selected ? await conversationEntries(db, selected) : []
+    const list = own.map((doc) => ({ id: doc.id, ...doc.data(), ...(selected?.id === doc.id && data.markRead === true ? { studentSeenAt: doc.data().replyAt || '' } : {}) })).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+    let teacherName = ''
+    if (validId(context.group.teacherId)) {
+      const profile = (await db.doc(`teachers/${context.group.teacherId}`).get()).data() || {}
+      teacherName = typeof profile.displayName === 'string' ? profile.displayName.trim() : ''
+      if (!teacherName && auth) teacherName = (await auth.getUser(context.group.teacherId).catch(() => null))?.displayName || ''
+    }
+    return { messages: list, entries, conversationId: selected?.id || null, teacherName }
   }
 
   async function teacherMessages(request) {
@@ -205,19 +329,37 @@ export function studentTrainingHandlers({ db, bucket }) {
     if (!group.exists || group.data()?.teacherId !== request.auth.uid) throw new HttpsError('permission-denied', 'Este grupo no pertenece al profesor.')
     const messages = db.collection('studentMessages')
     if (data.messageId !== undefined) {
-      if (!validId(data.messageId) || !['pending', 'waiting', 'resolved', 'dismissed'].includes(data.status)) throw new HttpsError('invalid-argument', 'Estado o mensaje no válido.')
+      if (!validId(data.messageId) || (data.status !== undefined && !['pending', 'waiting', 'resolved', 'dismissed'].includes(data.status))) throw new HttpsError('invalid-argument', 'Estado o mensaje no válido.')
       const reply = String(data.reply || '').trim()
       if (reply.length > 2000) throw new HttpsError('invalid-argument', 'La respuesta es demasiado larga.')
       const reference = messages.doc(data.messageId)
+      const entry = db.collection(`studentMessages/${data.messageId}/entries`).doc()
       await db.runTransaction(async (tx) => {
         const message = await tx.get(reference)
         if (!message.exists || message.data().groupId !== data.groupId) throw new HttpsError('not-found', 'No se ha encontrado el mensaje.')
         const now = new Date().toISOString()
-        tx.update(reference, { status: data.status, reply, updatedAt: now, ...(reply && reply !== message.data().reply ? { replyAt: now } : {}) })
+        const changes = {}
+        if (data.status !== undefined) { changes.status = data.status; changes.updatedAt = now }
+        if (reply && (data.append === true || reply !== message.data().reply)) {
+          if (['resolved', 'dismissed'].includes(message.data().status)) throw new HttpsError('failed-precondition', 'Reabre la conversación antes de enviar mensajes.')
+          tx.set(entry, { sender: 'teacher', text: reply, createdAt: now }); Object.assign(changes, legacyConversationFields(message.data()), { reply, replyAt: now, updatedAt: now, lastText: reply })
+        }
+        if (data.markRead === true) changes.teacherSeenAt = message.data().studentLastAt || message.data().createdAt || now
+        if (Object.keys(changes).length) tx.update(reference, changes)
       })
     }
     const snapshot = await messages.where('groupId', '==', data.groupId).get()
-    return { messages: snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) }
+    const selected = data.messageId ? snapshot.docs.find((doc) => doc.id === data.messageId) : null
+    const result = { messages: snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt))), entries: selected ? await conversationEntries(db, selected) : [] }
+    if (data.includeTrainingCounts === true && group.data()?.subjectId) {
+      const roster = await db.collection(`grupos/${data.groupId}/alumnos`).get()
+      const counts = await Promise.allSettled(roster.docs.filter((student) => validId(student.id)).map(async (student) => {
+        const attempts = await db.collection(`studentTraining/${student.id}/attempts`).where('subjectId', '==', group.data().subjectId).get()
+        return [student.id, attempts.docs.filter((attempt) => attempt.data().status === 'completed').length]
+      }))
+      result.trainingCounts = Object.fromEntries(counts.filter((item) => item.status === 'fulfilled').map((item) => item.value))
+    }
+    return result
   }
   async function teacherProgress(request) {
     const { groupId, studentId } = request.data || {}

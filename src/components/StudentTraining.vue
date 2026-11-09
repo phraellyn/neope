@@ -11,8 +11,8 @@ import MathText from './MathText.vue'
 import { unlockTrainingAudio } from '../utils/studentTrainingAudio'
 import { calculateConceptProgress } from '../utils/conceptProgressLabel'
 
-const props = defineProps({ group: { type: Object, required: true }, active: { type: Boolean, default: true } })
-const emit = defineEmits(['assessment-change'])
+const props = defineProps({ group: { type: Object, required: true }, active: { type: String, default: 'training' } })
+const emit = defineEmits(['assessment-change', 'open-training'])
 const display = useDisplay()
 const assessmentWidth = computed(() => Math.min(400, Math.floor(display.width.value * 0.88)))
 const nodes = ref([])
@@ -25,6 +25,16 @@ const assessmentOpen = ref(false)
 const busy = ref(false)
 const error = ref('')
 const exhausted = ref(false)
+const history = ref([])
+const historyResetTarget = ref(null)
+const expandedHistoryId = ref('')
+const historyPdfUrl = ref('')
+const historyPdfLoading = ref(false)
+const historyPdfError = ref('')
+let historyPdfRequest = 0
+const showHistory = computed(() => props.active === 'history')
+const visibleHistory = computed(() => expandedHistoryId.value ? history.value.filter((item) => item.id === expandedHistoryId.value) : history.value)
+const skippedKeys = new Set()
 let requestNumber = 0
 let pendingAlert = false
 const displayedSelection = computed(() => [...new Set(selected.value.flatMap((id) => [id, ...conceptAncestors(id, nodes.value)]))])
@@ -41,6 +51,25 @@ const assessmentScore = computed(() => {
 const scoreFormatter = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 4 })
 const callable = async (name, data) => (await httpsCallable(functions, name, { timeout: 130000 })({ groupId: props.group.id, ...data })).data
 function clearPdf() { if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value); pdfUrl.value = '' }
+function closeHistoryPdf() {
+  historyPdfRequest += 1
+  if (historyPdfUrl.value) URL.revokeObjectURL(historyPdfUrl.value)
+  historyPdfUrl.value = ''; historyPdfError.value = ''; historyPdfLoading.value = false; expandedHistoryId.value = ''
+}
+async function openHistoryPdf(item) {
+  if (expandedHistoryId.value === item.id) { closeHistoryPdf(); return }
+  closeHistoryPdf()
+  expandedHistoryId.value = item.id
+  const request = ++historyPdfRequest
+  historyPdfLoading.value = true
+  try {
+    const response = await callable('getStudentTrainingPdf', { attemptId: item.id, kind: 'statement' })
+    if (request !== historyPdfRequest) return
+    const bytes = Uint8Array.from(atob(response.data), (character) => character.charCodeAt(0))
+    historyPdfUrl.value = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+  } catch (cause) { if (request === historyPdfRequest) historyPdfError.value = cause.message || 'No se ha podido cargar el enunciado.' }
+  finally { if (request === historyPdfRequest) historyPdfLoading.value = false }
+}
 function toggleCriterion(id) { selectedCriteria.value = selectedCriteria.value.includes(id) ? selectedCriteria.value.filter((value) => value !== id) : [...selectedCriteria.value, id] }
 function toggleAssessment() { if (session.value?.status === 'review') assessmentOpen.value = !assessmentOpen.value }
 function closeAssessment() { assessmentOpen.value = false }
@@ -67,21 +96,56 @@ async function loadPdf(kind) {
 async function load() {
   const request = ++requestNumber
   pendingAlert = false
-  selected.value = []; selectedCriteria.value = []; session.value = null; assessmentOpen.value = false; clearPdf(); error.value = ''; exhausted.value = false; busy.value = true
+  selected.value = []; selectedCriteria.value = []; session.value = null; assessmentOpen.value = false; clearPdf(); closeHistoryPdf(); error.value = ''; exhausted.value = false; busy.value = true
   try {
     const result = await callable('loadStudentTraining', {})
     if (request !== requestNumber) return
-    nodes.value = result.nodes; progress.value = calculateConceptProgress(result.nodes, result.progress || {}); session.value = result.session
-    if (session.value) { selected.value = session.value.selectedConceptIds || []; await loadPdf(session.value.status === 'review' ? 'solved' : 'statement'); if (session.value?.status === 'review') assessmentOpen.value = true }
-  } catch (cause) { if (request === requestNumber) error.value = cause.message || 'No se ha podido cargar el entrenamiento.' }
+    nodes.value = result.nodes; progress.value = calculateConceptProgress(result.nodes, result.progress || {}); history.value = result.history || []; session.value = result.session
+    if (session.value) { selected.value = session.value.selectedConceptIds || []; selectedCriteria.value = session.value.criteriaIds || []; await loadPdf(session.value.status === 'review' ? 'solved' : 'statement'); if (session.value?.status === 'review') assessmentOpen.value = true }
+  } catch (cause) { if (request === requestNumber) { error.value = cause.message || 'No se ha podido cargar el entrenamiento.'; if (session.value?.status === 'active' && cause.code?.endsWith('not-found')) setTimeout(skipBrokenPdf, 0) } }
   finally { if (request === requestNumber) finishBusy() }
 }
 async function start(repeat = false) {
   if (busy.value || !selected.value.length) return
   unlockTrainingAudio()
   busy.value = true; error.value = ''
-  try { session.value = await callable('startStudentTraining', { selectedConceptIds: selected.value, repeat }); exhausted.value = false; await loadPdf('statement') }
-  catch (cause) { error.value = cause.message || 'No se ha podido proponer un ejercicio.'; exhausted.value = cause.code?.endsWith('not-found') }
+  try { session.value = await callable('startStudentTraining', { selectedConceptIds: selected.value, repeat, excludeKeys: [...skippedKeys] }); exhausted.value = false; await loadPdf('statement') }
+  catch (cause) { error.value = cause.message || 'No se ha podido proponer un ejercicio.'; exhausted.value = cause.code?.endsWith('not-found'); if (session.value?.status === 'active' && cause.code?.endsWith('not-found')) setTimeout(skipBrokenPdf, 0) }
+  finally { finishBusy() }
+}
+async function skipBrokenPdf() {
+  if (busy.value || session.value?.status !== 'active') return
+  const key = session.value.key
+  if (!key || skippedKeys.size >= 50) { error.value = 'No se ha podido mostrar el ejercicio. Puedes abandonarlo y elegir otro.'; return }
+  skippedKeys.add(key)
+  busy.value = true; error.value = ''; clearPdf()
+  let proposed = false
+  try {
+    await callable('updateStudentTraining', { sessionId: session.value.id, action: 'abandon' })
+    session.value = null
+    session.value = await callable('startStudentTraining', { selectedConceptIds: selected.value, excludeKeys: [...skippedKeys] })
+    proposed = true
+    await loadPdf('statement')
+  } catch (cause) { error.value = cause.message || 'No se ha podido proponer otro ejercicio.'; exhausted.value = cause.code?.endsWith('not-found'); if (proposed && session.value?.status === 'active' && exhausted.value) setTimeout(skipBrokenPdf, 0) }
+  finally { finishBusy() }
+}
+async function historyAction(item, operation) {
+  if (busy.value) return
+  if (operation === 'redo') unlockTrainingAudio()
+  busy.value = true; error.value = ''
+  try {
+    const result = await callable('updateStudentTraining', { action: `history-${operation}`, attemptId: item.id })
+    if (operation === 'reset') {
+      const data = await callable('loadStudentTraining', {})
+      history.value = data.history || []; progress.value = calculateConceptProgress(data.nodes, data.progress || {}); closeHistoryPdf()
+    } else {
+      closeHistoryPdf()
+      session.value = result.session; selected.value = session.value.selectedConceptIds || []; selectedCriteria.value = session.value.criteriaIds || []
+      emit('open-training')
+      await loadPdf(session.value.status === 'review' ? 'solved' : 'statement')
+      assessmentOpen.value = session.value.status === 'review'
+    }
+  } catch (cause) { error.value = cause.message || 'No se ha podido abrir el intento.' }
   finally { finishBusy() }
 }
 async function retryPdf() {
@@ -99,7 +163,7 @@ async function action(name) {
     session.value = result.session
     if (name === 'reset' || name === 'reveal' || name === 'abandon' || name === 'complete') pendingAlert = false
     if (name === 'reveal') { assessmentOpen.value = true; await loadPdf('solved') }
-    if (name === 'complete' || name === 'abandon') { assessmentOpen.value = false; clearPdf(); selectedCriteria.value = []; const data = await callable('loadStudentTraining', {}); progress.value = calculateConceptProgress(data.nodes, data.progress || {}) }
+    if (name === 'complete' || name === 'abandon') { assessmentOpen.value = false; clearPdf(); selectedCriteria.value = []; const data = await callable('loadStudentTraining', {}); progress.value = calculateConceptProgress(data.nodes, data.progress || {}); history.value = data.history || [] }
   } catch (cause) {
     error.value = cause.message || 'No se ha podido actualizar el intento.'
     if (name === 'alerted') { pendingAlert = true; busy.value = false; return }
@@ -107,14 +171,38 @@ async function action(name) {
   finally { if (busy.value) finishBusy() }
 }
 watch(() => props.group.id, load, { immediate: true })
-onBeforeUnmount(() => { requestNumber += 1; session.value = null; clearPdf(); emit('assessment-change', { available: false, open: false }) })
+onBeforeUnmount(() => { requestNumber += 1; session.value = null; clearPdf(); closeHistoryPdf(); emit('assessment-change', { available: false, open: false }) })
 </script>
 
 <template>
   <section class="student-training">
     <v-alert v-if="error" type="error" variant="tonal" closable @click:close="error = ''">{{ error }}</v-alert>
     <v-progress-linear v-if="busy" indeterminate color="primary" />
-    <template v-if="!session">
+    <v-dialog :model-value="Boolean(historyResetTarget)" max-width="420" @update:model-value="!$event && (historyResetTarget = null)">
+      <v-card><v-card-title>¿Borrar la puntuación?</v-card-title><v-card-text>Se borrarán todas las puntuaciones de este ejercicio y volverá a estar disponible como si no lo hubieras hecho.</v-card-text><v-card-actions><v-spacer /><v-btn variant="text" @click="historyResetTarget = null">Cancelar</v-btn><v-btn color="error" variant="tonal" @click="historyAction(historyResetTarget, 'reset'); historyResetTarget = null">Borrar</v-btn></v-card-actions></v-card>
+    </v-dialog>
+    <template v-if="showHistory">
+      <div class="history-list" :class="{ 'history-list--expanded': expandedHistoryId }">
+        <p v-if="!history.length && !busy">Todavía no has completado ejercicios.</p>
+        <article v-for="item in visibleHistory" :key="item.id" class="history-card" :class="{ 'history-card--expanded': expandedHistoryId === item.id }" @click="!expandedHistoryId && openHistoryPdf(item)">
+          <button type="button" class="history-header" :aria-expanded="expandedHistoryId === item.id" :aria-label="expandedHistoryId === item.id ? 'Cerrar enunciado' : 'Abrir enunciado'" @click.stop="openHistoryPdf(item)">
+            <small>{{ item.completedAt ? new Date(item.completedAt).toLocaleString('es-ES', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '' }}</small>
+            <strong>{{ scoreFormatter.format(item.obtained) }} / {{ scoreFormatter.format(item.maximum) }}</strong>
+          </button>
+          <div v-if="expandedHistoryId === item.id" class="history-preview">
+            <v-progress-linear v-if="historyPdfLoading" indeterminate color="primary" />
+            <p v-else-if="historyPdfError" class="history-preview-error">{{ historyPdfError }}</p>
+            <DocumentPdfPreview v-else-if="historyPdfUrl" :key="historyPdfUrl" :src="historyPdfUrl" :interactive-zoom="true" class="history-pdf" />
+          </div>
+          <div class="history-actions" @click.stop>
+            <v-btn icon="mdi-delete-outline" size="small" variant="text" :disabled="busy" aria-label="Borrar puntuación" title="Borrar puntuación" @click="historyResetTarget = item" />
+            <v-btn icon="mdi-pencil-outline" size="small" variant="text" :disabled="busy" aria-label="Reevaluar" title="Reevaluar" @click="historyAction(item, 'reevaluate')" />
+            <v-btn icon="mdi-replay" size="small" variant="text" :disabled="busy" aria-label="Volver a hacer" title="Volver a hacer" @click="historyAction(item, 'redo')" />
+          </div>
+        </article>
+      </div>
+    </template>
+    <template v-else-if="!session">
       <p>Elige los contenidos que quieras practicar.</p>
       <MathConceptMap v-if="nodes.length" class="training-map" :nodes="nodes" :active-subject-id="group.subjectId" :subject-node-ids="nodes.map(node => node.id)" selection-mode :selected-node-ids="displayedSelection" :concept-progress="progress" :show-curriculum="false" :show-hint="false" @select-concept="toggleConcept" />
       <p v-else-if="!busy">Esta asignatura todavía no tiene contenidos disponibles.</p>
@@ -122,11 +210,11 @@ onBeforeUnmount(() => { requestNumber += 1; session.value = null; clearPdf(); em
     </template>
     <template v-else>
       <div v-if="session.status === 'active'" class="training-toolbar"><StudentTrainingTimer :model-value="session.timer" :duration-minutes="session.durationMinutes" :disabled="busy" @action="action" /><v-spacer /><v-btn color="primary" variant="tonal" size="small" :disabled="busy" @click="action('reveal')">Mostrar solución</v-btn><v-btn icon="mdi-close" variant="text" size="small" :disabled="busy" aria-label="Abandonar ejercicio" title="Abandonar ejercicio" @click="action('abandon')" /></div>
-      <DocumentPdfPreview v-if="pdfUrl" :key="pdfUrl" :src="pdfUrl" class="training-pdf" />
+      <DocumentPdfPreview v-if="pdfUrl" :key="pdfUrl" :src="pdfUrl" :report-error="session.status !== 'active'" class="training-pdf" @render-error="skipBrokenPdf" />
       <v-btn v-else-if="!busy" variant="tonal" @click="retryPdf">Reintentar PDF</v-btn>
-      <v-navigation-drawer v-if="active && session.status === 'review'" v-model="assessmentOpen" location="right" temporary :scrim="false" :width="assessmentWidth" disable-resize-watcher class="training-assessment" aria-label="Matriz de autoevaluación">
+      <v-navigation-drawer v-if="active === 'training' && session.status === 'review'" v-model="assessmentOpen" location="right" temporary :scrim="false" :width="assessmentWidth" disable-resize-watcher class="training-assessment" aria-label="Matriz de autoevaluación">
         <div class="assessment-content">
-        <header class="assessment-heading"><div><h2>Autoevaluación</h2><p>Marca los logros que has conseguido.</p><p class="assessment-total" aria-live="polite">Puntuación: <strong>{{ scoreFormatter.format(assessmentScore.obtained) }} / {{ scoreFormatter.format(assessmentScore.maximum) }}</strong></p></div><v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar autoevaluación" @click="assessmentOpen = false" /></header>
+        <header class="assessment-heading"><div><h2>Autoevaluación</h2><p>Marca los logros que has conseguido.</p><p v-if="session.legacyAssessment">Este intento antiguo no conserva los logros marcados. Vuelve a seleccionarlos para actualizar la nota.</p><p class="assessment-total" aria-live="polite">Puntuación: <strong>{{ scoreFormatter.format(assessmentScore.obtained) }} / {{ scoreFormatter.format(assessmentScore.maximum) }}</strong></p></div><v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar autoevaluación" @click="assessmentOpen = false" /></header>
         <div class="assessment-scroll"><article v-for="(segment, index) in session.segments" :key="segment.id" class="assessment-segment"><h3>{{ session.segments.length === 1 && segment.id === 'exercise' ? 'Ejercicio' : `Apartado ${String.fromCharCode(97 + index)}` }}</h3><div class="assessment-criteria"><button v-for="criterion in segment.criteria" :key="criterion.id" type="button" :class="{ selected: selectedCriteria.includes(`${segment.id}:${criterion.id}`) }" :aria-pressed="selectedCriteria.includes(`${segment.id}:${criterion.id}`)" @click="toggleCriterion(`${segment.id}:${criterion.id}`)"><MathText :text="criterion.description" /><b>{{ criterion.points }} pt</b></button></div></article></div>
         <footer class="assessment-footer"><v-btn variant="text" @click="assessmentOpen = false">Ver solución completa</v-btn><v-btn color="primary" :disabled="busy" @click="action('complete')">Guardar autoevaluación</v-btn></footer>
         </div>
@@ -136,6 +224,7 @@ onBeforeUnmount(() => { requestNumber += 1; session.value = null; clearPdf(); em
 </template>
 
 <style scoped>
+.history-list { overflow-y: auto; display: grid; align-content: start; gap: 10px; min-height: 0; padding: 3px; }.history-list--expanded { flex: 1 1 0; display: flex; overflow: hidden; }.history-card { display: flex; flex-direction: column; background: white; border-radius: 5px; box-shadow: 0 2px 8px #1d375419; color: #315f94; cursor: pointer; }.history-card--expanded { flex: 1; min-height: 0; cursor: default; }.history-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 9px 12px; text-align: left; }.history-header small { color: #71839a; font-size: .8rem; }.history-header strong { font-size: 1.08rem; }.history-actions { display: flex; justify-content: flex-end; gap: 2px; padding: 1px 6px; border-top: 1px solid #e1e8f0; }.history-preview { display: flex; flex: 1 1 0; min-height: 0; background: #edf2f7; }.history-pdf { flex: 1 1 auto; min-height: 0; }.history-preview-error { padding: 12px; color: #a52535; }
 .assessment-heading .assessment-total { margin-top: 4px; color: #315f96; font-size: .9rem; }
 .assessment-total strong { font-weight: 700; }
 .student-training { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }.student-training .training-map { height: 0; flex: 1 1 0; min-height: 220px; }.training-buttons,.training-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.student-training .training-pdf { height: 0; flex: 1 1 0; min-height: 220px; }.student-training p { margin: 0; }

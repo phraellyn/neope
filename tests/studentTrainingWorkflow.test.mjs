@@ -24,9 +24,9 @@ const calls = []
 const segments = [{ id: 'p1', criteria: [{ id: 'c1', description: 'Resultado', points: 1 }] }]
 globalThis.__trainingCall = async (name, data) => {
   calls.push({ name, data })
-  if (name === 'loadStudentTraining') return { nodes: [{ id: 'a' }, { id: 'a1', parentId: 'a' }, { id: 'b' }], progress: {}, session: null }
+  if (name === 'loadStudentTraining') return { nodes: [{ id: 'a' }, { id: 'a1', parentId: 'a' }, { id: 'b' }], progress: {}, session: null, history: [{ id: 'old', obtained: 1, maximum: 2 }] }
   if (name === 'startStudentTraining') { phase = 'active'; return { id: 's', status: phase, timer: {}, selectedConceptIds: data.selectedConceptIds } }
-  if (name === 'getStudentTrainingPdf') { assert.equal(data.kind, phase === 'review' ? 'solved' : 'statement'); return { data: btoa('%PDF-test') } }
+  if (name === 'getStudentTrainingPdf') { assert.equal(data.kind, data.attemptId ? 'statement' : phase === 'review' ? 'solved' : 'statement'); return { data: btoa('%PDF-test') } }
   if (name === 'updateStudentTraining') {
     if (data.action === 'reveal') { phase = 'review'; return { session: { id: 's', status: phase, segments } } }
     if (data.action === 'complete') { assert.deepEqual(data.criteriaIds, ['p1:c1']); phase = 'complete'; return { session: null } }
@@ -37,6 +37,14 @@ try {
   const { default: component } = await import(pathToFileURL(runtime))
   const state = component.setup({ group: { id: 'group', subjectId: 'subject' } }, { expose() {}, emit() {} })
   await new Promise((done) => setTimeout(done, 0))
+  assert.equal(calls.filter((call) => call.name === 'getStudentTrainingPdf').length, 0, 'History does not load PDFs until opened')
+  await state.openHistoryPdf({ id: 'old' })
+  assert.equal(state.expandedHistoryId.value, 'old')
+  assert.ok(state.historyPdfUrl.value)
+  assert.equal(calls.at(-1).data.attemptId, 'old')
+  await state.openHistoryPdf({ id: 'old' })
+  assert.equal(state.expandedHistoryId.value, '')
+  assert.equal(state.historyPdfUrl.value, '')
   state.toggleConcept('a1')
   assert.deepEqual(state.selected.value, ['a1'])
   assert.ok(state.displayedSelection.value.includes('a'), 'Ancestors are visible but are not explicitly selected')

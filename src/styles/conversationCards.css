@@ -1,0 +1,50 @@
+.student-messages .conversation-list,
+.teacher-chat-dialog .conversation-list {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.student-messages .conversation,
+.teacher-chat-dialog .conversation {
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.student-messages .conversation-main,
+.teacher-chat-dialog .conversation-main {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.student-messages .conversation-meta,
+.teacher-chat-dialog .conversation-meta {
+  flex: 0 0 auto;
+  max-width: 48%;
+  min-width: 0;
+}
+
+.student-messages .conversation-meta small,
+.teacher-chat-dialog .conversation-meta small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.student-messages .conversation-status,
+.teacher-chat-dialog .conversation-status {
+  justify-self: start;
+  max-width: 100%;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #e8f0fb;
+  color: #315f94;
+  font-size: .75rem;
+}
+
+.student-messages .status-waiting,
+.teacher-chat-dialog .status-waiting { background: #fff2d4; color: #805b13; }
+.student-messages .status-resolved,
+.teacher-chat-dialog .status-resolved { background: #e1f2e6; color: #286f3c; }
+.student-messages .status-dismissed,
+.teacher-chat-dialog .status-dismissed { background: #f4e5e7; color: #8e3945; }

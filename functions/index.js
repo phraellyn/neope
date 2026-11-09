@@ -74,7 +74,7 @@ const studentTrainingBucket = {
   get name() { return adminStorage.bucket().name },
   file(path) { return adminStorage.bucket().file(path) },
 }
-const studentTraining = studentTrainingHandlers({ db: adminDb, bucket: studentTrainingBucket })
+const studentTraining = studentTrainingHandlers({ db: adminDb, bucket: studentTrainingBucket, auth: getAuth() })
 const studentTrainingOptions = { region: 'europe-west1', enforceAppCheck: true, memory: '512MiB', timeoutSeconds: 120 }
 export const loadStudentTraining = onCall(studentTrainingOptions, (request) => studentTraining.load(request))
 export const startStudentTraining = onCall(studentTrainingOptions, (request) => studentTraining.start(request))

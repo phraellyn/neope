@@ -8,7 +8,9 @@ const props = defineProps({
   src: { type: String, default: '' },
   title: { type: String, default: 'Vista previa del documento' },
   interactiveZoom: { type: Boolean, default: false },
+  reportError: { type: Boolean, default: true },
 })
+const emit = defineEmits(['render-error'])
 
 const userAgent = navigator.userAgent || ''
 const isAppleTouchDevice = /iPad|iPhone|iPod/.test(userAgent)
@@ -187,7 +189,8 @@ async function renderDocument(version) {
     if (version !== renderVersion || error?.name === 'RenderingCancelledException') return
     console.error('No se ha podido renderizar el documento:', error)
     errorMessage.value = 'No se ha podido mostrar el PDF.'
-    showAppErrorToast(`${errorMessage.value}\n${error?.message || ''}`.trim())
+    if (props.reportError) showAppErrorToast(`${errorMessage.value}\n${error?.message || ''}`.trim())
+    emit('render-error', error)
     isLoading.value = false
   }
 }

@@ -54,7 +54,7 @@ export function trainingSegments(version = {}) {
   const single = makeSegment({
     ...structure, ...version,
     id: 'exercise',
-    contentIds: unique([...(version.generalContentIds || []), ...(version.contenidosGenerales || []), ...(version.contenidos || []), ...(structure.contenidos || []), ...(version.curriculum?.conceptIds || [])]),
+    contentIds: unique([...[version.generalContentIds, version.contenidosGenerales, version.contenidos, structure.contenidos, version.curriculum?.conceptIds].flatMap((items) => Array.isArray(items) ? items : [])]),
     gradingCriteria: version.gradingCriteria || structure.gradingCriteria,
     workedSolution: version.workedSolution || (structure.solucion ? { latex: structure.solucion, pdf: structure.pdfsolucioncompleto || structure.pdfsolucion } : null),
   }, 0)
@@ -70,7 +70,8 @@ export function selectTrainingCandidate(exercises, selected, nodes, completed = 
     const versions = [exercise, ...(Array.isArray(exercise.variaciones) ? exercise.variaciones : [])]
     versions.forEach((version, index) => {
       if (index && !version.id) return // Legacy variants without stable IDs cannot be tracked safely.
-      const segments = trainingSegments(version)
+      let segments
+      try { segments = trainingSegments(version) } catch { return }
       const pdf = version.pdf?.statement || version.pdf?.enunciado
       const solved = version.pdf?.solved || version.pdf?.resuelto
       if (!segments.length || !pdf || !solved || !exerciseMatchesSelection(segments.map((segment) => segment.conceptIds), selected, nodes)) return
@@ -84,6 +85,7 @@ export function selectTrainingCandidate(exercises, selected, nodes, completed = 
 
 export function conceptProgress(attempts, nodes) {
   const evidence = new Map()
+  const parentIds = new Set(nodes.map((node) => node.parentId).filter(Boolean))
   for (const attempt of attempts) {
     if (attempt.status !== 'completed') continue
     const totals = new Map()
@@ -107,6 +109,9 @@ export function conceptProgress(attempts, nodes) {
     const latest = entries.sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id))).slice(0, 5)
     const obtained = latest.reduce((sum, item) => sum + item.obtained, 0)
     const maximum = latest.reduce((sum, item) => sum + item.maximum, 0)
-    return [id, { obtained, maximum, count: latest.length, provisional: latest.length < 5, percentage: maximum ? obtained / maximum * 100 : null }]
+    const percentage = parentIds.has(id)
+      ? (maximum ? obtained / maximum * 100 : null)
+      : latest.reduce((sum, item) => sum + item.obtained / item.maximum, 0) / 5 * 100
+    return [id, { obtained, maximum, count: latest.length, provisional: latest.length < 5, percentage }]
   }))
 }

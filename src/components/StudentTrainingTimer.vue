@@ -16,7 +16,7 @@ const display = computed(() => {
 })
 let interval
 function beep() {
-  if (!muted.value) playTrainingAlert()
+  if (!muted.value) void playTrainingAlert(() => !muted.value)
 }
 function toggle() {
   unlockTrainingAudio()
@@ -32,8 +32,20 @@ watch(now, (value) => {
   }
 })
 watch(() => props.modelValue.alerted, (value, previous) => { if (!value && previous) alertedLocally = false })
-onMounted(() => { interval = window.setInterval(() => { now.value = Date.now() }, 250) })
-onBeforeUnmount(() => { window.clearInterval(interval) })
+function unlockOnInteraction() { if (!muted.value) unlockTrainingAudio() }
+onMounted(() => {
+  unlockTrainingAudio()
+  window.addEventListener('pointerdown', unlockOnInteraction, { passive: true })
+  window.addEventListener('touchstart', unlockOnInteraction, { passive: true })
+  window.addEventListener('keydown', unlockOnInteraction)
+  interval = window.setInterval(() => { now.value = Date.now() }, 250)
+})
+onBeforeUnmount(() => {
+  window.clearInterval(interval)
+  window.removeEventListener('pointerdown', unlockOnInteraction)
+  window.removeEventListener('touchstart', unlockOnInteraction)
+  window.removeEventListener('keydown', unlockOnInteraction)
+})
 </script>
 
 <template>

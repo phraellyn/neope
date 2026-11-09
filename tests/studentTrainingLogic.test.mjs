@@ -8,11 +8,20 @@ assert.equal(exerciseMatchesSelection([['a1']], ['a'], nodes), true)
 assert.equal(exerciseMatchesSelection([['a1'], ['b']], ['a'], nodes), false)
 assert.equal(exerciseMatchesSelection([['a2']], ['a1'], nodes), false)
 const result = calculateConceptProgress(nodes, conceptProgress([{ id: '1', status: 'completed', segments: [{ conceptIds: ['a1', 'a2'], maximum: 2, obtained: 1 }] }], nodes))
-assert.equal(result.a.percentage, 50)
-assert.equal(result.root.percentage, 25, 'Los hijos no trabajados cuentan como cero')
+assert.equal(result.a.percentage, 10, 'Un intento al 50 % ocupa una de las cinco posiciones')
+assert.equal(result.root.percentage, 5, 'Los hijos no trabajados cuentan como cero')
 assert.equal(result.root.workedChildCount, 1)
 assert.equal(result.a.provisional, true)
 assert.equal(result.b.worked, false)
+const unequalAttempts = conceptProgress([
+  { id: 'one', status: 'completed', segments: [{ conceptIds: ['a1'], maximum: 2, obtained: 2 }] },
+  { id: 'two', status: 'completed', segments: [{ conceptIds: ['a1'], maximum: 10, obtained: 5 }] },
+], nodes)
+assert.equal(unequalAttempts.a1.percentage, 30, 'Cada intento aporta su porcentaje y los tres restantes cuentan como cero')
+const perfectAttempts = Array.from({ length: 5 }, (_, index) => ({ id: `perfect-${index}`, status: 'completed', completedAt: `2026-01-0${index + 1}`, segments: [{ conceptIds: ['a1'], maximum: 3, obtained: 3 }] }))
+for (let count = 1; count <= 5; count++) assert.equal(conceptProgress(perfectAttempts.slice(0, count), nodes).a1.percentage, count * 20)
+const rolling = [...perfectAttempts, { id: 'new', status: 'completed', completedAt: '2026-01-06', segments: [{ conceptIds: ['a1'], maximum: 3, obtained: 0 }] }]
+assert.equal(conceptProgress(rolling, nodes).a1.percentage, 80, 'El sexto intento sustituye al más antiguo')
 const history = Array.from({ length: 6 }, (_, index) => ({
   id: String(index), status: 'completed', completedAt: `2026-01-0${index + 1}`,
   segments: [{ conceptIds: ['a1'], maximum: 1, obtained: index === 0 ? 0 : 1 }],
