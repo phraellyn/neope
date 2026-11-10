@@ -72,6 +72,7 @@ import { archivedImage, exerciseImageAssets, graphicReferences, imageAssetsSigna
 import { validateExerciseSolutionSource } from '../functions/exerciseSolutionSource.js'
 import { trainingReadiness } from '../functions/studentTrainingLogic.js'
 import { matchesExerciseStatusFilters, nextExerciseFilterState } from './utils/exerciseSearchFilters'
+import { mergeExercisePage, putExerciseFirst } from './utils/exerciseListUpdates'
 import { showAppErrorToast } from './composables/useAppErrorToast'
 import {
   currentAcademicYear,
@@ -178,6 +179,9 @@ const selectedExerciseId = ref(null)
 const exerciseEditor = ref(emptyExercise())
 const exerciseEditorBaseline = ref('')
 const exerciseView = ref('search')
+const newExerciseDraft = ref(false)
+let exerciseListWriteGeneration = 0
+const exerciseListSavedAt = new Map()
 const exerciseSearchQuery = ref('')
 const exerciseSearchCurriculum = ref(emptyCurriculum())
 const exerciseSearchCompleteness = ref('all')
@@ -2028,6 +2032,7 @@ async function loadExercises({ reset = false } = {}) {
   // acceso. No consultamos Firestore hasta disponer de una sesión docente;
   // las reglas rechazan correctamente cualquier lectura anónima.
   const sessionUid = currentTeacherId.value
+  const readGeneration = exerciseListWriteGeneration
   if (!sessionUid) return
   if (reset && isLoadingExercises.value) return
   if (!reset && (isLoadingMoreExercises.value || !hasMoreExercises.value)) return
@@ -2049,16 +2054,8 @@ async function loadExercises({ reset = false } = {}) {
     )
     if (!isActiveTeacherSession(sessionUid)) return
     const loadedExercises = snapshot.docs.map((exercise) => normalizeExercise({ id: exercise.id, ...exercise.data() }))
-    if (reset) {
-      exercises.value = loadedExercises
-    } else {
-      const byId = new Map(exercises.value.map((exercise) => [exercise.id, exercise]))
-      loadedExercises.forEach((exercise) => byId.set(exercise.id, exercise))
-      // La consulta ya llega ordenada por documentId y cada página comienza
-      // después de la anterior. Conservar el orden de inserción permite añadir
-      // la tanda al final sin recolocar las tarjetas que ya estaban visibles.
-      exercises.value = [...byId.values()]
-    }
+    const protectedIds = new Set([...exerciseListSavedAt].filter(([, generation]) => generation > readGeneration).map(([id]) => id))
+    exercises.value = mergeExercisePage(exercises.value, loadedExercises, { reset, protectedIds })
     lastExerciseDocument = snapshot.docs.at(-1) || lastExerciseDocument
     hasMoreExercises.value = snapshot.size === exerciseBatchSize
     loaded = true
@@ -2733,6 +2730,7 @@ function openNewExercise() {
   stopWatchingExerciseCompilation()
   selectedExerciseId.value = null
   exerciseEditor.value = emptyExercise()
+  newExerciseDraft.value = true
   exerciseEditorTab.value = 'code'
   exerciseContentTarget.value = null
   exerciseGradingTarget.value = null
@@ -2749,6 +2747,7 @@ function openNewExercise() {
 
 function editExercise(exercise = selectedExercise.value) {
   if (!exercise) return
+  newExerciseDraft.value = false
   selectedExerciseId.value = exercise.id
   exerciseEditor.value = normalizeExercise(exercise)
   exerciseEditorTab.value = 'code'
@@ -2776,6 +2775,7 @@ async function cancelExerciseEdit({ force = false } = {}) {
   await cleanupSessionExerciseFiles()
   pendingDeletedAttachments.splice(0)
   exerciseView.value = 'search'
+  newExerciseDraft.value = false
   exerciseEditor.value = emptyExercise()
   exerciseContentTarget.value = null
   exerciseGradingTarget.value = null
@@ -3903,6 +3903,7 @@ async function saveExercise(options = {}) {
     batch.set(reference, data)
     await syncExerciseConceptIndex(reference.id, previousCurriculum.conceptIds, data.curriculum.conceptIds, batch)
     await batch.commit()
+    exerciseListSavedAt.set(reference.id, ++exerciseListWriteGeneration)
     const filesToDelete = pendingDeletedAttachments.splice(0)
     const preservedImages = exerciseStoredImagePaths(data)
     await Promise.all(filesToDelete.filter((file) => !preservedImages.has(file.path)).map(async (file) => {
@@ -3913,7 +3914,7 @@ async function saveExercise(options = {}) {
     const index = exercises.value.findIndex((exercise) => exercise.id === reference.id)
     if (index === -1) exercises.value.push(savedExercise)
     else exercises.value[index] = savedExercise
-    exercises.value.sort((a, b) => a.id.localeCompare(b.id))
+    if (closeAfterSave && newExerciseDraft.value) exercises.value = putExerciseFirst(exercises.value, savedExercise)
     selectedExerciseId.value = reference.id
     exerciseEditorBaseline.value = exerciseDraftFingerprint(savedExercise)
     if (closeAfterSave) {
@@ -3936,6 +3937,12 @@ async function saveExercise(options = {}) {
       selectedExerciseVersion.value = 0
       exerciseGradingTarget.value = null
       exerciseView.value = 'search'
+      if (newExerciseDraft.value) {
+        await nextTick()
+        if (filteredExercises.value.some((exercise) => exercise.id === reference.id)) window.scrollTo({ top: 0, behavior: 'smooth' })
+        else showAppErrorToast('El ejercicio se ha guardado, pero no coincide con los filtros actuales del buscador.', { color: 'info', copy: false })
+      }
+      newExerciseDraft.value = false
       exerciseEditorBaseline.value = ''
     } else {
       const activeVersionIndex = selectedExerciseVersion.value
@@ -5011,6 +5018,8 @@ async function handleAuthenticatedUser(user) {
     teacherGroups.value = []
     scheduleBlocks.value = []
     exercises.value = []
+    exerciseListSavedAt.clear()
+    exerciseListWriteGeneration = 0
     templates.value = []
     mathConceptsError.value = ''
     exercisesError.value = ''

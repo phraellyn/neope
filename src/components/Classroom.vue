@@ -46,11 +46,33 @@ const students = computed(() => Array.isArray(localGroup.value.alumnos) ? localG
 const layout = computed(() => ({ rows: 4, cols: 5, aisles: [], ...(localGroup.value.disposicion || {}) }))
 const seatCount = computed(() => Number(layout.value.rows) * Number(layout.value.cols))
 const seats = computed(() => Array.from({ length: seatCount.value }, (_, index) => layout.value.asientos?.[index] || null))
+const displayedSeats = computed(() => {
+  const cols = Math.max(1, Number(layout.value.cols) || 1)
+  const rows = Math.max(1, Number(layout.value.rows) || 1)
+  const occupied = seats.value.flatMap((studentId, index) => studentId ? [{ row: Math.floor(index / cols), col: index % cols }] : [])
+  const bounds = props.configurationMode || !occupied.length
+    ? { firstRow: 0, lastRow: rows - 1, firstCol: 0, lastCol: cols - 1 }
+    : {
+        firstRow: Math.min(...occupied.map((seat) => seat.row)),
+        lastRow: Math.max(...occupied.map((seat) => seat.row)),
+        firstCol: Math.min(...occupied.map((seat) => seat.col)),
+        lastCol: Math.max(...occupied.map((seat) => seat.col)),
+      }
+  const items = []
+  for (let row = bounds.firstRow; row <= bounds.lastRow; row += 1) {
+    for (let col = bounds.firstCol; col <= bounds.lastCol; col += 1) {
+      const index = row * cols + col
+      items.push({ index, studentId: seats.value[index] })
+    }
+  }
+  return { ...bounds, rows: bounds.lastRow - bounds.firstRow + 1, cols: bounds.lastCol - bounds.firstCol + 1, items }
+})
 const assigned = computed(() => new Set(seats.value.filter(Boolean)))
 const wellStudents = computed(() => students.value.filter((student) => !assigned.value.has(student.id)))
 const aisleWidth = 48
-const gridColumnsStyle = computed(() => Array.from({ length: Math.max(1, Number(layout.value.cols) || 1) }, (_, col) => {
-  const extra = layout.value.aisles.includes(col) ? aisleWidth : 0
+const gridColumnsStyle = computed(() => Array.from({ length: displayedSeats.value.cols }, (_, offset) => {
+  const col = displayedSeats.value.firstCol + offset
+  const extra = layout.value.aisles.includes(col) && (props.configurationMode || offset < displayedSeats.value.cols - 1) ? aisleWidth : 0
   return `${seatSize.value + extra}px`
 }).join(' '))
 const selectedAssessment = computed(() => todayAssessments.value.find((item) => item.id === selectedAssessmentId.value)
@@ -453,9 +475,9 @@ defineExpose({ getGroup, getRevision, markSaved, openLayoutDialog, fitRoom })
     </div>
     <div class="classroom-workspace">
       <section ref="roomRef" class="classroom-room" aria-label="Disposición del aula">
-        <div class="classroom-grid" :style="{ '--classroom-cols': layout.cols, '--classroom-rows': layout.rows, '--classroom-seat-size': `${seatSize}px`, gridTemplateColumns: gridColumnsStyle }">
+        <div class="classroom-grid" :style="{ '--classroom-cols': displayedSeats.cols, '--classroom-rows': displayedSeats.rows, '--classroom-seat-size': `${seatSize}px`, gridTemplateColumns: gridColumnsStyle }">
           <div
-            v-for="(studentId, index) in seats"
+            v-for="{ studentId, index } in displayedSeats.items"
             :key="`seat-${index}`"
             class="classroom-seat"
             :class="{ 'classroom-seat-aisle': layout.aisles.includes(index % layout.cols), 'classroom-seat-empty-slot': !studentId }"

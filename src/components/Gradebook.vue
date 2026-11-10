@@ -149,7 +149,10 @@ function pendingStudentMessages(studentId) {
 function studentTrainingCountLabel(studentId) {
   const count = studentTrainingCounts.value[studentId]
   const access = studentTrainingAccess.value[studentId]
-  return `${count} ejercicios autoevaluados${access === false ? ' · Cuenta sin activar o sin acceso' : access === true ? '' : ' · Estado de acceso no disponible'}`
+  const countLabel = count === undefined ? 'Número de ejercicios no disponible' : `${count} ejercicios autoevaluados`
+  const conversations = pendingStudentMessages(studentId)
+  const unread = unreadStudentMessages(studentId)
+  return `${countLabel}${access === false ? ' · Cuenta sin activar o sin acceso' : access === true ? '' : ' · Estado de acceso no disponible'}${conversations ? ` · ${conversations} conversaciones${unread ? `, ${unread} sin leer` : ''} · Abrir conversaciones` : ''}`
 }
 function unreadStudentMessages(studentId) {
   return studentMessages.value.filter((message) => message.studentCode === studentId && (message.studentLastAt || message.createdAt || '') > (message.teacherSeenAt || message.replyAt || (message.status !== 'pending' ? message.updatedAt : '') || '')).length
@@ -1408,11 +1411,13 @@ defineExpose({
               data-gradebook-root-target
               :class="{ 'gradebook-drop-target': dropTargetId === '__gradebook-root__' }"
             >
-              <div class="gradebook-student-heading-course">
-                <strong>{{ localGroup.nombre || 'Grupo' }}</strong>
-                <span v-if="localGroup.asignatura">{{ localGroup.asignatura }}</span>
+              <div class="gradebook-student-heading-content">
+                <div class="gradebook-student-heading-course">
+                  <strong>{{ localGroup.nombre || 'Grupo' }}</strong>
+                  <span v-if="localGroup.asignatura">{{ localGroup.asignatura }}</span>
+                </div>
+                <div class="gradebook-student-heading-count">Alumnos <small>{{ students.length }}</small></div>
               </div>
-              <div class="gradebook-student-heading-count">Alumnos <small>{{ students.length }}</small></div>
             </th>
             <th v-if="rowIndex === 0" :rowspan="headerLayout.depth" class="gradebook-training-heading" title="Ejercicios autoevaluados" aria-label="Ejercicios autoevaluados"></th>
             <template v-if="visibleStructure.length">
@@ -1498,7 +1503,6 @@ defineExpose({
                   {{ student.nombre || student.id }}
                 </button>
                 <div class="gradebook-student-actions">
-                  <v-badge v-if="pendingStudentMessages(student.id)" :model-value="Boolean(unreadStudentMessages(student.id))" dot color="error"><v-btn icon="mdi-message-text-outline" size="x-small" variant="text" color="primary" :aria-label="`${pendingStudentMessages(student.id)} conversaciones de ${student.nombre || student.id}`" @click.stop="openStudentMessages(student)" /></v-badge>
                   <button
                     v-if="studentSourceGroups.length > 1"
                     type="button"
@@ -1517,7 +1521,10 @@ defineExpose({
               </div>
             </th>
             <td class="gradebook-training-cell">
-              <span v-if="Object.hasOwn(studentTrainingCounts, student.id)" class="gradebook-training-count" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)">{{ studentTrainingCounts[student.id] }}</span>
+              <button v-if="pendingStudentMessages(student.id)" type="button" class="gradebook-training-count gradebook-training-count-button" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)" @click.stop="openStudentMessages(student)">
+                {{ studentTrainingCounts[student.id] ?? '–' }}<span class="gradebook-message-light" :class="{ 'gradebook-message-light-unread': unreadStudentMessages(student.id) }" aria-hidden="true"></span>
+              </button>
+              <span v-else-if="Object.hasOwn(studentTrainingCounts, student.id)" class="gradebook-training-count" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)">{{ studentTrainingCounts[student.id] }}</span>
             </td>
             <td v-for="column in resultColumns" :key="column.key" :class="{ 'gradebook-mean-cell': column.kind === 'mean', 'gradebook-rubric-cell': column.kind === 'item' && (column.node.rubric || column.node.merits), 'gradebook-document-cell': column.kind === 'item' && column.node.documentAssessment }">
               <button

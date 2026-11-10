@@ -102,10 +102,11 @@ body { margin: 0; background: #f8f9fe; }
 .gradebook-level-3 th { position: sticky; z-index: 3; top: var(--gradebook-header-top); width: 72px; min-width: 72px; height: 42px; padding: 0 8px; background: #638cba; }
 .gradebook-configuration .gradebook-level-3 th.gradebook-header-item { width: 96px; min-width: 96px; }.gradebook-configuration .gradebook-header-item .gradebook-header-label-configurable { padding-right: 5px; white-space: normal; overflow-wrap: anywhere; line-height: 1.05; }.gradebook-configuration .gradebook-header-item:hover .gradebook-header-label-configurable { padding-right: 64px; }
 .gradebook-student-heading { position: sticky; z-index: 6; top: 0; left: 0; width: 310px; min-width: 310px; padding: 0 16px !important; border-right-color: #b8c7da !important; background: #244d7d; text-align: left !important; }
-.gradebook-student-heading-course { display: grid; gap: 2px; line-height: 1.08; }
+.gradebook-student-heading-content { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.gradebook-student-heading-course { display: grid; min-width: 0; gap: 2px; line-height: 1.08; }
 .gradebook-student-heading-course strong { color: #fff; font-size: .76rem; }
 .gradebook-student-heading-course span { color: #c9daec; font-size: .66rem; font-weight: 650; }
-.gradebook-student-heading-count { display: flex; align-items: baseline; gap: 5px; margin-top: 7px; color: #e3edf8; font-size: .65rem; font-weight: 650; }
+.gradebook-student-heading-count { display: flex; flex: 0 0 auto; align-items: baseline; gap: 5px; color: #e3edf8; font-size: .65rem; font-weight: 650; }
 .gradebook-student-heading-count small { color: #fff; font-size: .72rem; font-weight: 800; }
 .gradebook-no-columns { min-width: 520px; padding: 0 24px !important; background: #638cba !important; color: #e8f0fa !important; font-weight: 600 !important; }
 .gradebook-filler-heading { background: #638cba !important; }
@@ -136,6 +137,10 @@ body { margin: 0; background: #f8f9fe; }
 .gradebook-table tbody td.gradebook-training-cell { width: 38px; min-width: 38px; text-align: center; }
 .gradebook-training-count { display: inline-grid; min-width: 26px; height: 26px; padding: 0 5px; place-items: center; box-sizing: border-box; border-radius: 999px; color: #fff; background: #4776aa; font-size: .7rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .gradebook-training-count-inactive { color: #6f7780; background: #e1e4e8; }
+.gradebook-training-count-button { position: relative; border: 0; font-family: inherit; cursor: pointer; }
+.gradebook-training-count-button:focus-visible { outline: 2px solid #315f94; outline-offset: 2px; }
+.gradebook-message-light { position: absolute; top: -2px; right: -2px; width: 9px; height: 9px; border: 1.5px solid #fff; border-radius: 50%; background: #aebdcd; }
+.gradebook-message-light-unread { background: #d82d45; box-shadow: 0 0 4px #d82d4580; }
 .gradebook-student-source { display: grid; width: 24px; height: 24px; flex: 0 0 24px; justify-self: end; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--student-source-color, #b5cfe9) 72%, #315f93); border-radius: 50%; background: var(--student-source-color, #b5cfe9); color: var(--student-source-text-color, #315f93); font-size: .68rem; font-weight: 800; line-height: 1; }
 .gradebook-student-source:disabled { opacity: 1; }
 .gradebook-student-source-editable { cursor: pointer; }

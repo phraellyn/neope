@@ -23,9 +23,9 @@ const emit = defineEmits(['update:modelValue'])
       :key="version - 1"
       type="button"
       class="exercise-variant-option"
-      :class="{ 'exercise-variant-option-active': modelValue === version - 1, 'exercise-variant-option-published': showPublication && (version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)) }"
+      :class="{ 'exercise-variant-option-active': modelValue === version - 1, 'exercise-variant-option-published': showPublication && (version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)), 'exercise-variant-option-unpublished': showPublication && !(version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)), 'exercise-variant-option-publication-selected': showPublication && modelValue === version - 1 }"
       :title="showPublication ? ((version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)) ? 'Publicada para alumnos' : 'Sin publicar') : undefined"
-      :aria-label="version === 1 ? 'Ejercicio original' : `Variación ${version - 1}`"
+      :aria-label="`${version === 1 ? 'Ejercicio original' : `Variación ${version - 1}`}${showPublication ? ((version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)) ? ', publicada' : ', sin publicar') : ''}`"
       :aria-pressed="modelValue === version - 1"
       @click.stop="emit('update:modelValue', version - 1)"
     >{{ version - 1 }}</button>
@@ -88,10 +88,27 @@ const emit = defineEmits(['update:modelValue'])
 }
 
 .exercise-variant-option-published {
-  box-shadow: inset 0 -3px 0 #279860;
+  border-color: transparent;
+  background: #7296c4;
+  color: #fff;
 }
-.exercise-variant-option-active.exercise-variant-option-published {
-  box-shadow: inset 0 -3px 0 #8cddaa;
+.exercise-variant-option-unpublished {
+  border-color: transparent;
+  background: #e7ebf0;
+  color: #67798b;
+}
+.exercise-variant-option-published:hover,
+.exercise-variant-option-published:focus-visible,
+.exercise-variant-option-unpublished:hover,
+.exercise-variant-option-unpublished:focus-visible {
+  border-color: transparent;
+}
+.exercise-variant-option-publication-selected.exercise-variant-option-published {
+  background: #315f9e;
+}
+.exercise-variant-option-publication-selected.exercise-variant-option-unpublished {
+  background: #c4ceda;
+  color: #354c66;
 }
 
 .exercise-variant-bar-compact {
