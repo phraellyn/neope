@@ -137,7 +137,7 @@ watch(segments, (next) => {
     <div v-if="criteria.length" class="exercise-grading-list">
       <article v-for="(criterion, index) in criteria" :key="criterion.id" class="exercise-grading-card">
         <span class="exercise-grading-number">{{ index + 1 }}</span>
-        <v-textarea :model-value="criterion.description" label="Criterio de calificación" placeholder="Acción observable y evaluable" variant="outlined" density="compact" rows="2" auto-grow hide-details @update:model-value="updateCriterion(criterion.id, { description: $event })" />
+        <v-textarea :model-value="criterion.description" label="Criterio de calificación" placeholder="Ej.: Calcula $f'(x)$ y obtiene $x=2$" variant="outlined" density="compact" rows="2" auto-grow hide-details @update:model-value="updateCriterion(criterion.id, { description: $event })" />
         <v-text-field :model-value="criterion.points" type="number" min="0" step="0.25" label="Puntos" variant="outlined" density="compact" hide-details @update:model-value="updateCriterion(criterion.id, { points: $event })" />
         <v-btn icon="mdi-delete-outline" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar criterio" @click="removeCriterion(criterion.id)" />
       </article>

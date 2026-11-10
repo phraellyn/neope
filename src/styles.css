@@ -92,6 +92,7 @@ body { margin: 0; background: #f8f9fe; }
 .gradebook-scroller { width: 100%; height: 100%; min-height: 0; flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; }
 .gradebook-table { width: 100%; border-spacing: 0; table-layout: fixed; background: #fff; color: #29496f; font-size: .76rem; }
 .gradebook-student-column { width: 310px; }
+.gradebook-training-column { width: 38px; }
 .gradebook-result-column { width: 72px; min-width: 72px; }
 .gradebook-filler-column { width: auto; }
 .gradebook-table th, .gradebook-table td { height: 44px; padding: 0; border-right: 1px solid #dce4ef; border-bottom: 1px solid #dce4ef; }
@@ -131,7 +132,10 @@ body { margin: 0; background: #f8f9fe; }
 .gradebook-student-name { min-width: 0; padding: 4px 0; border: 0; background: transparent; color: #29496f; font: inherit; font-weight: 650; line-height: 1.15; text-align: left; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
 .gradebook-student-content { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; }
 .gradebook-student-actions { display: flex; align-items: center; justify-content: flex-end; gap: 3px; }
-.gradebook-training-count { display: inline-flex; align-items: center; gap: 2px; padding: 2px 5px; border-radius: 4px; color: #55789d; background: #edf3f9; font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gradebook-training-heading { background: #315f94; }
+.gradebook-table tbody td.gradebook-training-cell { width: 38px; min-width: 38px; text-align: center; }
+.gradebook-training-count { display: inline-grid; min-width: 26px; height: 26px; padding: 0 5px; place-items: center; box-sizing: border-box; border-radius: 999px; color: #fff; background: #4776aa; font-size: .7rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.gradebook-training-count-inactive { color: #6f7780; background: #e1e4e8; }
 .gradebook-student-source { display: grid; width: 24px; height: 24px; flex: 0 0 24px; justify-self: end; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--student-source-color, #b5cfe9) 72%, #315f93); border-radius: 50%; background: var(--student-source-color, #b5cfe9); color: var(--student-source-text-color, #315f93); font-size: .68rem; font-weight: 800; line-height: 1; }
 .gradebook-student-source:disabled { opacity: 1; }
 .gradebook-student-source-editable { cursor: pointer; }
@@ -363,6 +367,7 @@ body { margin: 0; background: #f8f9fe; }
 .exercise-result-toolbar { display: flex; min-width: 0; min-height: 29px; align-items: center; gap: 6px; padding: 5px 9px; border-bottom: 1px solid #dfe6f0; color: #536781; font-size: .62rem; font-weight: 750; line-height: 1.15; }
 .exercise-result-toolbar > span { display: inline-flex; min-width: 0; align-items: center; gap: 4px; }
 .exercise-result-subject { overflow: hidden; color: #29496f; text-overflow: ellipsis; white-space: nowrap; }
+.exercise-result-toolbar .exercise-training-publication { flex: 0 0 auto; width: 26px; height: 26px; min-width: 26px; }
 .exercise-result-toolbar-spacer { flex: 1 1 auto; }
 .exercise-result-header .exercise-variant-bar { border-top: 0; background: #edf3fa; }
 .exercise-result-pdf { position: relative; overflow: hidden; background: #eef2f8; }
@@ -490,7 +495,17 @@ body { margin: 0; background: #f8f9fe; }
 .exercise-preview-empty p { max-width: 300px; margin: 0; font-size: .86rem; }
 .exercise-filter-dialog { display: flex; height: 100%; min-height: 0; flex-direction: column; overflow: hidden; }
 .exercise-filter-dialog-title { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 10px 12px 10px 20px !important; color: #19375f; font-size: 1rem !important; font-weight: 700 !important; }
-.exercise-filter-dialog-content { flex: 1; min-height: 0; padding: 0 !important; overflow: hidden; }
+.exercise-filter-title-actions { display: flex; align-items: center; gap: 2px; }
+.exercise-filter-dialog-content { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0 !important; overflow: hidden; }
+.exercise-map-status-controls { position: absolute; z-index: 5; top: 58px; right: 16px; display: flex; flex-direction: column; gap: 6px; }
+.exercise-map-status-button.v-btn { width: 36px; min-width: 36px; height: 36px; border: 1px solid #d8e2f0; border-radius: 50%; background: rgba(240,244,250,.94); color: #6f7e92; box-shadow: 0 4px 12px rgba(25,55,95,.08); }
+.exercise-map-status-button.status-complete { border-color: #9bcdaa; background: #dff2e4; color: #286f3c; }
+.exercise-map-status-button.status-incomplete { border-color: #e7c58a; background: #fff0d6; color: #8d5e13; }
+.exercise-map-status-button.status-published { border-color: #9bbce7; background: #e2efff; color: #315f96; }
+.exercise-map-status-button.status-unpublished { border-color: #b8c8dc; background: #e8eef5; color: #4d6684; }
+.exercise-map-status-button.status-ai { border-color: #c5a9df; background: #f0e6fa; color: #704497; }
+.exercise-map-status-button.status-human { border-color: #99cec8; background: #dff3ef; color: #27796f; }
+.exercise-filter-map { flex: 1 1 0; min-height: 0; }
 .calendar-toolbar-title { min-width: 190px; max-width: 320px; overflow: hidden; color: #19375f; font-size: .86rem; font-weight: 650; text-align: center; text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
 .calendar-config-control { display: inline-flex; margin-left: 8px; }
 .calendar-toolbar-modes { display: flex; height: 34px; align-items: center; gap: 6px; padding: 3px; border: 1px solid #d2dae7; border-radius: 999px; background: #e8edf5; }

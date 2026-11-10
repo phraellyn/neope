@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { conceptProgress, exerciseMatchesSelection, selectTrainingCandidate, trainingSegments } from '../functions/studentTrainingLogic.js'
+import { conceptProgress, exerciseMatchesSelection, selectTrainingCandidate, trainingReadiness, trainingSegments } from '../functions/studentTrainingLogic.js'
 import { calculateConceptProgress } from '../src/utils/conceptProgressLabel.js'
 import { pauseTimer, resetTimer, resumeTimer, timerElapsed, timerWarning } from '../src/utils/studentTrainingTimer.js'
 
@@ -45,11 +45,40 @@ assert.deepEqual(trainingSegments({ parts: [{ ...exercise.parts[0], contentIds: 
 assert.deepEqual(trainingSegments({ parts: [{ ...exercise.parts[0], workedSolution: null }] }), [])
 assert.deepEqual(trainingSegments({ parts: [exercise.parts[0], exercise.parts[0]] }), [])
 assert.equal(trainingSegments({ contenidosGenerales: [], contenidos: ['a1'], gradingCriteria: [{ id: 'c', description: 'Paso', points: 1 }], workedSolution: { latex: 'Solución' } })[0].conceptIds[0], 'a1')
-const bank = [{ id: 'x', ...exercise, pdf: { statement: 'statement.pdf', solved: 'solved.pdf' }, variaciones: [{ ...exercise, id: 'v1', pdf: { statement: 's.pdf', solved: 'r.pdf' } }] }]
+const bank = [{ id: 'x', ...exercise, studentTrainingPublished: true, pdf: { statement: 'statement.pdf', solved: 'solved.pdf' }, variaciones: [{ ...exercise, id: 'v1', pdf: { statement: 's.pdf', solved: 'r.pdf' } }] }]
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes).key, 'x:original')
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:original']).key, 'x:v1')
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:original', 'x:v1']), null)
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:original'], { repeat: true }).key, 'x:original')
+assert.equal(selectTrainingCandidate([{ ...bank[0], studentTrainingPublished: false }], ['a'], nodes), null)
+assert.equal(selectTrainingCandidate([{ ...bank[0], studentTrainingPublished: undefined }], ['a'], nodes), null, 'Los ejercicios existentes no se publican por defecto')
+const separate = { ...bank[0], studentTrainingPublished: false, variaciones: [{ ...bank[0].variaciones[0], studentTrainingPublished: true }] }
+assert.equal(selectTrainingCandidate([separate], ['a'], nodes).key, 'x:v1', 'Una variante publicada funciona aunque el original esté oculto')
+assert.equal(selectTrainingCandidate([{ ...separate, studentTrainingPublished: true, variaciones: [{ ...separate.variaciones[0], studentTrainingPublished: false }] }], ['a'], nodes, ['x:original']), null, 'Una variante oculta no se propone aunque el original esté publicado')
+const ready = { ...exercise, parts: [{ ...exercise.parts[0], points: 2, statement: { latex: 'Calcula el apartado', pdf: { storagePath: 'ejercicios/x/part-statement.pdf' } } }], statement: { latex: 'Calcula' }, pdf: { statement: { storagePath: 'ejercicios/x/statement.pdf' }, solved: { storagePath: 'ejercicios/x/solved.pdf' } } }
+assert.equal(trainingReadiness(ready, { exerciseId: 'x', bucketName: 'bucket' }).complete, true)
+assert.equal(trainingReadiness({ ...ready, parts: [{ ...ready.parts[0], contentIds: [] }] }, { exerciseId: 'x', bucketName: 'bucket' }).complete, false)
+assert.equal(trainingReadiness({ ...ready, pdf: {} }, { exerciseId: 'x', bucketName: 'bucket' }).complete, false)
+assert.equal(trainingReadiness(ready, { exerciseId: 'x', bucketName: 'bucket', variant: true }).complete, false)
+const noPartPdf = { ...ready, parts: [{ ...ready.parts[0], statement: { latex: 'Calcula el apartado' } }] }
+assert.equal(trainingReadiness(noPartPdf, { exerciseId: 'x', bucketName: 'bucket' }).complete, false, 'Sin PDF de apartado no se marca completo')
+assert.equal(trainingReadiness(noPartPdf, { exerciseId: 'x', bucketName: 'bucket' }).usable, true, 'Los PDF completos bastan para el entrenamiento')
+assert.equal(trainingReadiness({ ...ready, parts: [{ ...ready.parts[0], workedSolution: { latex: 'Solución' } }] }, { exerciseId: 'x', bucketName: 'bucket' }).complete, false, 'Se comprueba también el PDF de solución del apartado')
+const missingStatement = trainingReadiness({ ...ready, parts: [{ ...ready.parts[0], statement: { pdf: ready.parts[0].statement.pdf } }] }, { exerciseId: 'x', bucketName: 'bucket' })
+assert.ok(missingStatement.reasons.some((reason) => reason.includes('Apartado a: falta el enunciado')))
+const missingScore = trainingReadiness({ ...ready, parts: [{ ...ready.parts[0], points: 0 }] }, { exerciseId: 'x', bucketName: 'bucket' })
+assert.equal(missingScore.complete, false)
+assert.equal(missingScore.usable, true, 'La comprobación de integridad no cambia la publicación')
+assert.ok(missingScore.reasons.some((reason) => reason.includes('Apartado a: falta la puntuación')))
+const wholeExercise = { statement: { latex: 'Calcula' }, points: 2, contenidos: ['a1'], gradingCriteria: [{ id: 'c', description: 'Resultado', points: 2 }], workedSolution: { latex: 'Dos' }, pdf: ready.pdf }
+assert.equal(trainingReadiness(wholeExercise, { exerciseId: 'x', bucketName: 'bucket' }).complete, true)
+assert.ok(trainingReadiness({ ...wholeExercise, points: 0 }, { exerciseId: 'x', bucketName: 'bucket' }).reasons.includes('Falta la puntuación del ejercicio.'))
+assert.equal(trainingReadiness({ ...wholeExercise, points: '1,25' }, { exerciseId: 'x', bucketName: 'bucket' }).complete, true)
+const secondPart = { ...ready.parts[0], id: 'p2', points: undefined, puntuacion: '1,5' }
+assert.equal(trainingReadiness({ ...ready, parts: [ready.parts[0], secondPart] }, { exerciseId: 'x', bucketName: 'bucket' }).complete, true)
+assert.ok(trainingReadiness({ ...ready, parts: [ready.parts[0], { ...secondPart, puntuacion: '' }] }, { exerciseId: 'x', bucketName: 'bucket' }).reasons.includes('Apartado b: falta la puntuación.'))
+const noStructuredParts = trainingReadiness({ ...ready, parts: [], codigo: '\\begin{apartados}\\ap Calcula\\end{apartados}' }, { exerciseId: 'x', bucketName: 'bucket' })
+assert.ok(noStructuredParts.reasons.some((reason) => reason.includes('datos estructurados de los apartados')))
 let timer = { elapsedMs: 0, runningSince: 1000, alerted: false }
 timer = pauseTimer(timer, 6000)
 assert.equal(timerElapsed(timer, 9000), 5000)

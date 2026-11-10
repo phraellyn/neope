@@ -3,7 +3,7 @@ export function normalizeCriteriaUnicode(value) {
     const normalized = radicand.replace(/²/g, '^{2}').replace(/³/g, '^{3}')
     return `\\ensuremath{\\sqrt{${normalized}}}`
   })
-  return source.replace(/[ℝℤℚℕℂ∞→←↔≤≥≠∈∉±×·−≈²³⁺⁻]/g, (character) => ({
+  return source.replace(/[ℝℤℚℕℂ∞→←↔≤≥≠∈∉∪∩±×·−≈²³⁺⁻]/g, (character) => ({
     'ℝ': '\\ensuremath{\\mathbb{R}}', 'ℤ': '\\ensuremath{\\mathbb{Z}}',
     'ℚ': '\\ensuremath{\\mathbb{Q}}', 'ℕ': '\\ensuremath{\\mathbb{N}}',
     'ℂ': '\\ensuremath{\\mathbb{C}}', '∞': '\\ensuremath{\\infty}',
@@ -11,11 +11,59 @@ export function normalizeCriteriaUnicode(value) {
     '↔': '\\ensuremath{\\leftrightarrow}', '≤': '\\ensuremath{\\leq}',
     '≥': '\\ensuremath{\\geq}', '≠': '\\ensuremath{\\ne}',
     '∈': '\\ensuremath{\\in}', '∉': '\\ensuremath{\\notin}',
+    '∪': '\\ensuremath{\\cup}', '∩': '\\ensuremath{\\cap}',
     '±': '\\ensuremath{\\pm}', '×': '\\ensuremath{\\times}',
     '·': '\\ensuremath{\\cdot}', '−': '-', '≈': '\\ensuremath{\\approx}',
     '²': '\\ensuremath{{}^{2}}', '³': '\\ensuremath{{}^{3}}',
     '⁺': '\\ensuremath{{}^{+}}', '⁻': '\\ensuremath{{}^{-}}',
   })[character] || character)
+}
+
+// Solo para descripciones nuevas de la IA: preserva el LaTeX existente y
+// convierte símbolos inequívocamente matemáticos si el modelo los devuelve
+// en Unicode. No se usa para modificar criterios guardados o escritos a mano.
+export function normalizeGeneratedCriterionMath(value) {
+  const symbols = {
+    'ℝ': '\\mathbb{R}', 'ℤ': '\\mathbb{Z}', 'ℚ': '\\mathbb{Q}', 'ℕ': '\\mathbb{N}', 'ℂ': '\\mathbb{C}',
+    '∞': '\\infty', '∪': '\\cup', '∩': '\\cap', '≤': '\\leq', '≥': '\\geq', '≠': '\\ne',
+    '∈': '\\in', '∉': '\\notin', '±': '\\pm', '×': '\\times', '≈': '\\approx',
+    '→': '\\to', '←': '\\leftarrow', '↔': '\\leftrightarrow', 'π': '\\pi', 'α': '\\alpha', 'β': '\\beta', 'θ': '\\theta',
+  }
+  const source = String(value || '')
+  let result = ''
+  let mathEnd = ''
+  for (let index = 0; index < source.length;) {
+    if (mathEnd && source.startsWith('\\text{', index) && !escaped(source, index)) {
+      const end = argumentEnd(source, index + 5)
+      if (end > index + 5) { result += source.slice(index, end); index = end; continue }
+    }
+    const pair = source.slice(index, index + 2)
+    if (source[index] === '\\' && !escaped(source, index) && ['\\(', '\\)', '\\[', '\\]'].includes(pair)) {
+      if (!mathEnd && (pair === '\\(' || pair === '\\[')) mathEnd = pair === '\\(' ? '\\)' : '\\]'
+      else if (mathEnd === pair) mathEnd = ''
+      result += pair; index += 2; continue
+    }
+    if (source[index] === '$' && !escaped(source, index)) {
+      const token = source[index + 1] === '$' ? '$$' : '$'
+      if (!mathEnd) mathEnd = token
+      else if (mathEnd === token) mathEnd = ''
+      result += token; index += token.length; continue
+    }
+    const character = source[index++]
+    const superscript = { '²': '2', '³': '3', '⁺': '+', '⁻': '-' }[character]
+    if (superscript) {
+      if (mathEnd) result += `^{${superscript}}`
+      else {
+        const base = /(?<![A-Za-z0-9])([A-Za-z]|\d+)$/.exec(result)
+        if (base) result = `${result.slice(0, base.index)}$${base[1]}^{${superscript}}$`
+        else result += character
+      }
+      continue
+    }
+    const latex = symbols[character]
+    result += latex ? (mathEnd ? `${latex}{}` : `$${latex}$`) : character
+  }
+  return result
 }
 
 function escaped(source, index) {
@@ -45,16 +93,27 @@ export function criteriaCellText(value) {
     .replace(/\b([RZQNC])\\\{([^{}]*?)(?:\\)?\}/g, (_, set, elements) => `\\ensuremath{\\mathbb{${set}}\\setminus\\{${elements}\\}}`)
     .replace(/(?<!\\)\\\{([^{}]*?)(?<!\\)\}/g, '\\{$1\\}'))
     .trim().replace(/\r?\n/g, ' ')
-  let inMath = false
+  let mathEnd = ''
   let result = ''
   for (let index = 0; index < source.length;) {
     const character = source[index]
-    if (character === '$' && !escaped(source, index)) {
-      inMath = !inMath
-      result += character
-      index += 1
+    const delimiter = source.slice(index, index + 2)
+    if (character === '\\' && !escaped(source, index) && (delimiter === '\\(' || delimiter === '\\[' || delimiter === '\\)' || delimiter === '\\]')) {
+      if (!mathEnd && (delimiter === '\\(' || delimiter === '\\[')) mathEnd = delimiter === '\\(' ? '\\)' : '\\]'
+      else if (mathEnd === delimiter) mathEnd = ''
+      result += delimiter
+      index += 2
       continue
     }
+    if (character === '$' && !escaped(source, index)) {
+      const token = source[index + 1] === '$' ? '$$' : '$'
+      if (!mathEnd) mathEnd = token
+      else if (mathEnd === token) mathEnd = ''
+      result += token
+      index += token.length
+      continue
+    }
+    const inMath = Boolean(mathEnd)
     if (character === '\\') {
       const command = /^\\([A-Za-z@]+\*?|.)/.exec(source.slice(index))
       if (command) {

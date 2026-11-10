@@ -1,6 +1,6 @@
 import { HttpsError } from 'firebase-functions/v2/https'
 import { createHash } from 'node:crypto'
-import { conceptProgress, selectTrainingCandidate, trainingSegments } from './studentTrainingLogic.js'
+import { conceptProgress, pdfStoragePath, selectTrainingCandidate, trainingReadiness, trainingSegments, trainingVersionPublished } from './studentTrainingLogic.js'
 import { examPdfCandidates, examResultItem, safeExamAssessment, safeExamExercise } from './studentExam.js'
 
 const validId = (value) => typeof value === 'string' && value.length > 0 && value.length <= 500 && value !== '.' && value !== '..' && !value.includes('/')
@@ -22,18 +22,7 @@ async function conversationEntries(db, snapshot) {
   return entries.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
 }
 
-export function pdfStoragePath(reference, exerciseId, bucketName) {
-  let path = typeof reference === 'object' && reference ? reference.storagePath || reference.path : ''
-  const url = typeof reference === 'string' ? reference : reference?.downloadUrl || reference?.url
-  if (!path && url) {
-    try {
-      const parsed = new URL(url)
-      const prefix = `/v0/b/${bucketName}/o/`
-      if (parsed.hostname === 'firebasestorage.googleapis.com' && parsed.pathname.startsWith(prefix)) path = decodeURIComponent(parsed.pathname.slice(prefix.length))
-    } catch { return '' }
-  }
-  return typeof path === 'string' && path.startsWith(`ejercicios/${exerciseId}/`) && !path.includes('..') ? path : ''
-}
+export { pdfStoragePath } from './studentTrainingLogic.js'
 
 export function studentTrainingHandlers({ db, bucket, auth }) {
   async function identity(request, groupId) {
@@ -101,12 +90,8 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     ])
     const exercises = bank.docs.map((doc) => {
       const exercise = { ...doc.data(), id: doc.id }
-      const usable = (version) => {
-        const statement = pdfStoragePath(version.pdf?.statement || version.pdf?.enunciado, doc.id, bucket.name)
-        const solution = pdfStoragePath(version.pdf?.solved || version.pdf?.resuelto, doc.id, bucket.name)
-        return Boolean(statement && solution && statement !== solution)
-      }
-      exercise.variaciones = (Array.isArray(exercise.variaciones) ? exercise.variaciones : []).filter((item) => item && usable(item))
+      const usable = (version, variant = false) => trainingReadiness(version, { exerciseId: doc.id, bucketName: bucket.name, variant }).usable
+      exercise.variaciones = (Array.isArray(exercise.variaciones) ? exercise.variaciones : []).filter((item) => item && usable(item, true))
       return usable(exercise) ? exercise : { ...exercise, pdf: null }
     })
     const completed = attempts.docs.map((doc) => doc.data()).filter((item) => item.status === 'completed').map((item) => item.key)
@@ -147,6 +132,8 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
       const current = await tx.get(context.session)
       if (['active', 'review'].includes(current.data()?.status)) throw new HttpsError('failed-precondition', 'Ya hay un ejercicio en curso.')
       const used = await tx.get(db.doc(`studentTraining/${context.code}/used/${createHash('sha256').update(`${context.group.subjectId}:${candidate.key}`).digest('hex')}`))
+      const currentExercise = await tx.get(db.doc(`ejercicios/${candidate.exerciseId}`))
+      if (!trainingVersionPublished(currentExercise.data(), candidate.variationId)) throw new HttpsError('aborted', 'Este ejercicio acaba de retirarse. Vuelve a proponer otro.')
       if (used.exists && (used.data()?.status === 'active' || data.repeat !== true)) throw new HttpsError('aborted', 'Este ejercicio ya está en uso o acaba de completarse. Vuelve a proponer otro.')
       tx.set(used.ref || db.doc(`studentTraining/${context.code}/used/${createHash('sha256').update(`${context.group.subjectId}:${candidate.key}`).digest('hex')}`), { status: 'active', sessionId: id, subjectId: context.group.subjectId, key: candidate.key })
       tx.set(context.session, session)
@@ -212,6 +199,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
       }
       if (!validId(attempt.exerciseId)) throw new HttpsError('not-found', 'Este ejercicio ya no está disponible.')
       const root = (await db.doc(`ejercicios/${attempt.exerciseId}`).get()).data()
+      if (data.action === 'history-redo' && !trainingVersionPublished(root, attempt.variationId)) throw new HttpsError('failed-precondition', 'Este ejercicio ya no está disponible para volver a hacerlo.')
       const version = attempt.variationId ? (Array.isArray(root?.variaciones) ? root.variaciones : []).find((item) => item.id === attempt.variationId) : root
       if (!version) throw new HttpsError('not-found', 'Este ejercicio ya no está disponible.')
       const segments = Array.isArray(attempt.assessmentSegments) && attempt.assessmentSegments.length ? attempt.assessmentSegments : trainingSegments(version)
@@ -230,9 +218,10 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
       try {
         await Promise.all([bucket.file(privateStatement).save(statement, { resumable: false, contentType: 'application/pdf' }), bucket.file(privateSolution).save(solution, { resumable: false, contentType: 'application/pdf' })])
         await db.runTransaction(async (tx) => {
-          const [current, stored, used] = await Promise.all([tx.get(context.session), tx.get(attemptRef), tx.get(usedRef(context, attempt.subjectId, attempt.key))])
+          const [current, stored, used, currentExercise] = await Promise.all([tx.get(context.session), tx.get(attemptRef), tx.get(usedRef(context, attempt.subjectId, attempt.key)), tx.get(db.doc(`ejercicios/${attempt.exerciseId}`))])
           if (['active', 'review'].includes(current.data()?.status)) throw new HttpsError('failed-precondition', 'Termina o abandona primero el ejercicio que tienes en curso.')
           if (!stored.exists || stored.data()?.status !== 'completed') throw new HttpsError('not-found', 'El intento ya no está disponible.')
+          if (!review && !trainingVersionPublished(currentExercise.data(), attempt.variationId)) throw new HttpsError('failed-precondition', 'Este ejercicio ya no está disponible para volver a hacerlo.')
           if (used.data()?.status === 'active') throw new HttpsError('failed-precondition', 'Este ejercicio está en curso en otra asignatura.')
           tx.set(usedRef(context, attempt.subjectId, attempt.key), { key: attempt.key, subjectId: attempt.subjectId, status: 'active', sessionId: id })
           tx.set(context.session, session)
@@ -354,10 +343,23 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     if (data.includeTrainingCounts === true && group.data()?.subjectId) {
       const roster = await db.collection(`grupos/${data.groupId}/alumnos`).get()
       const counts = await Promise.allSettled(roster.docs.filter((student) => validId(student.id)).map(async (student) => {
-        const attempts = await db.collection(`studentTraining/${student.id}/attempts`).where('subjectId', '==', group.data().subjectId).get()
-        return [student.id, attempts.docs.filter((attempt) => attempt.data().status === 'completed').length]
+        const [attempts, access] = await Promise.all([
+          db.collection(`studentTraining/${student.id}/attempts`).where('subjectId', '==', group.data().subjectId).get(),
+          db.doc(`studentAccessCodes/${student.id}`).get(),
+        ])
+        const code = access.data() || {}
+        let entered = false
+        if (code.active === true && code.authUid && auth) {
+          const account = await auth.getUser(code.authUid).catch(() => null)
+          entered = account ? Boolean(!account.disabled && account.metadata?.lastSignInTime) : null
+        } else if (code.active === true && code.authUid) {
+          entered = null
+        }
+        return [student.id, attempts.docs.filter((attempt) => attempt.data().status === 'completed').length, entered]
       }))
-      result.trainingCounts = Object.fromEntries(counts.filter((item) => item.status === 'fulfilled').map((item) => item.value))
+      const available = counts.filter((item) => item.status === 'fulfilled').map((item) => item.value)
+      result.trainingCounts = Object.fromEntries(available.map(([id, count]) => [id, count]))
+      result.trainingAccess = Object.fromEntries(available.map(([id, , entered]) => [id, entered]))
     }
     return result
   }
@@ -427,14 +429,9 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     const problems = []
     bank.docs.forEach((doc) => {
       const exercise = doc.data()
-      ;[exercise, ...(exercise.variaciones || [])].forEach((version, index) => {
-        const reasons = []
-        if (!trainingSegments(version).length) reasons.push('Faltan contenidos, soluciones o criterios de autoevaluación.')
-        const statement = pdfStoragePath(version.pdf?.statement || version.pdf?.enunciado, doc.id, bucket.name)
-        const solution = pdfStoragePath(version.pdf?.solved || version.pdf?.resuelto, doc.id, bucket.name)
-        if (!statement || !solution || statement === solution) reasons.push('Falta compilar el enunciado o la solución.')
-        if (index && !version.id) reasons.push('La variante necesita un identificador estable.')
-        if (reasons.length) problems.push({ exerciseId: doc.id, version: index, title: String(version.titulo || exercise.titulo || `Ejercicio ${doc.id}`).slice(0, 160), reasons })
+      ;[exercise, ...(Array.isArray(exercise.variaciones) ? exercise.variaciones : [])].forEach((version, index) => {
+        const { reasons } = trainingReadiness(version, { exerciseId: doc.id, bucketName: bucket.name, variant: index > 0 })
+        if (reasons.length) problems.push({ exerciseId: doc.id, version: index, title: String(version?.titulo || exercise.titulo || `Ejercicio ${doc.id}`).slice(0, 160), reasons })
       })
     })
     return { total: bank.docs.length, problems }

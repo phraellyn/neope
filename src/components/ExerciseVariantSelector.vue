@@ -3,6 +3,8 @@ defineProps({
   modelValue: { type: Number, default: 0 },
   variations: { type: Array, default: () => [] },
   compact: { type: Boolean, default: false },
+  showPublication: { type: Boolean, default: false },
+  publicationRoot: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue'])
@@ -21,7 +23,8 @@ const emit = defineEmits(['update:modelValue'])
       :key="version - 1"
       type="button"
       class="exercise-variant-option"
-      :class="{ 'exercise-variant-option-active': modelValue === version - 1 }"
+      :class="{ 'exercise-variant-option-active': modelValue === version - 1, 'exercise-variant-option-published': showPublication && (version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)) }"
+      :title="showPublication ? ((version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)) ? 'Publicada para alumnos' : 'Sin publicar') : undefined"
       :aria-label="version === 1 ? 'Ejercicio original' : `Variación ${version - 1}`"
       :aria-pressed="modelValue === version - 1"
       @click.stop="emit('update:modelValue', version - 1)"
@@ -84,6 +87,13 @@ const emit = defineEmits(['update:modelValue'])
   color: #fff;
 }
 
+.exercise-variant-option-published {
+  box-shadow: inset 0 -3px 0 #279860;
+}
+.exercise-variant-option-active.exercise-variant-option-published {
+  box-shadow: inset 0 -3px 0 #8cddaa;
+}
+
 .exercise-variant-bar-compact {
   min-height: 27px;
   gap: 4px;
@@ -98,7 +108,6 @@ const emit = defineEmits(['update:modelValue'])
 
 .exercise-variant-bar-compact .exercise-variant-option:hover,
 .exercise-variant-bar-compact .exercise-variant-option:focus-visible {
-  box-shadow: none;
   transform: none;
 }
 </style>

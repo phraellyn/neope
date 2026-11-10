@@ -70,6 +70,13 @@ assert.match(buildExerciseLatex({
   ...restored,
   gradingCriteria: [{ description: 'Trabaja en ℝ y verifica x ≥ 0.', points: 1 }],
 }, { includeSolutions: true }), /\\ensuremath\{\\mathbb\{R\}\}/)
+const unicodeCriterion = 'Determina el dominio (0,1) ∪ (1,+∞) y la intersección A ∩ B.'
+const unicodeClient = buildExerciseLatex({ ...restored, gradingCriteria: [{ description: unicodeCriterion, points: 1 }] }, { includeSolutions: true })
+assert.match(unicodeClient, /\\ensuremath\{\\cup\}/)
+assert.match(unicodeClient, /\\ensuremath\{\\cap\}/)
+const unicodeServerDocument = { ...document, gradingCriteria: [{ description: unicodeCriterion, points: 1 }] }
+const unicodeServer = compilationArtifacts(unicodeServerDocument, 'demo', 1).find((artifact) => artifact.key === 'pdf.solved').code
+assert.doesNotMatch(unicodeServer, /\\criterios\{/)
 assert.doesNotMatch(rebuilt, /\\ej[^\n]*\\\\\n\s*\n/)
 assert.deepEqual(restored.apartados[0].gradingCriteria, structure.apartados[0].gradingCriteria)
 assert.doesNotMatch(buildExerciseLatex(restored, { includeSolutions: false, includeAnswers: false }), /\\criterios\{/)
@@ -82,10 +89,9 @@ const achievementOnlyEdit = exerciseDocumentStructure({
 }, document, 1)
 assert.deepEqual(
   compilationArtifacts(achievementOnlyEdit, 'demo', 1).map((artifact) => artifact.code),
-  compilationArtifacts(document, 'demo', 1).map((artifact) => artifact.code).map((code, index) => (
-    index === 1 ? code.replace('0,5', '0,75') : code
-  )),
+  compilationArtifacts(document, 'demo', 1).map((artifact) => artifact.code),
 )
+assert.equal(achievementOnlyEdit.parts[0].gradingCriteria[0].points, 0.75)
 
 const documentLatex = buildExerciseLatex(restored, {
   includeSolutions: true,

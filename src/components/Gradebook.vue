@@ -128,6 +128,7 @@ async function changeResultPublication(id, visible) {
 }
 const studentMessages = ref([])
 const studentTrainingCounts = ref({})
+const studentTrainingAccess = ref({})
 const selectedMessageStudent = ref(null)
 const messagesDialog = ref(false)
 let messagesTimer
@@ -138,12 +139,17 @@ async function refreshStudentMessages() {
     const includeTrainingCounts = Date.now() - trainingCountsRefreshedAt >= 5 * 60 * 1000
     const result = (await httpsCallable(functions, 'manageTeacherStudentMessages')({ groupId: props.group.id, includeTrainingCounts })).data
     studentMessages.value = result.messages
-    if (result.trainingCounts) { studentTrainingCounts.value = result.trainingCounts; trainingCountsRefreshedAt = Date.now() }
+    if (result.trainingCounts) { studentTrainingCounts.value = result.trainingCounts; studentTrainingAccess.value = result.trainingAccess || {}; trainingCountsRefreshedAt = Date.now() }
   }
   catch (error) { console.error('No se han podido cargar los mensajes del alumnado:', error) }
 }
 function pendingStudentMessages(studentId) {
   return studentMessages.value.filter((message) => message.studentCode === studentId).length
+}
+function studentTrainingCountLabel(studentId) {
+  const count = studentTrainingCounts.value[studentId]
+  const access = studentTrainingAccess.value[studentId]
+  return `${count} ejercicios autoevaluados${access === false ? ' · Cuenta sin activar o sin acceso' : access === true ? '' : ' · Estado de acceso no disponible'}`
 }
 function unreadStudentMessages(studentId) {
   return studentMessages.value.filter((message) => message.studentCode === studentId && (message.studentLastAt || message.createdAt || '') > (message.teacherSeenAt || message.replyAt || (message.status !== 'pending' ? message.updatedAt : '') || '')).length
@@ -762,7 +768,7 @@ const headerLayout = computed(() => {
 
 const resultColumns = computed(() => headerLayout.value.resultColumns)
 const tableStyle = computed(() => (resultColumns.value.length
-  ? { minWidth: `${310 + resultColumns.value.length * RESULT_COLUMN_MIN_WIDTH}px` }
+  ? { minWidth: `${348 + resultColumns.value.length * RESULT_COLUMN_MIN_WIDTH}px` }
   : { minWidth: '100%' }))
 
 function resultFor(studentId, itemId) {
@@ -1383,7 +1389,9 @@ defineExpose({
       <table class="gradebook-table" :style="tableStyle">
         <colgroup>
           <col class="gradebook-student-column">
+          <col class="gradebook-training-column">
           <col v-for="column in resultColumns" :key="column.key" class="gradebook-result-column">
+          <col class="gradebook-filler-column">
         </colgroup>
         <thead>
           <tr
@@ -1406,6 +1414,7 @@ defineExpose({
               </div>
               <div class="gradebook-student-heading-count">Alumnos <small>{{ students.length }}</small></div>
             </th>
+            <th v-if="rowIndex === 0" :rowspan="headerLayout.depth" class="gradebook-training-heading" title="Ejercicios autoevaluados" aria-label="Ejercicios autoevaluados"></th>
             <template v-if="visibleStructure.length">
               <th
                 v-for="cell in row"
@@ -1465,6 +1474,7 @@ defineExpose({
             <th v-else-if="rowIndex === 0" :rowspan="headerLayout.depth" class="gradebook-no-columns">
               {{ configurationMode ? 'Añade un ítem de evaluación desde la barra superior' : 'Activa la configuración para añadir ítems de evaluación' }}
             </th>
+            <th v-if="rowIndex === 0 && visibleStructure.length" :rowspan="headerLayout.depth" class="gradebook-filler-heading" aria-hidden="true"></th>
           </tr>
         </thead>
         <tbody>
@@ -1488,7 +1498,6 @@ defineExpose({
                   {{ student.nombre || student.id }}
                 </button>
                 <div class="gradebook-student-actions">
-                  <span v-if="!configurationMode && Object.hasOwn(studentTrainingCounts, student.id)" class="gradebook-training-count" :title="`${studentTrainingCounts[student.id]} ejercicios de entrenamiento completados`" :aria-label="`${studentTrainingCounts[student.id]} ejercicios de entrenamiento completados`"><v-icon icon="mdi-pencil-outline" size="14" aria-hidden="true" /> {{ studentTrainingCounts[student.id] }}</span>
                   <v-badge v-if="pendingStudentMessages(student.id)" :model-value="Boolean(unreadStudentMessages(student.id))" dot color="error"><v-btn icon="mdi-message-text-outline" size="x-small" variant="text" color="primary" :aria-label="`${pendingStudentMessages(student.id)} conversaciones de ${student.nombre || student.id}`" @click.stop="openStudentMessages(student)" /></v-badge>
                   <button
                     v-if="studentSourceGroups.length > 1"
@@ -1507,6 +1516,9 @@ defineExpose({
                 </div>
               </div>
             </th>
+            <td class="gradebook-training-cell">
+              <span v-if="Object.hasOwn(studentTrainingCounts, student.id)" class="gradebook-training-count" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)">{{ studentTrainingCounts[student.id] }}</span>
+            </td>
             <td v-for="column in resultColumns" :key="column.key" :class="{ 'gradebook-mean-cell': column.kind === 'mean', 'gradebook-rubric-cell': column.kind === 'item' && (column.node.rubric || column.node.merits), 'gradebook-document-cell': column.kind === 'item' && column.node.documentAssessment }">
               <button
                 v-if="column.kind === 'item' && column.node.documentAssessment"
@@ -1536,10 +1548,12 @@ defineExpose({
               >
               <output v-else :aria-label="`${column.title}: ${student.nombre || student.id}`">{{ groupMean(student.id, column.node) }}</output>
             </td>
+            <td v-if="visibleStructure.length" class="gradebook-filler-cell" aria-hidden="true"></td>
           </tr>
           <tr v-if="!students.length">
             <th class="gradebook-student-cell gradebook-student-empty">Aún no hay alumnos</th>
-            <td :colspan="Math.max(resultColumns.length, 1)" class="gradebook-empty-body">
+            <td class="gradebook-training-cell"></td>
+            <td :colspan="Math.max(resultColumns.length + (visibleStructure.length ? 1 : 0), 1)" class="gradebook-empty-body">
               {{ configurationMode ? 'Añade la primera fila con «Alumno» en la barra superior.' : 'Activa la configuración para añadir alumnos.' }}
             </td>
           </tr>

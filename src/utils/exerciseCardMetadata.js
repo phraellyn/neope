@@ -53,6 +53,12 @@ export function versionHasWorkedSolution(version = {}) {
   return parts.some((part) => text(part.workedSolution?.latex || part.solucion))
 }
 
+export function exerciseSolutionOrigin(exercise, versionIndex = 0) {
+  const version = exerciseVersion(exercise, versionIndex) || {}
+  if (!versionHasWorkedSolution(version)) return 'unsolved'
+  return versionIndex > 0 || version.solucionIA || generatedAuthorFromInfo(versionInfo(version)) ? 'ai' : 'human'
+}
+
 export function exerciseVersionAuthors(exercise, versionIndex = 0, humanAuthor = 'Carlos Sánchez Catalá') {
   const version = exerciseVersion(exercise, versionIndex) || {}
   const generatedAuthor = generatedAuthorFromInfo(versionInfo(version))
@@ -62,7 +68,7 @@ export function exerciseVersionAuthors(exercise, versionIndex = 0, humanAuthor =
 
   let solution = 'Sin resolver'
   if (versionHasWorkedSolution(version)) {
-    solution = isVariation || version.solucionIA || generatedAuthor
+    solution = exerciseSolutionOrigin(exercise, versionIndex) === 'ai'
       ? modelAuthor || generatedAuthor || 'IA'
       : humanAuthor
   }

@@ -46,7 +46,7 @@ function updateCompetencial(competencial) {
   emit('update:modelValue', {
     course: props.modelValue.course || null,
     subjectId: props.modelValue.subjectId || null,
-    conceptIds: [...(props.modelValue.conceptIds || [])],
+    conceptIds: props.modelValue.conceptIds || [],
     competencial: Boolean(competencial),
   })
 }
@@ -72,10 +72,13 @@ function updateCompetencial(competencial) {
       type="button"
       class="exercise-competency-control"
       :class="{ 'exercise-competency-control-active': Boolean(modelValue.competencial) }"
+      :aria-label="modelValue.competencial ? 'Quitar filtro de ejercicios competenciales' : 'Filtrar ejercicios competenciales'"
+      :title="modelValue.competencial ? 'Competencial: activado' : 'Competencial: desactivado'"
       :aria-pressed="Boolean(modelValue.competencial)"
       :disabled="readonly"
       @click="updateCompetencial(!modelValue.competencial)"
-    >Competencial</button>
+    ><v-icon icon="mdi-lightbulb-on-outline" size="20" /></button>
+    <slot name="tools" />
   </div>
 </template>
 
@@ -102,17 +105,18 @@ function updateCompetencial(competencial) {
   top: 14px;
   bottom: auto;
   display: inline-flex;
+  width: 36px;
   height: 36px;
   align-items: center;
   justify-content: center;
-  padding: 0 15px;
+  padding: 0;
   border: 1px solid #d8e2f0;
   border-radius: 999px;
   outline: 0;
-  background: rgba(240,244,250,.9);
+  background: rgba(240,244,250,.94);
   box-shadow: 0 4px 12px rgba(25,55,95,.08);
   color: #6f7e92;
-  opacity: .56;
+  opacity: 1;
   font-size: .72rem;
   font-weight: 700;
   cursor: pointer;
@@ -122,7 +126,7 @@ function updateCompetencial(competencial) {
 
 .exercise-competency-control:hover,
 .exercise-competency-control:focus-visible {
-  opacity: .82;
+  opacity: .85;
 }
 
 .exercise-competency-control:focus-visible {

@@ -726,7 +726,7 @@ const unifiedFields = computed(() => {
   const result = []
   const seen = new Set()
   selectedTemplates.value.forEach((template) => template.metadata.fields.forEach((field) => {
-    if (field.hidden) return
+    if (field.hidden || field.key === 'includeCriteria') return
     const identity = canonicalFieldKey(field.key)
     if (seen.has(identity)) {
       const existing = result.find((item) => item.key === identity)
@@ -1843,7 +1843,7 @@ function directSourceCodeForTemplate(code, template) {
     .filter((command) => !availableAnswerCommands.includes(command) || (exerciseOptions && !templateOption(template, 'includeAnswers', false)))
   if (unavailableAnswerCommands.length) result = stripBalancedCommands(result, unavailableAnswerCommands)
   if (exerciseOptions && !infoEnabledForTemplate(template)) result = stripBalancedCommands(result, ['info'])
-  if (exerciseOptions && !criteriaEnabledForTemplate(template)) result = stripBalancedCommands(result, ['criterios'])
+  if (exerciseOptions) result = stripBalancedCommands(result, ['criterios'])
   return result.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n').trim()
 }
 
@@ -1872,7 +1872,7 @@ function queueExerciseCode(item, template = selectedTemplate.value) {
     // Los tiempos son metadatos de planificación de Neope. Las plantillas de
     // documentos no necesitan definir \T ni \t para poder usar ejercicios.
     includeDurationMetadata: false,
-    includeCriteria: criteriaEnabledForTemplate(template),
+    includeCriteria: false,
     includeInfo: infoEnabledForTemplate(template),
   }) || statementCode(sourceVersion?.enunciado || '')
   const exerciseCode = rewriteExerciseImageReferences(adaptExerciseEnvironmentsToTemplate(code, template), exercise, item.version)
@@ -2701,10 +2701,6 @@ function documentFieldStoredValue(field) {
   const value = fieldValues[field.key]
   if (field.type === 'checkbox') return Boolean(value)
   return String(value || '').trim()
-}
-
-function criteriaEnabledForTemplate(template) {
-  return templateOption(template, 'includeCriteria', false)
 }
 
 function infoEnabledForTemplate(template) {

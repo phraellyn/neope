@@ -156,6 +156,7 @@ export function compilationArtifacts(exercise, exerciseId, revision) {
     add('pdf.solved', `${root}/solved.pdf`, buildExerciseLatex(exercise, {
       includeSolutions: true,
       includeAnswers: true,
+      includeCriteria: false,
       preservePartsEnvironment: false,
     }), exercise.pdf?.solved, exerciseRenderProfiles.solved)
   }

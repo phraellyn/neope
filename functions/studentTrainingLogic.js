@@ -1,4 +1,55 @@
 const unique = (values) => [...new Set((Array.isArray(values) ? values : []).filter((value) => typeof value === 'string' && value))]
+const positiveScore = (value) => {
+  if (typeof value !== 'string' && typeof value !== 'number') return false
+  if (typeof value === 'string' && !value.trim()) return false
+  const score = Number(String(value).replace(',', '.'))
+  return Number.isFinite(score) && score > 0
+}
+
+export function pdfStoragePath(reference, exerciseId, bucketName) {
+  let path = typeof reference === 'object' && reference ? reference.storagePath || reference.path : ''
+  const url = typeof reference === 'string' ? reference : reference?.downloadUrl || reference?.url
+  if (!path && url) {
+    try {
+      const parsed = new URL(url)
+      const prefix = `/v0/b/${bucketName}/o/`
+      if (parsed.hostname === 'firebasestorage.googleapis.com' && parsed.pathname.startsWith(prefix)) path = decodeURIComponent(parsed.pathname.slice(prefix.length))
+    } catch { return '' }
+  }
+  return typeof path === 'string' && path.startsWith(`ejercicios/${exerciseId}/`) && !path.includes('..') ? path : ''
+}
+
+export function trainingReadiness(version = {}, { exerciseId = '', bucketName = '', variant = false } = {}) {
+  if (!version || typeof version !== 'object') version = {}
+  const reasons = []
+  const structure = version.structure || {}
+  const statement = version.statement?.latex || structure.statement?.latex || structure.enunciado || version.enunciado || version.codigo || version.latex
+  const parts = Array.isArray(version.parts) && version.parts.length ? version.parts : Array.isArray(structure.apartados) ? structure.apartados : []
+  if (!String(statement || '').trim() && !parts.some((part) => String(part?.statement?.latex || part?.enunciado || '').trim())) reasons.push('Falta el enunciado.')
+  try { if (!trainingSegments(version).length) reasons.push('Faltan conceptos, soluciones o criterios de calificación en el ejercicio o sus apartados.') }
+  catch { reasons.push('Los datos del ejercicio están incompletos o no son válidos.') }
+  const statementPdf = pdfStoragePath(version.pdf?.statement || version.pdf?.enunciado, exerciseId, bucketName)
+  const solutionPdf = pdfStoragePath(version.pdf?.solved || version.pdf?.resuelto, exerciseId, bucketName)
+  if (!statementPdf || !solutionPdf || statementPdf === solutionPdf) reasons.push('Faltan los PDF del enunciado y la solución.')
+  if (variant && !version.id) reasons.push('La variante necesita un identificador estable.')
+  const usable = reasons.length === 0
+  const sourceCode = String(version.codigo || version.latex || version.enunciado || '').replace(/(^|[^\\])%[^\n]*/g, '$1')
+  if (!parts.length && /\\(?:begin\s*\{apartadosc?\}|ap\b)/.test(sourceCode)) reasons.push('Faltan los datos estructurados de los apartados.')
+  if (!parts.length && !positiveScore(version.points ?? version.puntuacion ?? structure.puntuacion ?? sourceCode.match(/\\M\s*\{\s*([^{}]+)\s*\}/)?.[1])) reasons.push('Falta la puntuación del ejercicio.')
+  parts.forEach((part, index) => {
+    const label = `Apartado ${String.fromCharCode(97 + index)}`
+    if (!positiveScore(part?.points ?? part?.puntuacion ?? String(part?.statement?.latex || part?.enunciado || '').match(/\\p\s*\{\s*([^{}]+)\s*\}/)?.[1])) reasons.push(`${label}: falta la puntuación.`)
+    if (!String(part?.statement?.latex || part?.enunciado || '').trim()) reasons.push(`${label}: falta el enunciado.`)
+    if (!String(part?.workedSolution?.latex || part?.solucion || '').trim()) reasons.push(`${label}: falta la solución.`)
+    if (!unique([...(Array.isArray(part?.contentIds) ? part.contentIds : []), ...(Array.isArray(part?.contenidos) ? part.contenidos : [])]).length) reasons.push(`${label}: faltan los conceptos.`)
+    const criteria = Array.isArray(part?.gradingCriteria) ? part.gradingCriteria : []
+    if (!criteria.length || criteria.some((criterion) => !String(criterion?.description || '').trim() || !Number.isFinite(Number(criterion?.points)) || Number(criterion.points) <= 0)) reasons.push(`${label}: faltan criterios de calificación válidos.`)
+    const partStatement = pdfStoragePath(part?.statement?.pdf || part?.pdfenunciado, exerciseId, bucketName)
+    const partSolution = pdfStoragePath(part?.workedSolution?.pdf || part?.pdfsolucion, exerciseId, bucketName)
+    if (!partStatement || !partSolution || partStatement === partSolution) reasons.push(`${label}: faltan los PDF del enunciado y la solución.`)
+  })
+  return { complete: reasons.length === 0, usable, reasons }
+}
 
 export function conceptAncestors(id, nodes) {
   const parents = new Map(nodes.map((node) => [node.id, node.parentId]))
@@ -61,6 +112,13 @@ export function trainingSegments(version = {}) {
   return single ? [single] : []
 }
 
+export function trainingVersionPublished(exercise, variationId = null) {
+  if (!variationId) return exercise?.studentTrainingPublished === true
+  const variant = (exercise?.variaciones || []).find((item) => item?.id === variationId)
+  if (!variant) return false
+  return typeof variant.studentTrainingPublished === 'boolean' ? variant.studentTrainingPublished : exercise.studentTrainingPublished === true
+}
+
 export function selectTrainingCandidate(exercises, selected, nodes, completed = [], { repeat = false, active = [] } = {}) {
   const used = new Set(completed)
   const reserved = new Set(active)
@@ -70,6 +128,7 @@ export function selectTrainingCandidate(exercises, selected, nodes, completed = 
     const versions = [exercise, ...(Array.isArray(exercise.variaciones) ? exercise.variaciones : [])]
     versions.forEach((version, index) => {
       if (index && !version.id) return // Legacy variants without stable IDs cannot be tracked safely.
+      if (!trainingVersionPublished(exercise, index ? version.id : null)) return
       let segments
       try { segments = trainingSegments(version) } catch { return }
       const pdf = version.pdf?.statement || version.pdf?.enunciado

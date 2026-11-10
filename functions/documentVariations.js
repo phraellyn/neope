@@ -4,6 +4,8 @@ import { planDocumentVariation, uniqueConceptIds } from './documentVariationPlan
 import { graphicReferences } from './exerciseVisualsShared.js'
 import { visualReferenceImages, visualMessageContent, visualModelCatalog } from './visualGeneration.js'
 import { ensureAlignedInDisplayMath, normalizeDisplayMathDelimiters, normalizeLatexTextAccents } from './solutionLayout.js'
+import { criterionMathInstructions } from './achievementGranularity.js'
+import { normalizeGeneratedCriterionMath } from './criteriaLatex.js'
 
 const clean = (value, length = 60000) => typeof value === 'string' ? value.trim().slice(0, length) : ''
 const ids = (value) => uniqueConceptIds(value).slice(0, 240)
@@ -121,7 +123,7 @@ export function documentVariationHandlers({ db, resolveModel, apiKey, requestMod
         course: clean(data.course, 80), subjectId: clean(data.subjectId, 180), requiredConceptIds,
         concepts: concepts.filter((node) => requiredConceptIds.includes(node.id)), contractCriteria, instructions: clean(data.instructions, 3000),
         previousProposals: (data.previousProposals || []).slice(-3).map((code) => clean(code, 20000)), latexCapabilities: data.latexCapabilities || {}, }
-      prompt.criteriaInstruction = 'En criteria devuelve exactamente los criterios de contractCriteria, con los mismos partId y puntos, pero adaptando las descripciones al ejercicio nuevo. Si contractCriteria está vacío, criteria también debe estar vacío. En partConcepts indica los conceptos requeridos que evalúa cada apartado, usando sus identificadores % neope:part como partId. En las descripciones, escribe toda expresión matemática entre $...$. Conserva los espacios y las cajas para responder y una extensión comparable al original.'
+      prompt.criteriaInstruction = `En criteria devuelve exactamente los criterios de contractCriteria, con los mismos partId y puntos, pero adaptando las descripciones al ejercicio nuevo. Si contractCriteria está vacío, criteria también debe estar vacío. En partConcepts indica los conceptos requeridos que evalúa cada apartado, usando sus identificadores % neope:part como partId. Conserva los espacios y las cajas para responder y una extensión comparable al original.\n${criterionMathInstructions}`
       prompt.columnInstruction = 'No añadas, elimines ni desplaces los comandos \\newcolumn o \\columnbreak: conserva cada uno en el mismo apartado y dentro de los mismos entornos que en contract.'
       let generated
       let issues = []
@@ -155,7 +157,7 @@ export function documentVariationHandlers({ db, resolveModel, apiKey, requestMod
         if (!issues.length) break
       }
       if (issues.length) throw new HttpsError('internal', `La propuesta no respeta el documento: ${issues[0]}`)
-      return { enunciado: generated.enunciado, coveredConceptIds: requiredConceptIds, criteria: generated.criteria || [],
+      return { enunciado: generated.enunciado, coveredConceptIds: requiredConceptIds, criteria: (generated.criteria || []).map((criterion) => ({ ...criterion, description: normalizeGeneratedCriterionMath(criterion.description) })),
         partConcepts: (generated.partConcepts || []).map((part) => ({ partId: clean(part.partId, 180), conceptIds: ids(part.conceptIds).filter((id) => requiredConceptIds.includes(id)) })), model: model.id, origin: data.origin || 'cloned' }
     },
   }

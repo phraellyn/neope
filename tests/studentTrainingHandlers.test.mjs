@@ -6,7 +6,7 @@ const store = new Map([
   ['grupos/g1', { subjectId: 'subject', teacherId: 'teacher' }], ['grupos/g1/alumnos/ABC234', {}],
   ['teachers/teacher', { displayName: 'Carlos Sánchez Catalá' }],
   ['especialidades/Matemáticas', { nodes: [{ id: 'a', title: 'A' }], asignaturas: { subject: ['a'] } }],
-  ['ejercicios/ex1', { curriculum: { subjectId: 'subject' }, contenidos: ['a'], gradingCriteria: [{ id: 'criterion', description: 'Paso', points: 2 }], workedSolution: { latex: 'Solución', pdf: { storagePath: 'ejercicios/ex1/part.pdf' } }, pdf: { statement: { storagePath: 'ejercicios/ex1/statement.pdf' }, solved: { storagePath: 'ejercicios/ex1/solved.pdf' } } }],
+  ['ejercicios/ex1', { studentTrainingPublished: true, points: 2, statement: { latex: 'Enunciado' }, curriculum: { subjectId: 'subject' }, contenidos: ['a'], gradingCriteria: [{ id: 'criterion', description: 'Paso', points: 2 }], workedSolution: { latex: 'Solución', pdf: { storagePath: 'ejercicios/ex1/part.pdf' } }, pdf: { statement: { storagePath: 'ejercicios/ex1/statement.pdf' }, solved: { storagePath: 'ejercicios/ex1/solved.pdf' } } }],
 ])
 let nextId = 0
 function snapshot(path) { return { id: path.split('/').at(-1), ref: doc(path), exists: store.has(path), data: () => structuredClone(store.get(path)) } }
@@ -41,6 +41,11 @@ store.get('grupos/g1/alumnos/ABC234').results.exam.manualTotal = 7
 assert.equal((await api.publishedExam(request({ itemId: 'exam' }))).matrix, null, 'Manual grades do not expose a matrix')
 delete store.get('grupos/g1/alumnos/ABC234').results.exam.manualTotal
 await assert.rejects(() => api.publishedExam({ auth: { uid: 'other', token: { role: 'student', studentCode: 'ABC234' } }, data: { groupId: 'g1', itemId: 'exam' } }), /No tienes acceso/)
+delete store.get('ejercicios/ex1').studentTrainingPublished
+await assert.rejects(() => api.start(request({ selectedConceptIds: ['a'] })), /No quedan ejercicios/, 'Sin publicar por defecto no se propone')
+store.get('ejercicios/ex1').studentTrainingPublished = false
+await assert.rejects(() => api.start(request({ selectedConceptIds: ['a'], repeat: true })), /No quedan ejercicios/, 'Repetir no omite la publicación')
+store.get('ejercicios/ex1').studentTrainingPublished = true
 const session = await api.start(request({ selectedConceptIds: ['a'] }))
 assert.equal(session.status, 'active')
 assert.ok(files.has(`studentTraining/ABC234/${session.id}/statement.pdf`), 'An active attempt has independent PDF snapshots')
@@ -87,6 +92,10 @@ assert.equal(reevaluated.session.status, 'review')
 assert.deepEqual(reevaluated.session.criteriaIds, ['exercise:criterion'])
 await api.update(request({ sessionId: reevaluated.session.id, action: 'complete', criteriaIds: [] }))
 assert.equal((await api.load(request({}))).progress.a.obtained, 0, 'Reevaluating replaces the old score')
+store.get('ejercicios/ex1').studentTrainingPublished = false
+await assert.rejects(() => api.update(request({ action: 'history-redo', attemptId: session.id })), /ya no está disponible/)
+assert.ok((await api.pdf(request({ attemptId: session.id, kind: 'statement' }))).data, 'El historial sigue siendo visible tras retirar un ejercicio')
+store.get('ejercicios/ex1').studentTrainingPublished = true
 const redo = await api.update(request({ action: 'history-redo', attemptId: session.id }))
 assert.equal(redo.session.status, 'active')
 assert.equal(redo.session.timer.elapsedMs, 0)
@@ -131,6 +140,10 @@ store.set('studentTraining/DEF234/attempts/in-progress', { subjectId: 'subject',
 store.set('studentTraining/ZZZ234/attempts/other-student', { subjectId: 'subject', status: 'completed' })
 const counts = (await api.teacherMessages(teacher({ includeTrainingCounts: true }))).trainingCounts
 assert.deepEqual(counts, { ABC234: 1, DEF234: 0 }, 'Counts cover only completed attempts in the group subject and enrolled students')
+const accounts = await studentTrainingHandlers({ db, bucket, auth: { getUser: async () => ({ disabled: false, metadata: { lastSignInTime: 'Tue, 10 Nov 2026 10:00:00 GMT' } }) } }).teacherMessages(teacher({ includeTrainingCounts: true }))
+assert.deepEqual(accounts.trainingAccess, { ABC234: true, DEF234: false }, 'Only activated accounts with a sign-in are marked as entered')
+const neverSignedIn = await studentTrainingHandlers({ db, bucket, auth: { getUser: async () => ({ disabled: false, metadata: {} }) } }).teacherMessages(teacher({ includeTrainingCounts: true }))
+assert.equal(neverSignedIn.trainingAccess.ABC234, false, 'An activated account without a sign-in is inactive')
 await assert.rejects(() => api.teacherMessages({ auth: { uid: 'other', token: { role: 'teacher' } }, data: { groupId: 'g1', includeTrainingCounts: true } }), /no pertenece/)
 store.delete('grupos/g1/alumnos/DEF234')
 const teacherProgress = await api.teacherProgress(teacher({ studentId: 'ABC234' }))

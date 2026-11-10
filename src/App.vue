@@ -12,6 +12,7 @@ import {
   onSnapshot,
   orderBy,
   query as firestoreQuery,
+  runTransaction,
   setDoc,
   startAfter,
   updateDoc,
@@ -69,6 +70,8 @@ import ExerciseImageDialog from './components/ExerciseImageDialog.vue'
 import { useExerciseImages } from './composables/useExerciseImages'
 import { archivedImage, exerciseImageAssets, graphicReferences, imageAssetsSignature, imageGenerationMetadata, modelCapabilitiesOption, referencedImageFiles, replaceGraphicReference, revokePendingImage, versionImageFiles } from './utils/exerciseImages'
 import { validateExerciseSolutionSource } from '../functions/exerciseSolutionSource.js'
+import { trainingReadiness } from '../functions/studentTrainingLogic.js'
+import { matchesExerciseStatusFilters, nextExerciseFilterState } from './utils/exerciseSearchFilters'
 import { showAppErrorToast } from './composables/useAppErrorToast'
 import {
   currentAcademicYear,
@@ -98,6 +101,7 @@ import {
 import {
   compactExerciseConceptLabel,
   exerciseStatementText,
+  exerciseSolutionOrigin,
   exerciseVersion,
   exerciseVersionAuthors,
 } from './utils/exerciseCardMetadata'
@@ -176,6 +180,19 @@ const exerciseEditorBaseline = ref('')
 const exerciseView = ref('search')
 const exerciseSearchQuery = ref('')
 const exerciseSearchCurriculum = ref(emptyCurriculum())
+const exerciseSearchCompleteness = ref('all')
+const exerciseSearchPublication = ref('all')
+const exerciseSearchSolution = ref('all')
+const appliedExerciseStatus = reactive({ completeness: 'all', publication: 'all', solution: 'all', competencial: false })
+let exerciseStatusApplyFrame = 0
+let exerciseStatusApplyTimer = 0
+const exerciseStatusFiltersActive = computed(() => appliedExerciseStatus.completeness !== 'all' || appliedExerciseStatus.publication !== 'all' || appliedExerciseStatus.solution !== 'all' || appliedExerciseStatus.competencial)
+const exerciseSearchCourse = computed(() => exerciseSearchCurriculum.value.course || '')
+const exerciseSearchSubject = computed(() => exerciseSearchCurriculum.value.subjectId || '')
+const exerciseSearchConceptKey = computed(() => JSON.stringify(exerciseSearchCurriculum.value.conceptIds || []))
+const completenessFilterView = computed(() => ({ all: { icon: 'mdi-check-all', label: 'Integridad: todos' }, complete: { icon: 'mdi-check-circle-outline', label: 'Solo completos' }, incomplete: { icon: 'mdi-alert-circle-outline', label: 'Solo incompletos' } })[exerciseSearchCompleteness.value])
+const publicationFilterView = computed(() => ({ all: { icon: 'mdi-eye-settings-outline', label: 'Publicación: todos' }, published: { icon: 'mdi-eye-check-outline', label: 'Solo publicados' }, unpublished: { icon: 'mdi-eye-off-outline', label: 'Solo sin publicar' } })[exerciseSearchPublication.value])
+const solutionFilterView = computed(() => ({ all: { icon: 'mdi-account-switch-outline', label: 'Autoría de la solución: todas' }, ai: { icon: 'mdi-robot-outline', label: 'Solo soluciones de IA' }, human: { icon: 'mdi-account-outline', label: 'Solo soluciones humanas' } })[exerciseSearchSolution.value])
 const exerciseSearchCurriculumDialog = ref(false)
 const isLoadingExercises = ref(false)
 const isLoadingMoreExercises = ref(false)
@@ -408,15 +425,19 @@ const academicMonths = computed(() => {
 
 const filteredExercises = computed(() => {
   const search = String(exerciseSearchQuery.value || '').trim().toLocaleLowerCase('es')
-  const filters = exerciseSearchCurriculum.value
-  const terminalFilterIds = terminalConceptIds(filters.conceptIds)
+  const terminalFilterIds = terminalConceptIds(JSON.parse(exerciseSearchConceptKey.value))
   return exercises.value.filter((exercise) => {
     const matchesSearch = !search
       || exerciseStatementText(exercise).toLocaleLowerCase('es').includes(search)
     if (!matchesSearch) return false
-    if (filters.course && exercise.curriculum.course !== filters.course) return false
-    if (filters.subjectId && exercise.curriculum.subjectId !== filters.subjectId) return false
-    if (filters.competencial && !exercise.curriculum.competencial) return false
+    if (!matchesExerciseStatusFilters({
+      complete: appliedExerciseStatus.completeness === 'all' ? false : searchExerciseReadiness(exercise).complete,
+      published: searchExercisePublished(exercise),
+      solutionOrigin: appliedExerciseStatus.solution === 'all' ? null : exerciseSolutionOrigin(exercise, searchExerciseVersionIndex(exercise)),
+    }, appliedExerciseStatus)) return false
+    if (exerciseSearchCourse.value && exercise.curriculum.course !== exerciseSearchCourse.value) return false
+    if (exerciseSearchSubject.value && exercise.curriculum.subjectId !== exerciseSearchSubject.value) return false
+    if (appliedExerciseStatus.competencial && !exercise.curriculum.competencial) return false
     if (terminalFilterIds.length) {
       const closure = exerciseConceptClosure(exercise.curriculum.conceptIds)
       if (!terminalFilterIds.some((id) => closure.has(id))) return false
@@ -431,15 +452,18 @@ const editorExerciseCountByConcept = computed(() => countExercisesByConcept(exer
   !exerciseEditor.value.curriculum.subjectId || exercise.curriculum.subjectId === exerciseEditor.value.curriculum.subjectId
 ))))
 const searchExerciseCountByConcept = computed(() => countExercisesByConcept(exercises.value.filter((exercise) => (
-  (!exerciseSearchCurriculum.value.course || exercise.curriculum.course === exerciseSearchCurriculum.value.course)
-  && (!exerciseSearchCurriculum.value.subjectId || exercise.curriculum.subjectId === exerciseSearchCurriculum.value.subjectId)
+  (!exerciseSearchCourse.value || exercise.curriculum.course === exerciseSearchCourse.value)
+  && (!exerciseSearchSubject.value || exercise.curriculum.subjectId === exerciseSearchSubject.value)
 ))))
 const activeMathSubjectTitle = computed(() => mathSubjectsById.get(activeMathSubjectId.value)?.title || 'Matemáticas')
 const exerciseEditorCurriculumLabel = computed(() => exerciseCurriculumLabel(exerciseEditor.value))
 const exerciseSearchFilterCount = computed(() => Number(Boolean(exerciseSearchCurriculum.value.course))
   + Number(Boolean(exerciseSearchCurriculum.value.subjectId))
   + exerciseSearchCurriculum.value.conceptIds.length
-  + Number(Boolean(exerciseSearchCurriculum.value.competencial)))
+  + Number(Boolean(exerciseSearchCurriculum.value.competencial))
+  + Number(exerciseSearchCompleteness.value !== 'all')
+  + Number(exerciseSearchPublication.value !== 'all')
+  + Number(exerciseSearchSolution.value !== 'all'))
 const selectedExercise = computed(() => exercises.value.find((exercise) => exercise.id === selectedExerciseId.value) || null)
 const isEditingPersistedExercise = computed(() => Boolean(
   exerciseEditor.value.id && exercises.value.some((exercise) => exercise.id === exerciseEditor.value.id),
@@ -1042,6 +1066,7 @@ function normalizeVariation(variation = {}) {
   const pdfLayout = normalizePdfLayout(variation.pdf)
   return {
     ...variation,
+    _trainingSource: variation._trainingSource || variation,
     id: variation.id || crypto.randomUUID(),
     ...(Array.isArray(variation.archivos) ? { archivos: normalizeExerciseFiles(variation.archivos) } : {}),
     enunciado: code,
@@ -1078,6 +1103,7 @@ function normalizeExercise(exercise) {
   })
   return {
     ...exercise,
+    _trainingSource: exercise._trainingSource || exercise,
     enunciado: code,
     tags: normalizeTags(exercise.tags),
     curriculum,
@@ -1209,6 +1235,62 @@ function setSearchExerciseVersion(exercise, version) {
 
 function searchExerciseVersion(exercise) {
   return exerciseVersion(exercise, searchExerciseVersionIndex(exercise)) || exercise
+}
+
+function searchExercisePublished(exercise) {
+  const index = searchExerciseVersionIndex(exercise)
+  const version = searchExerciseVersion(exercise)
+  return index ? (typeof version.studentTrainingPublished === 'boolean' ? version.studentTrainingPublished : exercise.studentTrainingPublished === true) : exercise.studentTrainingPublished === true
+}
+
+const trainingPublicationBusy = reactive({})
+const exerciseReadinessCache = new WeakMap()
+function searchExerciseReadiness(exercise) {
+  const index = searchExerciseVersionIndex(exercise)
+  const version = searchExerciseVersion(exercise)
+  const source = version?._trainingSource || version
+  if (!source || typeof source !== 'object') return trainingReadiness({}, { exerciseId: exercise.id, bucketName: storage.app.options.storageBucket, variant: index > 0 })
+  const cached = exerciseReadinessCache.get(source)
+  if (cached?.exerciseId === exercise.id && cached.variant === (index > 0)) return cached.result
+  const result = trainingReadiness(source, { exerciseId: exercise.id, bucketName: storage.app.options.storageBucket, variant: index > 0 })
+  exerciseReadinessCache.set(source, { exerciseId: exercise.id, variant: index > 0, result })
+  return result
+}
+async function toggleStudentTrainingPublication(exercise) {
+  if (!exercise?.id || trainingPublicationBusy[exercise.id]) return
+  const index = searchExerciseVersionIndex(exercise)
+  const version = searchExerciseVersion(exercise)
+  const previous = searchExercisePublished(exercise)
+  const next = !previous
+  trainingPublicationBusy[exercise.id] = true
+  version.studentTrainingPublished = next
+  try {
+    await runTransaction(db, async (transaction) => {
+      const reference = doc(db, 'ejercicios', exercise.id)
+      const snapshot = await transaction.get(reference)
+      if (!snapshot.exists()) throw new Error('El ejercicio ya no existe.')
+      const stored = snapshot.data()
+      const variations = (stored.variaciones || []).map((item) => ({ ...item, studentTrainingPublished: typeof item.studentTrainingPublished === 'boolean' ? item.studentTrainingPublished : stored.studentTrainingPublished === true }))
+      if (index) {
+        const position = variations.findIndex((item) => item.id === version.id)
+        const target = position >= 0 ? position : (variations[index - 1] && !variations[index - 1].id ? index - 1 : -1)
+        if (target < 0) throw new Error('La variante ya no existe.')
+        variations[target] = { ...variations[target], id: version.id, studentTrainingPublished: next }
+      }
+      transaction.update(reference, { variaciones: variations, ...(!index ? { studentTrainingPublished: next } : {}) })
+    })
+    const current = exercises.value.find((item) => item.id === exercise.id)
+    if (current) {
+      current.variaciones.forEach((item) => { if (typeof item.studentTrainingPublished !== 'boolean') item.studentTrainingPublished = index ? exercise.studentTrainingPublished === true : previous })
+      if (!index) current.studentTrainingPublished = next
+      else if (current.variaciones[index - 1]) current.variaciones[index - 1].studentTrainingPublished = next
+    }
+  } catch (error) {
+    const current = exercises.value.find((item) => item.id === exercise.id)
+    if (current) (index ? current.variaciones[index - 1] : current).studentTrainingPublished = previous
+    showAppErrorToast('No se ha podido cambiar la publicación para alumnos. Vuelve a intentarlo.')
+    console.error('No se ha podido cambiar la publicación del ejercicio:', error)
+  } finally { delete trainingPublicationBusy[exercise.id] }
 }
 
 function searchExercisePdf(exercise) {
@@ -1729,6 +1811,7 @@ function compilationArtifactLatex(errorMessage = '', structure = activeExerciseS
     code = buildExerciseLatex(structure, {
       includeSolutions: true,
       includeAnswers: true,
+      includeCriteria: false,
       preserveApartadosEnvironment: false,
     })
   } else if (key === 'statement.pdf') {
@@ -1762,6 +1845,7 @@ function compilationArtifactLatex(errorMessage = '', structure = activeExerciseS
     code = buildExerciseLatex(structure, {
       includeSolutions: solved,
       includeAnswers: solved,
+      includeCriteria: false,
       preserveApartadosEnvironment: !solved,
     })
   }
@@ -1955,6 +2039,7 @@ async function loadExercises({ reset = false } = {}) {
   } else {
     isLoadingMoreExercises.value = true
   }
+  let loaded = false
   try {
     const constraints = [orderBy(documentId()), firestoreLimit(exerciseBatchSize)]
     if (lastExerciseDocument) constraints.splice(1, 0, startAfter(lastExerciseDocument))
@@ -1976,6 +2061,7 @@ async function loadExercises({ reset = false } = {}) {
     }
     lastExerciseDocument = snapshot.docs.at(-1) || lastExerciseDocument
     hasMoreExercises.value = snapshot.size === exerciseBatchSize
+    loaded = true
   } catch (error) {
     if (!isActiveTeacherSession(sessionUid)) return
     exercisesError.value = reset
@@ -1985,6 +2071,9 @@ async function loadExercises({ reset = false } = {}) {
   } finally {
     if (reset) isLoadingExercises.value = false
     else isLoadingMoreExercises.value = false
+    if (loaded && hasMoreExercises.value && exerciseStatusFiltersActive.value) {
+      void nextTick(handleExerciseScroll)
+    }
   }
 }
 
@@ -2011,10 +2100,23 @@ function handleExerciseScroll() {
   })
 }
 
-watch(exerciseSearchQuery, async () => {
+watch([exerciseSearchCompleteness, exerciseSearchPublication, exerciseSearchSolution, () => exerciseSearchCurriculum.value.competencial], async () => {
+  window.cancelAnimationFrame(exerciseStatusApplyFrame)
+  window.clearTimeout(exerciseStatusApplyTimer)
+  await nextTick()
+  exerciseStatusApplyFrame = window.requestAnimationFrame(() => {
+    exerciseStatusApplyTimer = window.setTimeout(() => {
+      appliedExerciseStatus.completeness = exerciseSearchCompleteness.value
+      appliedExerciseStatus.publication = exerciseSearchPublication.value
+      appliedExerciseStatus.solution = exerciseSearchSolution.value
+      appliedExerciseStatus.competencial = Boolean(exerciseSearchCurriculum.value.competencial)
+    }, 30)
+  })
+})
+watch([exerciseSearchQuery, appliedExerciseStatus, exerciseSearchCourse, exerciseSearchSubject, exerciseSearchConceptKey], async () => {
   await nextTick()
   handleExerciseScroll()
-})
+}, { deep: true })
 
 async function loadMathConcepts() {
   const sessionUid = currentTeacherId.value
@@ -3107,6 +3209,9 @@ function formatFileSize(bytes) {
 
 function clearExerciseCurriculumFilters() {
   exerciseSearchCurriculum.value = emptyCurriculum()
+  exerciseSearchCompleteness.value = 'all'
+  exerciseSearchPublication.value = 'all'
+  exerciseSearchSolution.value = 'all'
 }
 
 function selectExerciseVersion(version) {
@@ -3337,7 +3442,7 @@ async function openVariationGeneration(experimental = false) {
 }
 
 async function addExerciseVariation(experimental = false) {
-  const original = exerciseEditor.value.enunciado.trim()
+  const original = buildExerciseLatex(exerciseEditor.value.structure || parseExerciseLatex(exerciseEditor.value.enunciado), { includeCriteria: false, preserveApartadosEnvironment: true }).trim()
   if (!original || isGeneratingVariation.value) return
   if (!isAppCheckConfigured) { exercisesError.value = 'App Check no está configurado en este entorno.'; return }
   const editor = exerciseEditor.value
@@ -3371,6 +3476,7 @@ async function addExerciseVariation(experimental = false) {
       pendingVisualVariant.value = draft
     }
     const variation = normalizeVariation({ id: draft.id, enunciado: draft.enunciado, modelo: draft.model, archivos: [], visualGeneration: { imagePlan: draft.imagePlan, sourceExerciseId: editor.id || null, createdAt: new Date().toISOString() } })
+    variation.studentTrainingPublished = false
     variation.archivos = normalizeExerciseFiles(referencedImageFiles(variation.enunciado, editor.archivos))
     if (draft.imagePlan.needed) {
       if (!exerciseVisuals.form.imageModel) throw new Error('El ejercicio está preparado. Selecciona un generador para crear su imagen.')
@@ -3387,11 +3493,60 @@ async function addExerciseVariation(experimental = false) {
     pendingVisualVariant.value = null
     exerciseVisuals.generationDialog = false
     selectExerciseVersion(editor.variaciones.length)
+    const originalStructure = editor.structure || parseExerciseLatex(editor.enunciado)
+    let structure = parseExerciseLatex(variation.enunciado)
+    structure.contenidosGenerales = [...(originalStructure.contenidosGenerales || [])]
+    structure.contenidos = [...(originalStructure.contenidos || [])]
+    structure.apartados.forEach((part, index) => {
+      const originalPart = (originalStructure.apartados || []).find((item) => item.id === part.id) || originalStructure.apartados?.[index]
+      part.contenidos = [...(originalPart?.contenidos || [])]
+    })
+    variation.structure = aggregateExerciseStructure(structure)
+    const needsSolution = structure.apartados.length ? structure.apartados.some((part) => !part.solucion?.trim()) : !structure.solucion?.trim()
+    if (needsSolution) {
+      progressPhase = 'Resolviendo la variante'
+      updateProgressText()
+      const response = await httpsCallable(functions, 'generateExerciseSolution', { timeout: 120000 })({ enunciado: variation.enunciado, model, curriculum: exerciseAiCurriculum() })
+      const solved = removeBlankLinesInsideAligned(response.data?.enunciado?.trim() || '')
+      const issues = validateExerciseSolutionSource(normalizeDisplayMathDelimiters(variation.enunciado), normalizeDisplayMathDelimiters(solved))
+      if (!solved || issues.length) throw new Error(`La variante se ha creado, pero falta revisar su solución. ${issues[0] || ''}`)
+      variation.enunciado = solved
+      structure = mergeExerciseStructure(parseExerciseLatex(solved), variation.structure)
+      variation.structure = structure
+    }
+    variation.solucionIA = true
+    let segments = structure.apartados.length ? structure.apartados : [structure]
+    if (segments.some((part) => !part.solucion?.trim())) throw new Error('La variante se ha creado, pero falta la solución de algún apartado.')
+    if (segments.some((part) => !part.contenidos?.length) && editor.curriculum.subjectId) {
+      progressPhase = 'Asignando contenidos'
+      updateProgressText()
+      const alignment = await httpsCallable(functions, 'generateDocumentContent', { timeout: 310000 })({ model, mode: 'align', course: editor.curriculum.course, subjectId: editor.curriculum.subjectId, concepts: exerciseGenerationConceptCatalog(), exercises: [{ sourceBlockId: variation.id, latex: variation.enunciado, segments: segments.map((part, index) => ({ segmentIndex: structure.apartados.length ? index : -1, points: Number(part.puntuacion) || 0, statement: part.enunciado || '', answer: part.respuesta || '', workedSolution: part.solucion || '', contentIds: part.contenidos || [], gradingCriteria: [] })) }] })
+      for (const item of alignment.data?.alignments || []) {
+        const target = structure.apartados.length ? structure.apartados[item.segmentIndex] : structure
+        if (target && !target.contenidos?.length) target.contenidos = item.contentIds || []
+      }
+      variation.structure = aggregateExerciseStructure(structure)
+      structure = variation.structure
+      segments = structure.apartados.length ? structure.apartados : [structure]
+    }
+    const eligible = segments.map((part, index) => ({ id: structure.apartados.length ? part.id : 'exercise', label: structure.apartados.length ? `Apartado ${String.fromCharCode(97 + index)}` : 'Ejercicio', points: Number(part.puntuacion) || 0, statement: part.enunciado || '', answer: part.respuesta || '', workedSolution: part.solucion || '', contentIds: part.contenidos || [] }))
+    if (eligible.some((part) => !part.points || !part.statement.trim())) throw new Error('La variante se ha creado, pero hay que asignar puntuaciones y revisar sus apartados antes de generar los criterios.')
+    progressPhase = 'Preparando criterios de calificación'
+    updateProgressText()
+    const grading = await httpsCallable(functions, 'suggestExerciseGradingCriteria', { timeout: 120000 })({ model, course: editor.curriculum.course, subjectId: editor.curriculum.subjectId, subjectTitle: mathSubjectsById.get(editor.curriculum.subjectId)?.title || '', curriculum: exerciseAiCurriculum(), latex: variation.enunciado, segments: eligible })
+    const criteria = new Map((grading.data?.segments || []).map((item) => [item.segmentId, item.gradingCriteria]))
+    segments.forEach((part, index) => { part.gradingCriteria = criteria.get(eligible[index].id) || [] })
+    variation.structure = aggregateExerciseStructure(structure)
+    variation.enunciado = buildExerciseLatex(variation.structure, { preserveApartadosEnvironment: true })
+    if (segments.some((part) => !part.gradingCriteria.length)) throw new Error('La variante se ha creado, pero faltan criterios de calificación en algún apartado.')
+    if (segments.some((part) => !part.contenidos?.length)) throw new Error('La variante se ha creado, pero faltan contenidos en algún apartado. Asígnalos antes de publicarla.')
+    mountLatexEditor()
     progressPhase = 'Compilando la previsualización'
     updateProgressText()
     await compileExercisePreviews(variation.enunciado, exercisePreambleName())
   } catch (error) {
     if (generatedFile) revokePendingImage(generatedFile)
+    if (exerciseEditor.value === editor && selectedExerciseVersion.value > 0) mountLatexEditor()
     exercisesError.value = error.message || 'No se ha podido generar la variante con su imagen.'
   } finally {
     window.clearInterval(timer)
@@ -3445,7 +3600,8 @@ async function compileExerciseSolutionPreviews(code, structure, preambleName, op
   const apartadoIndex = Number.isInteger(options.apartadoIndex) ? options.apartadoIndex : null
   if (options.compileFull !== false) {
     if (hasExerciseSolutions(code)) {
-      const completeSolution = await compilePdfBlob(resolvedLatex(code), preambleName, undefined, exerciseRenderProfiles.solved)
+      const solutionCode = buildExerciseLatex(structure, { includeSolutions: true, includeAnswers: true, includeCriteria: false, preserveApartadosEnvironment: false })
+      const completeSolution = await compilePdfBlob(resolvedLatex(solutionCode), preambleName, undefined, exerciseRenderProfiles.solved)
       setActivePreviewPdf('resuelto', URL.createObjectURL(completeSolution))
     } else {
       setActivePreviewPdf('resuelto', null)
@@ -3496,6 +3652,7 @@ async function compileExercisePreviews(code, preambleName = selectedPreamble.val
     const rebuiltCode = buildExerciseLatex(structure, {
       includeSolutions: true,
       includeAnswers: true,
+      includeCriteria: false,
       preserveApartadosEnvironment: true,
     })
     const statementPdf = await compilePdfBlob(statementLatex(rebuiltCode), preambleName, undefined, exerciseRenderProfiles.statement)
@@ -3626,6 +3783,7 @@ function structuredVariationForSave(variation, previous = {}, previousExercise =
     visualGeneration: variation.visualGeneration || previous.visualGeneration || null,
     modelo: variation.modelo || previous.modelo || null,
     solucionIA: Boolean(variation.solucionIA),
+    studentTrainingPublished: typeof variation.studentTrainingPublished === 'boolean' ? variation.studentTrainingPublished : (typeof previous.studentTrainingPublished === 'boolean' ? previous.studentTrainingPublished : Object.keys(previous).length > 0 && previousExercise.studentTrainingPublished === true),
     compilation: compilationStateAfterSave(previous.compilation, revision, sourceChanged),
   }
   const nextPaths = new Set(exercisePdfStoragePaths(persisted))
@@ -3731,6 +3889,7 @@ async function saveExercise(options = {}) {
       archivos: normalizeExerciseFiles(exerciseEditor.value.archivos),
       imageHistory: exerciseEditor.value.imageHistory || [],
       solucionIA: Boolean(exerciseEditor.value.solucionIA),
+      studentTrainingPublished: previousData.studentTrainingPublished === true,
       variaciones,
       // Se conserva como referencia obsoleta hasta que la nueva miniatura se
       // publique; el sourceUrl evita mostrarla y la función elimina el objeto anterior.
@@ -3761,7 +3920,7 @@ async function saveExercise(options = {}) {
       const imageVersions = [data, ...data.variaciones]
       for (const [index, version] of imageVersions.entries()) {
         const hasGeneratedVisuals = version.visualGeneration || version.figureGenerations?.length || (version.archivos || []).some((file) => file.generated)
-        if (version.compilation?.status !== 'outdated' || !hasGeneratedVisuals) continue
+        if (version.compilation?.status !== 'outdated' || (!hasGeneratedVisuals && !(index > 0 && version.modelo))) continue
         try {
           await httpsCallable(functions, 'queueExerciseCompilation', { timeout: 30000 })({ exerciseId: reference.id, variationIndex: index === 0 ? null : index - 1, mode: 'selective', preambleName: exercisePreambleName() })
         } catch (error) {
@@ -4919,6 +5078,8 @@ onBeforeUnmount(() => {
   stopAuthWatch?.()
   window.clearInterval(currentTimeInterval)
   window.cancelAnimationFrame(exerciseScrollFrame)
+  window.cancelAnimationFrame(exerciseStatusApplyFrame)
+  window.clearTimeout(exerciseStatusApplyTimer)
   window.removeEventListener('scroll', handleExerciseScroll)
   window.removeEventListener('wheel', handleExerciseScroll)
   window.removeEventListener('touchmove', handleExerciseScroll)
@@ -5408,10 +5569,10 @@ onBeforeUnmount(() => {
           hide-details
           class="app-toolbar-search"
         />
-        <v-tooltip v-if="active === 'Ejercicios'" text="Filtrar por curso, asignatura y contenidos" location="bottom">
+        <v-tooltip v-if="active === 'Ejercicios'" text="Filtrar ejercicios" location="bottom">
           <template #activator="{ props }">
             <v-badge :content="exerciseSearchFilterCount" :model-value="exerciseSearchFilterCount > 0" color="secondary" offset-x="5" offset-y="5">
-              <v-btn v-bind="props" icon="mdi-filter-variant" variant="text" aria-label="Filtrar ejercicios por contenidos" @click="exerciseSearchCurriculumDialog = true" />
+              <v-btn v-bind="props" icon="mdi-filter-variant" variant="text" aria-label="Filtrar ejercicios" @click="exerciseSearchCurriculumDialog = true" />
             </v-badge>
           </template>
         </v-tooltip>
@@ -5627,10 +5788,19 @@ onBeforeUnmount(() => {
                   <header class="exercise-result-header">
                     <div class="exercise-result-toolbar">
                       <span class="exercise-result-subject" :title="exerciseSubjectLabel(exercise)">{{ exerciseSubjectLabel(exercise) }}</span>
+                      <span class="exercise-result-toolbar-spacer" />
+                      <v-tooltip :text="searchExerciseReadiness(exercise).complete ? 'Esta versión está completa' : `Esta versión está incompleta: ${searchExerciseReadiness(exercise).reasons.join(' ')}`" location="top">
+                        <template #activator="{ props }"><v-icon v-bind="props" :icon="searchExerciseReadiness(exercise).complete ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'" :color="searchExerciseReadiness(exercise).complete ? 'success' : 'warning'" size="13" :aria-label="searchExerciseReadiness(exercise).complete ? 'Versión completa' : 'Versión incompleta'" /></template>
+                      </v-tooltip>
+                      <v-tooltip :text="searchExercisePublished(exercise) ? 'Retirar esta versión del entrenamiento' : 'Publicar esta versión para alumnos'" location="top">
+                        <template #activator="{ props }"><v-btn v-bind="props" :icon="searchExercisePublished(exercise) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'" size="x-small" variant="text" :color="searchExercisePublished(exercise) ? 'primary' : undefined" :loading="Boolean(trainingPublicationBusy[exercise.id])" :disabled="Boolean(trainingPublicationBusy[exercise.id])" :aria-label="searchExercisePublished(exercise) ? 'Retirar esta versión del entrenamiento' : 'Publicar esta versión para alumnos'" :aria-pressed="searchExercisePublished(exercise)" class="exercise-training-publication" @click.stop="toggleStudentTrainingPublication(exercise)" /></template>
+                      </v-tooltip>
                     </div>
                     <ExerciseVariantSelector
                       :model-value="searchExerciseVersionIndex(exercise)"
                       :variations="exercise.variaciones || []"
+                      :publication-root="exercise.studentTrainingPublished === true"
+                      show-publication
                       compact
                       @update:model-value="setSearchExerciseVersion(exercise, $event)"
                     />
@@ -6187,24 +6357,27 @@ onBeforeUnmount(() => {
     <v-dialog v-model="exerciseSearchCurriculumDialog" max-width="1120" height="min(820px, 88vh)">
       <v-card class="exercise-filter-dialog">
         <v-card-title class="exercise-filter-dialog-title">
-          <span>Filtrar por contenidos</span>
-          <v-btn icon="mdi-close" variant="text" aria-label="Cerrar filtros" @click="exerciseSearchCurriculumDialog = false" />
+          <span>Filtrar ejercicios</span>
+          <div class="exercise-filter-title-actions"><v-tooltip text="Limpiar filtros" location="bottom"><template #activator="{ props }"><v-btn v-bind="props" icon="mdi-filter-off-outline" variant="text" :disabled="!exerciseSearchFilterCount" aria-label="Limpiar filtros" @click="clearExerciseCurriculumFilters" /></template></v-tooltip><v-btn icon="mdi-close" variant="text" aria-label="Cerrar filtros" @click="exerciseSearchCurriculumDialog = false" /></div>
         </v-card-title>
         <v-divider />
         <v-card-text class="exercise-filter-dialog-content">
           <ExerciseCurriculumPicker
+            class="exercise-filter-map"
             v-model="exerciseSearchCurriculum"
             :nodes="mathConceptNodes"
             :subject-selections="mathConceptSubjectSelections"
             :exercise-counts="searchExerciseCountByConcept"
-          />
+          >
+            <template #tools>
+              <div class="exercise-map-status-controls" role="group" aria-label="Filtros de ejercicios">
+                <v-tooltip :text="`${completenessFilterView.label}. Pulsar para cambiar`" location="start"><template #activator="{ props }"><v-btn v-bind="props" :icon="completenessFilterView.icon" :class="`status-${exerciseSearchCompleteness}`" class="exercise-map-status-button" variant="text" :aria-label="`${completenessFilterView.label}. Pulsar para cambiar`" @click="exerciseSearchCompleteness = nextExerciseFilterState('completeness', exerciseSearchCompleteness)" /></template></v-tooltip>
+                <v-tooltip :text="`${publicationFilterView.label}. Pulsar para cambiar`" location="start"><template #activator="{ props }"><v-btn v-bind="props" :icon="publicationFilterView.icon" :class="`status-${exerciseSearchPublication}`" class="exercise-map-status-button" variant="text" :aria-label="`${publicationFilterView.label}. Pulsar para cambiar`" @click="exerciseSearchPublication = nextExerciseFilterState('publication', exerciseSearchPublication)" /></template></v-tooltip>
+                <v-tooltip :text="`${solutionFilterView.label}. Pulsar para cambiar`" location="start"><template #activator="{ props }"><v-btn v-bind="props" :icon="solutionFilterView.icon" :class="`status-${exerciseSearchSolution}`" class="exercise-map-status-button" variant="text" :aria-label="`${solutionFilterView.label}. Pulsar para cambiar`" @click="exerciseSearchSolution = nextExerciseFilterState('solution', exerciseSearchSolution)" /></template></v-tooltip>
+              </div>
+            </template>
+          </ExerciseCurriculumPicker>
         </v-card-text>
-        <v-divider />
-        <v-card-actions class="px-5 py-3">
-          <v-btn variant="text" prepend-icon="mdi-filter-off-outline" :disabled="!exerciseSearchFilterCount" @click="clearExerciseCurriculumFilters">Limpiar</v-btn>
-          <v-spacer />
-          <v-btn color="primary" variant="flat" @click="exerciseSearchCurriculumDialog = false">Aplicar</v-btn>
-        </v-card-actions>
       </v-card>
     </v-dialog>
 

@@ -5,6 +5,11 @@ function normalizedCourse(course) {
     .trim()
 }
 
+export const criterionMathInstructions = String.raw`FORMATO MATEMÁTICO DE LOS CRITERIOS:
+- En cada descripción nueva de criterio o logro, escribe TODAS las expresiones matemáticas en LaTeX entre $...$, incluso variables, intervalos, ecuaciones, fracciones, derivadas y conjuntos. Mantén el texto explicativo fuera de esos delimitadores.
+- Usa comandos LaTeX en lugar de símbolos matemáticos Unicode: por ejemplo $x\geq 0$, $f'(x)=\frac{1}{x}$, $\mathbb{R}$ y $(0,1)\cup(1,+\infty)$. No uses ∪, ∩, ≥, ≤, ∞ ni exponentes Unicode en las expresiones.
+- Devuelve las descripciones como cadenas JSON válidas: escapa las barras inversas según JSON. No incluyas delimitadores Markdown ni modifiques las descripciones existentes cuando se pida conservarlas exactamente.`
+
 export function isLowerSecondaryCourse(course) {
   return /(?:^|\s)[123]\s*(?:\.?[ºo])?\s*ESO(?:\s|$)/i.test(normalizedCourse(course))
 }

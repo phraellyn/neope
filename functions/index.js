@@ -23,8 +23,9 @@ export {
 } from './auth.js'
 import { codeForCompiler, compilationArtifacts, sourceHash } from './exerciseCompilation.js'
 import { validateExerciseSolutionSource } from './exerciseSolutionSource.js'
+import { normalizeGeneratedCriterionMath } from './criteriaLatex.js'
 import { curriculumPromptContext } from './curriculumContext.js'
-import { achievementGranularityInstructions } from './achievementGranularity.js'
+import { achievementGranularityInstructions, criterionMathInstructions } from './achievementGranularity.js'
 import { generateExerciseRaster, prepareVisualVariation, regenerateTikzFigure, visualMessageContent, visualModelCatalog, visualVariationFormat } from './visualGeneration.js'
 import { graphicReferences, tikzFigures } from './exerciseVisualsShared.js'
 import { documentVariationHandlers } from './documentVariations.js'
@@ -1959,6 +1960,8 @@ export const suggestExerciseGradingCriteria = onCall({
 
 ${achievementGranularityInstructions(course)}
 
+${criterionMathInstructions}
+
 Antes de devolver la respuesta, revisa que ninguna descripción contenga varias acciones evaluables que deban tener puntuación independiente y que la suma de cada segmento sea exacta. Devuelve todos los segmentos solicitados y únicamente el JSON del esquema.`,
           },
           {
@@ -2001,7 +2004,7 @@ Antes de devolver la respuesta, revisa que ninguna descripción contenga varias 
         .map((criterion) => {
           return {
             id: `criterion-${randomUUID()}`,
-            description: cleanText(criterion?.description, 1_200),
+            description: normalizeGeneratedCriterionMath(cleanText(criterion?.description, 1_200)),
             points: Math.max(0, Number(criterion?.points) || 0),
             source: 'ai',
             model,
@@ -2043,7 +2046,7 @@ Antes de devolver la respuesta, revisa que ninguna descripción contenga varias 
   }
 })
 
-function normalizeGeneratedAchievements(achievements, points, law, model) {
+function normalizeGeneratedAchievements(achievements, points, law, model, { preserveDescriptions = false } = {}) {
   const criterionById = new Map((law.criteria || []).map((item) => [item.id, item]))
   const competencyById = new Map((law.competencies || []).map((item) => [item.id, item]))
   const descriptorIds = new Set((law.descriptors || []).map((item) => item.id))
@@ -2055,7 +2058,7 @@ function normalizeGeneratedAchievements(achievements, points, law, model) {
     }))
     return {
       id: `achievement-${randomUUID()}`,
-      description: String(achievement?.description || '').trim().slice(0, 1_200),
+      description: preserveDescriptions ? String(achievement?.description || '').trim().slice(0, 1_200) : normalizeGeneratedCriterionMath(String(achievement?.description || '').trim().slice(0, 1_200)),
       points: Math.max(0, Number(achievement?.points) || 0),
       alignment: {
         criterionIds,
@@ -2254,6 +2257,7 @@ REGLAS MATEMÁTICAS Y DE EVALUACIÓN:
 - Escribe directamente todos los caracteres españoles en UTF-8 (á, é, í, ó, ú, ü, ñ, ¿, ¡). No uses formas heredadas como \\'o, \\~n o \\c{c}; hacen el código innecesariamente ilegible.
 - aligned no activa el modo matemático: todo bloque \\begin{aligned}...\\end{aligned} debe estar completamente envuelto en $$...$$. Nunca escribas aligned directamente en modo texto ni dentro de center sin esos delimitadores.
 - Los logros deben ser observables, independientes y corregibles. Cuando un segmento incluya gradingCriteria, conserva exactamente ese desglose y sus puntuaciones: tu tarea es vincularlo curricularmente, no reescribirlo. contentIds, criterionIds y descriptorId solo pueden proceder de los catálogos recibidos; no inventes identificadores.
+${criterionMathInstructions}
 ${mode === 'exercise' ? `- Devuelve inferredCourse e inferredSubjectId eligiendo exclusivamente una combinación incluida en subjectCatalog. Si generationOptions.inferClassification es false, conserva los valores recibidos en context.
 - Devuelve exactamente un ejercicio. competencial será true únicamente si exige aplicar matemáticas en un contexto real o significativo, modelizar, interpretar o tomar decisiones; no por el mero hecho de tener texto.
 - Si generationOptions.generateSolutions es false, answer y workedSolution deben ser cadenas vacías. Si generationOptions.generateGradingCriteria es false, achievements debe ser vacío. Si generationOptions.inferConcepts es false, contentIds debe conservar los aportados o quedar vacío.` : '- Devuelve inferredCourse e inferredSubjectId con los valores recibidos en context.'}
@@ -2318,7 +2322,7 @@ ${achievementGranularityInstructions(course)}
         sourceBlockId: source.sourceBlockId,
         segmentIndex: segment.segmentIndex,
         contentIds: normalizeContentIds(alignment?.contentIds),
-        achievements: normalizeGeneratedAchievements(alignment?.achievements, segment.points, law, model),
+        achievements: normalizeGeneratedAchievements(alignment?.achievements, segment.points, law, model, { preserveDescriptions: Boolean(segment.gradingCriteria?.length) }),
       }
     }).filter(Boolean)
     if (mode === 'align' && !alignments.length) throw new HttpsError('internal', 'La IA no ha generado el análisis de los ejercicios.')
