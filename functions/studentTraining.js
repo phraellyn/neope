@@ -1,6 +1,6 @@
 import { HttpsError } from 'firebase-functions/v2/https'
 import { createHash } from 'node:crypto'
-import { conceptProgress, pdfStoragePath, selectTrainingCandidate, trainingReadiness, trainingSegments, trainingVersionPublished } from './studentTrainingLogic.js'
+import { conceptProgress, pdfStoragePath, selectTrainingCandidate, terminalConceptsForSelection, trainingReadiness, trainingSegments, trainingVersionPublished } from './studentTrainingLogic.js'
 import { examPdfCandidates, examResultItem, safeExamAssessment, safeExamExercise } from './studentExam.js'
 
 const validId = (value) => typeof value === 'string' && value.length > 0 && value.length <= 500 && value !== '.' && value !== '..' && !value.includes('/')
@@ -81,8 +81,10 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     const context = await identity(request, data.groupId)
     const nodes = await catalog(context.group.subjectId)
     const allowed = new Set(nodes.map((node) => node.id))
-    const selected = unique(data.selectedConceptIds)
-    if (!selected.length || selected.some((id) => !allowed.has(id))) throw new HttpsError('invalid-argument', 'Selecciona contenidos de esta asignatura.')
+    const requested = unique(data.selectedConceptIds)
+    if (!requested.length || requested.some((id) => !allowed.has(id))) throw new HttpsError('invalid-argument', 'Selecciona contenidos de esta asignatura.')
+    const selected = terminalConceptsForSelection(requested, nodes)
+    if (!selected.length) throw new HttpsError('invalid-argument', 'Selecciona contenidos finales de esta asignatura.')
     const [bank, attempts, sessions] = await Promise.all([
       db.collection('ejercicios').where('curriculum.subjectId', '==', context.group.subjectId).get(),
       context.attempts.where('subjectId', '==', context.group.subjectId).get(),
@@ -96,11 +98,13 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     })
     const completed = attempts.docs.map((doc) => doc.data()).filter((item) => item.status === 'completed').map((item) => item.key)
     const active = sessions.docs.map((doc) => doc.data()).filter((item) => ['active', 'review'].includes(item.status)).map((item) => item.key)
+    const previousSession = sessions.docs.find((doc) => doc.id === data.groupId)?.data()
+    const deferredKeys = unique(previousSession?.deferredKeys).slice(-1000)
     if (sessions.docs.some((doc) => doc.id === data.groupId && ['active', 'review'].includes(doc.data().status))) throw new HttpsError('failed-precondition', 'Ya hay un ejercicio en curso.')
     let candidate, version, statement, solution
     const unavailable = Array.isArray(data.excludeKeys) ? data.excludeKeys.filter((key) => typeof key === 'string' && key.length <= 1000).slice(0, 50) : []
     while (true) {
-      candidate = selectTrainingCandidate(exercises, selected, nodes, completed, { repeat: data.repeat === true, active: [...active, ...unavailable] })
+      candidate = selectTrainingCandidate(exercises, selected, nodes, completed, { repeat: data.repeat === true, active: [...active, ...unavailable], deferred: deferredKeys })
       if (!candidate) throw new HttpsError('not-found', unavailable.length ? 'No quedan ejercicios disponibles. Algunos necesitan volver a compilarse.' : 'No quedan ejercicios disponibles para estos contenidos.')
       const root = exercises.find((exercise) => exercise.id === candidate.exerciseId)
       version = candidate.variationId ? root.variaciones.find((item) => item.id === candidate.variationId) : root
@@ -126,7 +130,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     }
     const rawDuration = Number(version.durationMinutes || version.structure?.tiempo)
     const durationMinutes = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 15
-    const session = { id, groupId: data.groupId, subjectId: context.group.subjectId, status: 'active', key: candidate.key, exerciseId: candidate.exerciseId, variationId: candidate.variationId, selectedConceptIds: selected,
+    const session = { id, groupId: data.groupId, subjectId: context.group.subjectId, status: 'active', key: candidate.key, exerciseId: candidate.exerciseId, variationId: candidate.variationId, selectedConceptIds: selected, deferredKeys,
       segments: candidate.segments, statementPath: privateStatement, solutionPath: privateSolution, durationMinutes, timer: { elapsedMs: 0, runningSince: Date.now(), alerted: false } }
     try { await db.runTransaction(async (tx) => {
       const current = await tx.get(context.session)
@@ -223,6 +227,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
           if (!stored.exists || stored.data()?.status !== 'completed') throw new HttpsError('not-found', 'El intento ya no está disponible.')
           if (!review && !trainingVersionPublished(currentExercise.data(), attempt.variationId)) throw new HttpsError('failed-precondition', 'Este ejercicio ya no está disponible para volver a hacerlo.')
           if (used.data()?.status === 'active') throw new HttpsError('failed-precondition', 'Este ejercicio está en curso en otra asignatura.')
+          session.deferredKeys = current.data()?.subjectId === attempt.subjectId ? unique(current.data()?.deferredKeys).slice(-1000) : []
           tx.set(usedRef(context, attempt.subjectId, attempt.key), { key: attempt.key, subjectId: attempt.subjectId, status: 'active', sessionId: id })
           tx.set(context.session, session)
         })
@@ -248,7 +253,10 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
       else if (data.action === 'reset' && session.status === 'active') session.timer = { elapsedMs: 0, runningSince: timer.runningSince ? now : null, alerted: false }
       else if (data.action === 'alerted' && session.status === 'active') session.timer = { ...timer, alerted: true }
       else if (data.action === 'reveal' && session.status === 'active') { session.timer = { ...timer, elapsedMs: elapsed, runningSince: null }; session.status = 'review' }
-      else if (data.action === 'abandon') { session.status = 'abandoned'; cleanup = [session.statementPath, session.solutionPath]; if (reservation.data()?.sessionId === session.id) tx.delete(usedRef) }
+      else if (data.action === 'abandon') {
+        if (session.status === 'active') session.deferredKeys = [...unique(session.deferredKeys).filter((key) => key !== session.key), session.key].slice(-1000)
+        session.status = 'abandoned'; cleanup = [session.statementPath, session.solutionPath]; if (reservation.data()?.sessionId === session.id) tx.delete(usedRef)
+      }
       else if (data.action === 'complete' && session.status === 'review') {
         const selected = new Set(Array.isArray(data.criteriaIds) ? data.criteriaIds.filter((id) => typeof id === 'string' && id.length <= 330) : [])
         const all = session.segments.flatMap((segment) => segment.criteria.map((criterion) => `${segment.id}:${criterion.id}`))
@@ -258,6 +266,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
         if (session.historyAttemptId && (!previous || previous.subjectId !== session.subjectId)) throw new HttpsError('not-found', 'El intento original ya no está disponible.')
         tx.set(context.attempts.doc(session.historyAttemptId || session.id), { groupId: session.groupId, subjectId: session.subjectId, key: session.key, exerciseId: session.exerciseId, variationId: session.variationId, status: 'completed', segments, assessmentSegments: session.segments, criteriaIds: [...selected], selectedConceptIds: session.selectedConceptIds || [], completedAt: previous?.completedAt || new Date(now).toISOString(), updatedAt: new Date(now).toISOString() })
         tx.set(usedRef, { key: session.key, subjectId: session.subjectId, status: 'completed', completedAt: new Date(now).toISOString() })
+        session.deferredKeys = unique(session.deferredKeys).filter((key) => key !== session.key)
         session.status = 'completed'
         cleanup = [session.statementPath, session.solutionPath]
       } else throw new HttpsError('failed-precondition', 'La operación no está disponible en este momento.')
@@ -277,7 +286,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
       if (!text || text.length > 2000) throw new HttpsError('invalid-argument', 'Escribe un mensaje de hasta 2000 caracteres.')
       const limit = db.doc(`studentTraining/${context.code}/messageLimits/${data.groupId}`)
       if (data.messageId !== undefined && !validId(data.messageId)) throw new HttpsError('invalid-argument', 'Conversación no válida.')
-      const message = messages.doc(data.messageId || undefined)
+      const message = data.messageId ? messages.doc(data.messageId) : messages.doc()
       const entry = db.collection(`studentMessages/${message.id}/entries`).doc()
       await db.runTransaction(async (tx) => {
         const previous = await tx.get(limit)

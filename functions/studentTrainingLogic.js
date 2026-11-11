@@ -68,12 +68,33 @@ export function permittedConcepts(selected, nodes) {
   return ids
 }
 
+export function terminalConceptsForSelection(selected, nodes) {
+  const valid = new Set(nodes.map((node) => node.id))
+  const requested = new Set(unique(selected).filter((id) => valid.has(id)))
+  const parents = new Set(nodes.map((node) => node.parentId).filter((id) => valid.has(id)))
+  return nodes.filter((node) => !parents.has(node.id) && (requested.has(node.id) || conceptAncestors(node.id, nodes).some((id) => requested.has(id)))).map((node) => node.id)
+}
+
+export function toggleTerminalConceptSelection(selected, id, nodes) {
+  const current = new Set(terminalConceptsForSelection(selected, nodes))
+  const targets = terminalConceptsForSelection([id], nodes)
+  if (!targets.length) return [...current]
+  const remove = targets.every((target) => current.has(target))
+  targets.forEach((target) => remove ? current.delete(target) : current.add(target))
+  return nodes.filter((node) => current.has(node.id)).map((node) => node.id)
+}
+
+function specificConcepts(ids, nodes) {
+  const values = unique(ids)
+  return values.filter((id) => !values.some((other) => other !== id && conceptAncestors(other, nodes).includes(id)))
+}
+
 export function exerciseMatchesSelection(segmentConcepts, selected, nodes) {
-  const allowed = permittedConcepts(selected, nodes)
+  const allowed = new Set(terminalConceptsForSelection(selected, nodes))
   const segments = Array.isArray(segmentConcepts) ? segmentConcepts : []
   return allowed.size > 0 && segments.length > 0 && segments.every((segment) => {
-    const ids = unique(segment)
-    return ids.length > 0 && ids.every((id) => allowed.has(id) || conceptAncestors(id, nodes).some((ancestor) => allowed.has(ancestor)))
+    const ids = specificConcepts(segment, nodes)
+    return ids.length > 0 && ids.every((id) => allowed.has(id))
   })
 }
 
@@ -119,9 +140,10 @@ export function trainingVersionPublished(exercise, variationId = null) {
   return typeof variant.studentTrainingPublished === 'boolean' ? variant.studentTrainingPublished : exercise.studentTrainingPublished === true
 }
 
-export function selectTrainingCandidate(exercises, selected, nodes, completed = [], { repeat = false, active = [] } = {}) {
+export function selectTrainingCandidate(exercises, selected, nodes, completed = [], { repeat = false, active = [], deferred = [] } = {}) {
   const used = new Set(completed)
   const reserved = new Set(active)
+  const selectedLeaves = new Set(terminalConceptsForSelection(selected, nodes))
   const original = []
   const variants = []
   for (const exercise of exercises || []) {
@@ -133,13 +155,21 @@ export function selectTrainingCandidate(exercises, selected, nodes, completed = 
       try { segments = trainingSegments(version) } catch { return }
       const pdf = version.pdf?.statement || version.pdf?.enunciado
       const solved = version.pdf?.solved || version.pdf?.resuelto
-      if (!segments.length || !pdf || !solved || !exerciseMatchesSelection(segments.map((segment) => segment.conceptIds), selected, nodes)) return
+      if (!segments.length || !pdf || !solved || !selectedLeaves.size) return
+      const segmentConcepts = segments.map((segment) => specificConcepts(segment.conceptIds, nodes))
+      if (!segmentConcepts.some((ids) => ids.some((id) => selectedLeaves.has(id)))) return
+      const exact = segmentConcepts.every((ids) => ids.length && ids.every((id) => selectedLeaves.has(id)))
       const key = `${exercise.id}:${index ? version.id : 'original'}`
       if (reserved.has(key) || (!repeat && used.has(key))) return
-      ;(index ? variants : original).push({ exerciseId: exercise.id, variationId: index ? version.id : null, key, segments })
+      const assessedSegments = segments.map((segment, segmentIndex) => ({ ...segment, conceptIds: segmentConcepts[segmentIndex] }))
+      ;(index ? variants : original).push({ exerciseId: exercise.id, variationId: index ? version.id : null, key, exact, segments: assessedSegments })
     })
   }
-  return original[0] || variants[0] || null
+  const candidates = [...original, ...variants]
+  const postponed = new Map(unique(deferred).map((key, index) => [key, index]))
+  return candidates.find((candidate) => candidate.exact && !postponed.has(candidate.key))
+    || candidates.find((candidate) => !postponed.has(candidate.key))
+    || candidates.reduce((best, candidate) => (!best || postponed.get(candidate.key) < postponed.get(best.key) ? candidate : best), null)
 }
 
 export function conceptProgress(attempts, nodes) {

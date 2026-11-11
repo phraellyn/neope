@@ -129,19 +129,22 @@ async function changeResultPublication(id, visible) {
 const studentMessages = ref([])
 const studentTrainingCounts = ref({})
 const studentTrainingAccess = ref({})
+const studentTrainingCountsLoading = ref(Boolean(props.group.id && props.teacherId))
 const selectedMessageStudent = ref(null)
 const messagesDialog = ref(false)
 let messagesTimer
 let trainingCountsRefreshedAt = 0
 async function refreshStudentMessages() {
   if (!props.group.id || !props.teacherId) return
+  const includeTrainingCounts = Date.now() - trainingCountsRefreshedAt >= 5 * 60 * 1000
+  if (includeTrainingCounts) studentTrainingCountsLoading.value = true
   try {
-    const includeTrainingCounts = Date.now() - trainingCountsRefreshedAt >= 5 * 60 * 1000
     const result = (await httpsCallable(functions, 'manageTeacherStudentMessages')({ groupId: props.group.id, includeTrainingCounts })).data
     studentMessages.value = result.messages
     if (result.trainingCounts) { studentTrainingCounts.value = result.trainingCounts; studentTrainingAccess.value = result.trainingAccess || {}; trainingCountsRefreshedAt = Date.now() }
   }
   catch (error) { console.error('No se han podido cargar los mensajes del alumnado:', error) }
+  finally { if (includeTrainingCounts) studentTrainingCountsLoading.value = false }
 }
 function pendingStudentMessages(studentId) {
   return studentMessages.value.filter((message) => message.studentCode === studentId).length
@@ -149,7 +152,7 @@ function pendingStudentMessages(studentId) {
 function studentTrainingCountLabel(studentId) {
   const count = studentTrainingCounts.value[studentId]
   const access = studentTrainingAccess.value[studentId]
-  const countLabel = count === undefined ? 'Número de ejercicios no disponible' : `${count} ejercicios autoevaluados`
+  const countLabel = count === undefined ? (studentTrainingCountsLoading.value ? 'Cargando ejercicios autoevaluados' : 'Número de ejercicios no disponible') : `${count} ejercicios autoevaluados`
   const conversations = pendingStudentMessages(studentId)
   const unread = unreadStudentMessages(studentId)
   return `${countLabel}${access === false ? ' · Cuenta sin activar o sin acceso' : access === true ? '' : ' · Estado de acceso no disponible'}${conversations ? ` · ${conversations} conversaciones${unread ? `, ${unread} sin leer` : ''} · Abrir conversaciones` : ''}`
@@ -1524,7 +1527,7 @@ defineExpose({
               <button v-if="pendingStudentMessages(student.id)" type="button" class="gradebook-training-count gradebook-training-count-button" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)" @click.stop="openStudentMessages(student)">
                 {{ studentTrainingCounts[student.id] ?? '–' }}<span class="gradebook-message-light" :class="{ 'gradebook-message-light-unread': unreadStudentMessages(student.id) }" aria-hidden="true"></span>
               </button>
-              <span v-else-if="Object.hasOwn(studentTrainingCounts, student.id)" class="gradebook-training-count" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)">{{ studentTrainingCounts[student.id] }}</span>
+              <span v-else class="gradebook-training-count" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)">{{ studentTrainingCounts[student.id] ?? '–' }}</span>
             </td>
             <td v-for="column in resultColumns" :key="column.key" :class="{ 'gradebook-mean-cell': column.kind === 'mean', 'gradebook-rubric-cell': column.kind === 'item' && (column.node.rubric || column.node.merits), 'gradebook-document-cell': column.kind === 'item' && column.node.documentAssessment }">
               <button

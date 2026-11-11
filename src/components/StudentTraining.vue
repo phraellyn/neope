@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { httpsCallable } from 'firebase/functions'
 import { useDisplay } from 'vuetify'
 import { functions } from '../services/firebase'
-import { conceptAncestors } from '../../functions/studentTrainingLogic'
+import { conceptAncestors, terminalConceptsForSelection, toggleTerminalConceptSelection } from '../../functions/studentTrainingLogic'
 import MathConceptMap from './MathConceptMap.vue'
 import DocumentPdfPreview from './DocumentPdfPreview.vue'
 import StudentTrainingTimer from './StudentTrainingTimer.vue'
@@ -37,7 +37,23 @@ const visibleHistory = computed(() => expandedHistoryId.value ? history.value.fi
 const skippedKeys = new Set()
 let requestNumber = 0
 let pendingAlert = false
-const displayedSelection = computed(() => [...new Set(selected.value.flatMap((id) => [id, ...conceptAncestors(id, nodes.value)]))])
+const displayedSelection = computed(() => {
+  const chosen = new Set(selected.value)
+  const counts = new Map(nodes.value.map((node) => [node.id, { total: 0, selected: 0 }]))
+  const leaves = terminalConceptsForSelection(nodes.value.map((node) => node.id), nodes.value)
+  for (const leaf of leaves) {
+    for (const id of [leaf, ...conceptAncestors(leaf, nodes.value)]) {
+      const count = counts.get(id)
+      if (!count) continue
+      count.total += 1
+      if (chosen.has(leaf)) count.selected += 1
+    }
+  }
+  return nodes.value.filter((node) => {
+    const count = counts.get(node.id)
+    return count.total > 0 && count.total === count.selected
+  }).map((node) => node.id)
+})
 const assessmentScore = computed(() => {
   const chosen = new Set(selectedCriteria.value)
   return (session.value?.segments || []).reduce((total, segment) => {
@@ -81,8 +97,7 @@ function finishBusy() {
 }
 function toggleConcept(id) {
   if (!nodes.value.some((node) => node.id === id)) return
-  if (displayedSelection.value.includes(id)) selected.value = selected.value.filter((item) => item !== id && !conceptAncestors(item, nodes.value).includes(id))
-  else selected.value = [...selected.value, id]
+  selected.value = toggleTerminalConceptSelection(selected.value, id, nodes.value)
   exhausted.value = false
 }
 async function loadPdf(kind) {
@@ -101,7 +116,7 @@ async function load() {
     const result = await callable('loadStudentTraining', {})
     if (request !== requestNumber) return
     nodes.value = result.nodes; progress.value = calculateConceptProgress(result.nodes, result.progress || {}); history.value = result.history || []; session.value = result.session
-    if (session.value) { selected.value = session.value.selectedConceptIds || []; selectedCriteria.value = session.value.criteriaIds || []; await loadPdf(session.value.status === 'review' ? 'solved' : 'statement'); if (session.value?.status === 'review') assessmentOpen.value = true }
+    if (session.value) { selected.value = terminalConceptsForSelection(session.value.selectedConceptIds || [], nodes.value); selectedCriteria.value = session.value.criteriaIds || []; await loadPdf(session.value.status === 'review' ? 'solved' : 'statement'); if (session.value?.status === 'review') assessmentOpen.value = true }
   } catch (cause) { if (request === requestNumber) { error.value = cause.message || 'No se ha podido cargar el entrenamiento.'; if (session.value?.status === 'active' && cause.code?.endsWith('not-found')) setTimeout(skipBrokenPdf, 0) } }
   finally { if (request === requestNumber) finishBusy() }
 }
@@ -140,7 +155,7 @@ async function historyAction(item, operation) {
       history.value = data.history || []; progress.value = calculateConceptProgress(data.nodes, data.progress || {}); closeHistoryPdf()
     } else {
       closeHistoryPdf()
-      session.value = result.session; selected.value = session.value.selectedConceptIds || []; selectedCriteria.value = session.value.criteriaIds || []
+      session.value = result.session; selected.value = terminalConceptsForSelection(session.value.selectedConceptIds || [], nodes.value); selectedCriteria.value = session.value.criteriaIds || []
       emit('open-training')
       await loadPdf(session.value.status === 'review' ? 'solved' : 'statement')
       assessmentOpen.value = session.value.status === 'review'

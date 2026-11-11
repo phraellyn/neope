@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { conceptProgress, exerciseMatchesSelection, selectTrainingCandidate, trainingReadiness, trainingSegments } from '../functions/studentTrainingLogic.js'
+import { conceptProgress, exerciseMatchesSelection, selectTrainingCandidate, terminalConceptsForSelection, toggleTerminalConceptSelection, trainingReadiness, trainingSegments } from '../functions/studentTrainingLogic.js'
 import { calculateConceptProgress } from '../src/utils/conceptProgressLabel.js'
 import { pauseTimer, resetTimer, resumeTimer, timerElapsed, timerWarning } from '../src/utils/studentTrainingTimer.js'
 
@@ -7,6 +7,13 @@ const nodes = [{ id: 'root' }, { id: 'a', parentId: 'root' }, { id: 'b', parentI
 assert.equal(exerciseMatchesSelection([['a1']], ['a'], nodes), true)
 assert.equal(exerciseMatchesSelection([['a1'], ['b']], ['a'], nodes), false)
 assert.equal(exerciseMatchesSelection([['a2']], ['a1'], nodes), false)
+assert.equal(exerciseMatchesSelection([['root', 'a', 'a1']], ['a1'], nodes), true, 'Las etiquetas de ascendientes no impiden seleccionar la hoja')
+assert.equal(exerciseMatchesSelection([['a', 'a1', 'a2']], ['a1'], nodes), false, 'No se incluyen conceptos hermanos no seleccionados')
+assert.equal(exerciseMatchesSelection([['a']], ['a1'], nodes), false, 'No se atribuye una etiqueta genérica a una hoja concreta')
+assert.deepEqual(terminalConceptsForSelection(['a'], nodes), ['a1', 'a2'])
+assert.deepEqual(toggleTerminalConceptSelection([], 'a', nodes), ['a1', 'a2'])
+assert.deepEqual(toggleTerminalConceptSelection(['a1', 'a2'], 'a1', nodes), ['a2'])
+assert.deepEqual(toggleTerminalConceptSelection(['a1'], 'a', nodes), ['a1', 'a2'])
 const result = calculateConceptProgress(nodes, conceptProgress([{ id: '1', status: 'completed', segments: [{ conceptIds: ['a1', 'a2'], maximum: 2, obtained: 1 }] }], nodes))
 assert.equal(result.a.percentage, 10, 'Un intento al 50 % ocupa una de las cinco posiciones')
 assert.equal(result.root.percentage, 5, 'Los hijos no trabajados cuentan como cero')
@@ -47,7 +54,25 @@ assert.deepEqual(trainingSegments({ parts: [exercise.parts[0], exercise.parts[0]
 assert.equal(trainingSegments({ contenidosGenerales: [], contenidos: ['a1'], gradingCriteria: [{ id: 'c', description: 'Paso', points: 1 }], workedSolution: { latex: 'Solución' } })[0].conceptIds[0], 'a1')
 const bank = [{ id: 'x', ...exercise, studentTrainingPublished: true, pdf: { statement: 'statement.pdf', solved: 'solved.pdf' }, variaciones: [{ ...exercise, id: 'v1', pdf: { statement: 's.pdf', solved: 'r.pdf' } }] }]
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes).key, 'x:original')
+const bankWithAncestors = [{ ...bank[0], parts: [{ ...exercise.parts[0], contentIds: ['root', 'a', 'a1'] }] }]
+assert.deepEqual(selectTrainingCandidate(bankWithAncestors, ['a1'], nodes).segments[0].conceptIds, ['a1'], 'Solo se puntúan los conceptos finales concretos')
+const mixed = { ...bank[0], id: 'mixed', variaciones: [], parts: [exercise.parts[0], { ...exercise.parts[0], id: 'p2', contentIds: ['b'] }] }
+assert.equal(selectTrainingCandidate([mixed, ...bank], ['a1'], nodes).key, 'x:original', 'Se prefieren los ejercicios exclusivos aunque aparezcan después')
+const fallback = selectTrainingCandidate([mixed], ['a1'], nodes)
+assert.equal(fallback.key, 'mixed:original', 'Se puede proponer un ejercicio mixto si no hay otro exclusivo')
+assert.deepEqual(fallback.segments.map((part) => [part.id, part.maximum, part.criteria.map((criterion) => criterion.id)]), [['p1', 2, ['c1']], ['p2', 2, ['c1']]], 'La matriz completa conserva todos los apartados, criterios y puntuaciones')
+assert.deepEqual(fallback.segments.map((part) => part.conceptIds), [['a1'], ['b']], 'Cada apartado conserva todos los conceptos que evalúa')
+assert.equal(selectTrainingCandidate([mixed], ['a2'], nodes), null, 'El ejercicio debe incluir al menos un concepto seleccionado')
+const fallbackSamePart = selectTrainingCandidate([{ ...mixed, parts: [{ ...exercise.parts[0], contentIds: ['a1', 'b'] }] }], ['a1'], nodes)
+assert.deepEqual(fallbackSamePart.segments[0].conceptIds, ['a1', 'b'], 'Un apartado mixto puntúa todos sus contenidos')
+const mixedProgress = conceptProgress([{ status: 'completed', segments: fallback.segments.map((part) => ({ ...part, obtained: part.maximum })) }], nodes)
+assert.equal(mixedProgress.a1.count, 1)
+assert.equal(mixedProgress.b.count, 1, 'Los conceptos adicionales también reciben puntuación')
+assert.equal(selectTrainingCandidate([mixed, ...bank], ['a1'], nodes, [], { deferred: ['x:original', 'x:v1'] }).key, 'mixed:original', 'Un ejercicio descartado no se impone a otra opción disponible')
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:original']).key, 'x:v1')
+assert.equal(selectTrainingCandidate(bank, ['a'], nodes, [], { deferred: ['x:original'] }).key, 'x:v1', 'Una variante disponible precede al original descartado')
+assert.equal(selectTrainingCandidate(bank, ['a'], nodes, [], { deferred: ['x:original', 'x:v1'] }).key, 'x:original', 'Los descartados vuelven a aparecer en el orden en que se pospusieron')
+assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:v1'], { deferred: ['x:original'] }).key, 'x:original', 'El único ejercicio disponible sigue pudiendo proponerse')
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:original', 'x:v1']), null)
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:original'], { repeat: true }).key, 'x:original')
 assert.equal(selectTrainingCandidate([{ ...bank[0], studentTrainingPublished: false }], ['a'], nodes), null)
