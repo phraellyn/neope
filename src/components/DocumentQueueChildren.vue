@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import ExercisePdfPreview from './ExercisePdfPreview.vue'
 
 defineOptions({ name: 'DocumentQueueChildren' })
 
@@ -7,10 +8,14 @@ const props = defineProps({
   blocks: { type: Array, default: () => [] },
   tools: { type: Array, default: () => [] },
   exercises: { type: Array, default: () => [] },
+  mainPdf: { type: Function, required: true },
+  apartados: { type: Function, required: true },
+  apartadoPdf: { type: Function, required: true },
+  metrics: { type: Function, required: true },
   containerId: { type: String, required: true },
 })
 
-const emit = defineEmits(['drag-start', 'drop-block', 'remove', 'argument-change'])
+const emit = defineEmits(['drag-start', 'drop-block', 'remove', 'argument-change', 'metric-change'])
 const toolsById = computed(() => new Map(props.tools.map((tool) => [tool.id, tool])))
 const exercisesById = computed(() => new Map(props.exercises.map((exercise) => [exercise.id, exercise])))
 
@@ -37,7 +42,7 @@ function exerciseTitle(block) {
       :key="block.blockId"
       class="document-tool-child"
       draggable="true"
-      @dragstart="emit('drag-start', $event, block)"
+      @dragstart.stop="emit('drag-start', $event, block)"
       @dragover.prevent
       @drop.stop="emit('drop-block', $event, block.blockId, containerId)"
     >
@@ -62,16 +67,32 @@ function exerciseTitle(block) {
           @update:model-value="emit('argument-change', block, argument.key, $event)"
         />
       </div>
+      <div v-if="block.type !== 'tool'" class="document-tool-child-exercise">
+        <section v-for="(part, partIndex) in [null, ...apartados(block)]" :key="part?.id || partIndex" class="document-tool-child-part">
+          <div class="document-tool-child-metrics">
+            <strong>{{ partIndex ? `${String.fromCharCode(96 + partIndex)}.` : (apartados(block).length ? 'Total' : 'Ejercicio') }}</strong>
+            <label>Puntos<input :value="partIndex ? (metrics(block).apartados?.[partIndex - 1]?.puntuacion || 0) : metrics(block).puntuacion" type="number" min="0" step="0.25" :disabled="!partIndex && apartados(block).length > 0" @change="emit('metric-change', block, 'puntuacion', $event.target.value, partIndex ? partIndex - 1 : null)" /></label>
+            <label>Minutos<input :value="partIndex ? (metrics(block).apartados?.[partIndex - 1]?.tiempo || 0) : metrics(block).tiempo" type="number" min="0" step="1" :disabled="!partIndex && apartados(block).length > 0" @change="emit('metric-change', block, 'tiempo', $event.target.value, partIndex ? partIndex - 1 : null)" /></label>
+          </div>
+          <ExercisePdfPreview v-if="partIndex ? apartadoPdf(block, partIndex - 1) : mainPdf(block)" :src="partIndex ? apartadoPdf(block, partIndex - 1) : mainPdf(block)" :title="partIndex ? `Apartado ${String.fromCharCode(96 + partIndex)}` : 'Enunciado del ejercicio'" crop-bottom thumbnail />
+          <div v-else class="document-tool-child-no-pdf">PDF pendiente</div>
+        </section>
+      </div>
       <DocumentQueueChildren
         v-if="block.type === 'tool' && toolFor(block)?.kind === 'environment'"
         :blocks="block.children || []"
         :tools="tools"
         :exercises="exercises"
+        :main-pdf="mainPdf"
+        :apartados="apartados"
+        :apartado-pdf="apartadoPdf"
+        :metrics="metrics"
         :container-id="block.blockId"
         @drag-start="(event, item) => emit('drag-start', event, item)"
         @drop-block="(event, target, container) => emit('drop-block', event, target, container)"
         @remove="(item) => emit('remove', item)"
         @argument-change="(item, key, value) => emit('argument-change', item, key, value)"
+        @metric-change="(item, field, value, index) => emit('metric-change', item, field, value, index)"
       />
     </article>
   </div>
@@ -121,4 +142,11 @@ function exerciseTitle(block) {
   gap: 6px;
   padding: 6px 8px 8px;
 }
+
+.document-tool-child-part { border-top: 1px solid #dfe7f0; }
+.document-tool-child-metrics { display: grid; grid-template-columns: 32px 1fr 1fr; align-items: center; gap: 5px; min-height: 29px; padding: 3px 7px; color: #416185; font-size: .62rem; }
+.document-tool-child-metrics label { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 3px; color: #77899f; font-size: .49rem; font-weight: 750; text-transform: uppercase; }
+.document-tool-child-metrics input { width: 58px; height: 23px; padding: 0 5px; border: 1px solid #c9d6e5; border-radius: 5px; color: #31557e; font: inherit; font-size: .64rem; text-align: center; }
+.document-tool-child-metrics input:disabled { border-color: transparent; background: #e9eff6; color: #60758f; }
+.document-tool-child-no-pdf { display: grid; min-height: 75px; place-items: center; color: #7d8da2; font-size: .7rem; }
 </style>

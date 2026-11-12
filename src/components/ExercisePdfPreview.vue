@@ -122,11 +122,14 @@ const canvas = ref(null)
 const isLoading = ref(true)
 const errorMessage = ref('')
 const detectedAspectRatio = ref(0)
+const releasedAspectRatio = ref(0)
 const reservedAspectRatio = computed(() => (
   Number(props.aspectRatio) > 0 ? Number(props.aspectRatio) : detectedAspectRatio.value
 ))
 const containerStyle = computed(() => (
-  reservedAspectRatio.value > 0 && !props.cropBottom
+  releasedAspectRatio.value > 0
+    ? { aspectRatio: String(releasedAspectRatio.value) }
+    : reservedAspectRatio.value > 0 && !props.cropBottom
     ? { aspectRatio: String(reservedAspectRatio.value) }
     : undefined
 ))
@@ -256,6 +259,9 @@ function releaseOffscreenResources() {
     cancelAnimationFrame(renderFrame)
     await clearDocument()
     if (isVisible || !canvas.value) return
+    if (canvas.value.width > 1 && canvas.value.height > 1) {
+      releasedAspectRatio.value = canvas.value.width / canvas.value.height
+    }
     canvas.value.width = 1
     canvas.value.height = 1
     canvas.value.style.width = '100%'
@@ -291,6 +297,7 @@ async function renderPreview() {
         emit('page-metrics', preview.metrics)
       }
       isLoading.value = false
+      releasedAspectRatio.value = 0
       return
     }
 
@@ -340,6 +347,7 @@ async function renderPreview() {
     await currentRenderTask.promise
     if (renderTask === currentRenderTask) renderTask = null
     if (version === renderVersion) cropCanvasToContent(pixelRatio)
+    if (version === renderVersion) releasedAspectRatio.value = 0
 
     if (version === renderVersion) {
       rememberRenderedPreview(cacheKey, canvas.value, {
@@ -377,6 +385,7 @@ function scheduleRender() {
 
 watch(() => props.src, async () => {
   detectedAspectRatio.value = 0
+  releasedAspectRatio.value = 0
   await clearDocument()
   if (isVisible) await nextTick(renderPreview)
 })
@@ -412,7 +421,7 @@ onBeforeUnmount(async () => {
 </script>
 
 <template>
-  <div ref="container" class="exercise-pdf-preview" :class="{ 'exercise-pdf-preview-loaded': !isLoading && !errorMessage, 'exercise-pdf-preview-reserved': reservedAspectRatio > 0 && !cropBottom }" :style="containerStyle" :aria-busy="isLoading">
+  <div ref="container" class="exercise-pdf-preview" :class="{ 'exercise-pdf-preview-loaded': !isLoading && !errorMessage, 'exercise-pdf-preview-reserved': releasedAspectRatio > 0 || (reservedAspectRatio > 0 && !cropBottom) }" :style="containerStyle" :aria-busy="isLoading">
     <canvas ref="canvas" :aria-label="title" />
     <div v-if="isLoading" class="exercise-pdf-status exercise-pdf-skeleton" aria-hidden="true" />
   </div>

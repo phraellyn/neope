@@ -159,6 +159,32 @@ try {
     curriculum: { course: '2ºBTO', subjectId: '2bto-matematicas-ii' },
   }
   const realBank = component.setup({ ...props, templates: [realExerciseTemplate], exercises: [structuredExercise] }, { expose() {}, emit() {} })
+  const selectivityTemplate = { id: 'selectivity', archivo: 'selectividad-enunciado.tex', codigo: readFileSync(resolve('templates/selectividad-enunciado.tex'), 'utf8') }
+  const selectivity = component.setup({ ...props, templates: [selectivityTemplate], exercises: [structuredExercise] }, { expose() {}, emit() {} })
+  selectivity.newDocument()
+  selectivity.selectTemplate(selectivity.documentTemplates.value[0])
+  selectivity.addTool(selectivity.documentTools.value.find((tool) => tool.id === 'selectividad-pregunta-4'))
+  selectivity.addTool(selectivity.documentTools.value.find((tool) => tool.id === 'selectividad-pregunta-5'))
+  const dragEvent = () => ({ preventDefault() {}, dataTransfer: { effectAllowed: '', setData() {} } })
+  for (const tool of selectivity.exerciseQueue.value) {
+    selectivity.startExerciseDrag(dragEvent(), structuredExercise)
+    selectivity.dropOnQueueSection(dragEvent(), 'required', null, tool.blockId)
+  }
+  assert.deepEqual(selectivity.exerciseQueue.value.map((tool) => tool.children.length), [1, 1], 'Cada bloque optativo conserva el ejercicio arrastrado')
+  const selectivityBody = selectivity.generatedCodeForTemplate(selectivity.selectedTemplates.value[0])
+  assert.match(selectivityBody, /\\begin\{selectividadcuatro\}[\s\S]*Primero\.[\s\S]*\\end\{selectividadcuatro\}/)
+  assert.match(selectivityBody, /\\begin\{selectividadcinco\}[\s\S]*Primero\.[\s\S]*\\end\{selectividadcinco\}/)
+  const firstOptional = selectivity.exerciseQueue.value[0]
+  const nestedExercise = firstOptional.children[0]
+  const secondOptionalId = selectivity.exerciseQueue.value[1].blockId
+  selectivity.startQueueDrag(dragEvent(), nestedExercise)
+  selectivity.dropOnQueueSection(dragEvent(), 'required', null, secondOptionalId)
+  assert.deepEqual(selectivity.exerciseQueue.value.map((tool) => tool.children.length), [0, 2], 'Se pueden mover ejercicios entre bloques optativos')
+  selectivity.currentStep.value = 3
+  await selectivity.compileDocument(true)
+  const selectivityCompiled = requests.filter((entry) => entry.url.endsWith('/compile')).at(-1).body.code
+  assert.match(selectivityCompiled, /\\begin\{selectividadcinco\}[\s\S]*Primero\.[\s\S]*\\end\{selectividadcinco\}/, 'El documento compila con los ejercicios optativos')
+  assert.equal(selectivity.isCompiling.value, false, 'La compilación libera la navegación al finalizar')
   realBank.newDocument()
   realBank.selectTemplate(realBank.documentTemplates.value[0])
   const columnTool = realBank.documentTools.value.find((tool) => tool.id === 'salto-columna')

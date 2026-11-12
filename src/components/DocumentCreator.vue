@@ -2386,7 +2386,7 @@ function browserAssetUrl(url) {
 async function grayscaleLogoAsset(url) {
   if (grayscaleLogoCache.has(url)) return grayscaleLogoCache.get(url)
   const pending = (async () => {
-    const response = await fetch(browserAssetUrl(url))
+    const response = await fetch(browserAssetUrl(url), { signal: AbortSignal.timeout(20000) })
     if (!response.ok) throw new Error(`No se ha podido descargar el logotipo del centro (HTTP ${response.status}).`)
     const sourceBlob = await response.blob()
     let source
@@ -2677,6 +2677,7 @@ function dropTemplateQueue(event) {
 }
 
 function fieldValueFor(field, template = null) {
+  if (field.hidden && field.type === 'center') return selectedCenter.value?.centro || ''
   if (fieldValues[field.key] !== undefined) return fieldValues[field.key]
   if (template) {
     const sameLabel = template.metadata.fields.find((candidate) => normalizeName(candidate.label) === normalizeName(field.label))
@@ -3108,6 +3109,7 @@ async function compilerRequest(path, options = {}) {
     const token = await auth.currentUser?.getIdToken()
     response = await fetch(`${props.compilerBaseUrl}${path}`, {
       ...options,
+      signal: options.signal || AbortSignal.timeout(60000),
       headers: { ...(options.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
   } catch (error) {
@@ -3792,7 +3794,9 @@ async function saveDocument() {
   }
 }
 
-onMounted(loadDocuments)
+onMounted(() => {
+  void loadDocuments()
+})
 onBeforeUnmount(() => {
   revokePreview()
   revokeSourceFiles()
@@ -4312,7 +4316,7 @@ defineExpose({
                     class="document-queue-card"
                     :class="{ 'document-tool-queue-card': isTool(item), [`document-tool-${toolForQueue(item)?.id}`]: isTool(item), 'document-tool-disabled': isTool(item) && toolForQueue(item)?.behavior === 'optional-section' && optionalToolChoiceOptions(index).length === 0 }"
                     draggable="true"
-                    @dragstart="startQueueDrag($event, item)"
+                    @dragstart.stop="startQueueDrag($event, item)"
                     @dragover.prevent
                     @drop.stop="dropOnQueueSection($event, 'required', item.blockId)"
                   >
@@ -4361,11 +4365,16 @@ defineExpose({
                       :blocks="item.children || []"
                       :tools="documentTools"
                       :exercises="exercises"
+                      :main-pdf="queueMainPdf"
+                      :apartados="queueApartados"
+                      :apartado-pdf="queueApartadoPdf"
+                      :metrics="queueMetrics"
                       :container-id="item.blockId"
                       @drag-start="(event, block) => startQueueDrag(event, block)"
                       @drop-block="(event, target, container) => dropOnQueueSection(event, 'required', target, container)"
                       @remove="removeQueuedBlock"
                       @argument-change="(block, key, value) => setToolArgument(block, key, value)"
+                      @metric-change="updateQueueMetric"
                     />
                     <ExerciseVariantSelector
                       v-if="!isTool(item)"
@@ -4402,8 +4411,10 @@ defineExpose({
                   </article>
                 </div>
                 <div v-else class="document-queue-empty compact"><v-icon icon="mdi-tray-arrow-down" size="36" /><span>Suelta aquí ejercicios y herramientas.</span></div>
+                <div v-if="exerciseQueue.length" class="document-queue-drop-end" @dragover.prevent @drop.stop="dropOnQueueSection($event, 'required')">Suelta aquí para añadir al final</div>
               </div>
             </div>
+          </section>
             <aside class="document-tools-pane" aria-label="Herramientas del documento">
               <header><v-icon icon="mdi-tools" size="18" /><strong>Herramientas</strong></header>
               <div class="document-tools-list">
@@ -4427,7 +4438,6 @@ defineExpose({
                 </article>
               </div>
             </aside>
-          </section>
         </div>
           </div>
         </div>
@@ -4717,7 +4727,7 @@ defineExpose({
 .document-latex-source-preview { min-width: 0; min-height: 0; overflow: hidden; background: #eef2f7; }
 .document-source-image-preview { display: block; width: 100%; height: 100%; padding: 12px; object-fit: contain; }
 .document-source-preview-empty { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: #7a8da4; font-size: .72rem; }
-.document-exercise-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 142px; overflow: hidden; }
+.document-exercise-step { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 142px; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
 .document-matches-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border-right: 1px solid #d8e2ed; }
 .document-exercise-toolbar { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-bottom: 1px solid #dbe4ef; background: #fff; }
 .document-exercise-toolbar .v-text-field { flex: 1; }
@@ -4750,8 +4760,8 @@ defineExpose({
 .document-exercise-authors > span:not(.v-spacer) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .document-exercise-authors strong { color: #3e5878; font-weight: 800; }
 .document-exercises-empty { display: flex; flex: 1; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: #73859c; }
-.document-queue-pane { display: contents; }
-.document-queue-content { grid-column: 2; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; background: #f4f7fb; }
+.document-queue-pane { display: flex; grid-column: 2; min-width: 0; min-height: 0; }
+.document-queue-content { flex: 1 1 auto; min-width: 0; min-height: 0; padding-bottom: 28px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: auto; -webkit-overflow-scrolling: touch; background: #f4f7fb; }
 .document-queue-section { display: flex; min-width: 0; flex: 0 0 auto; flex-direction: column; overflow: visible; }
 .document-required-section { background: #f7faff; }
 .document-optional-section { background: #fbf8fd; }
@@ -4760,6 +4770,7 @@ defineExpose({
 .document-queue-heading strong { color: #31557e; font-size: .82rem; }
 .document-queue-heading span { color: #7c8da2; font-size: .68rem; }
 .document-queue-grid { display: flex; min-height: 0; flex-direction: column; gap: 8px; padding: 8px; overflow: visible; }
+.document-queue-drop-end { display: grid; min-height: 42px; margin: 0 8px 8px; place-items: center; border: 1px dashed #b8c9db; border-radius: 4px; color: #71849a; font-size: .65rem; }
 .document-queue-card { min-width: 0; overflow: hidden; border: 1px solid #d5e0ec; border-radius: 12px; background: #fff; box-shadow: 0 2px 7px rgba(25, 54, 91, .06); cursor: grab; }
 .document-queue-card:active { cursor: grabbing; }
 .document-queue-card > header { display: flex; min-height: 34px; align-items: center; gap: 3px; padding: 4px 5px 4px 7px; background: #edf3fb; }
@@ -4769,6 +4780,7 @@ defineExpose({
 .document-queue-card :deep(.exercise-variant-bar) { border-inline: 0; border-radius: 0; }
 .document-queue-sections { display: grid; border-top: 1px solid #dfe7f0; border-bottom: 1px solid #dfe7f0; background: #f9fbfe; }
 .document-queue-section { min-width: 0; overflow: hidden; border-top: 1px solid #dfe7f0; }
+.document-queue-content > .document-required-section { overflow: visible; }
 .document-queue-section:first-child { border-top: 0; }
 .document-queue-metric-row { display: grid; min-height: 29px; align-items: center; grid-template-columns: 32px 1fr 1fr; gap: 5px; padding: 3px 7px; border-top: 1px solid #e8edf4; }
 .document-queue-metric-row:first-child { border-top: 0; }
