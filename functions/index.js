@@ -21,10 +21,11 @@ export {
   revokeTeacherInvitation,
   syncStudentAccessCodes,
 } from './auth.js'
-import { codeForCompiler, compilationArtifacts, sourceHash } from './exerciseCompilation.js'
+import { codeForCompiler, compilationArtifacts, exercisePdfStoragePaths, pdfStoragePaths, sourceHash } from './exerciseCompilation.js'
 import { validateExerciseSolutionSource } from './exerciseSolutionSource.js'
 import { normalizeGeneratedCriterionMath } from './criteriaLatex.js'
 import { curriculumPromptContext } from './curriculumContext.js'
+import { teacherStylePrompt } from './solutionStyle.js'
 import { achievementGranularityInstructions, criterionMathInstructions } from './achievementGranularity.js'
 import { generateExerciseRaster, prepareVisualVariation, regenerateTikzFigure, visualMessageContent, visualModelCatalog, visualVariationFormat } from './visualGeneration.js'
 import { graphicReferences, tikzFigures } from './exerciseVisualsShared.js'
@@ -64,6 +65,14 @@ function requireTeacherAccess(request) {
   if (!request.auth || request.auth.token.role !== 'teacher') {
     throw new HttpsError('permission-denied', 'Esta operación requiere una cuenta de profesor.')
   }
+}
+
+async function teacherSolutionStyleContext(request) {
+  const snapshot = await adminDb.collection('teachers').doc(request.auth.uid).get()
+  const ids = Array.isArray(request.data?.styleConceptIds)
+    ? request.data.styleConceptIds.filter(id => typeof id === 'string').slice(0, 200)
+    : []
+  return teacherStylePrompt(snapshot.data()?.perfil, ids)
 }
 
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
@@ -449,24 +458,6 @@ function applyArtifactReferences(target, references) {
   return updated
 }
 
-function pdfStoragePaths(target = {}) {
-  const paths = new Set()
-  const add = (reference) => {
-    if (reference?.storagePath) paths.add(reference.storagePath)
-  }
-  add(target.pdf?.statement)
-  add(target.pdf?.solved)
-  add(target.statement?.pdf)
-  add(target.answer?.pdf)
-  add(target.workedSolution?.pdf)
-  for (const part of target.parts || []) {
-    add(part.statement?.pdf)
-    add(part.answer?.pdf)
-    add(part.workedSolution?.pdf)
-  }
-  return paths
-}
-
 async function deleteStoragePaths(paths) {
   const bucket = adminStorage.bucket()
   await Promise.all([...new Set(paths)].map(async (storagePath) => {
@@ -634,7 +625,7 @@ export const processExerciseCompilation = onDocumentCreated({
 
     const assets = compilationAssets(exercise, target)
     const context = compilationContext(job.preambleName, assets)
-    const artifacts = compilationArtifacts(target, job.exerciseId, job.revision).map((artifact) => {
+    const artifacts = compilationArtifacts(target, job.exerciseId, job.revision, event.params.jobId).map((artifact) => {
       const compilerCode = codeForCompiler(artifact.code, artifact.profile)
       return {
         ...artifact,
@@ -664,7 +655,10 @@ export const processExerciseCompilation = onDocumentCreated({
       const latestTarget = compilationTarget(latest, job.variationIndex)
       if (!latestTarget || Number(latestTarget.revision) !== Number(job.revision)) return false
       const updatedTarget = applyArtifactReferences(latestTarget, references)
-      const nextPaths = pdfStoragePaths(updatedTarget)
+      const updatedExercise = job.variationIndex === null
+        ? updatedTarget
+        : { ...latest, variaciones: (latest.variaciones || []).map((variation, index) => index === job.variationIndex ? updatedTarget : variation) }
+      const nextPaths = exercisePdfStoragePaths(updatedExercise)
       pathsToDelete = [
         ...(latestTarget.pendingStorageCleanup || []),
         ...[...pdfStoragePaths(latestTarget)].filter((path) => !nextPaths.has(path)),
@@ -1434,6 +1428,7 @@ export const generateExerciseVariation = onCall({
   const model = typeof request.data?.model === 'string' ? request.data.model : 'google/gemini-3-flash-preview'
   const experimental = request.data?.experimental === true
   const curriculumContext = curriculumPromptContext(request.data?.curriculum)
+  const styleContext = await teacherSolutionStyleContext(request)
 
   if (!enunciado || enunciado.length > 60_000) {
     throw new HttpsError('invalid-argument', 'El enunciado es obligatorio y no puede superar 60.000 caracteres.')
@@ -1505,6 +1500,7 @@ export const generateExerciseVariation = onCall({
     }
     const originalRequest = [
       curriculumContext,
+      styleContext,
       `ETIQUETAS: ${tags.length ? tags.join(', ') : 'sin etiquetas'}`,
       `CONTRATO DE ESTRUCTURA: ${structureSummary}. Conserva exactamente esas cantidades cuando sean mayores que cero.`,
       solutionRequirement,
@@ -1652,6 +1648,7 @@ export const generateExerciseSolution = onCall({
   const previousAttempt = typeof request.data?.previousAttempt === 'string' ? request.data.previousAttempt.trim().slice(0, 60_000) : ''
   const compileError = typeof request.data?.compileError === 'string' ? request.data.compileError.trim().slice(0, 2_000) : ''
   const curriculumContext = curriculumPromptContext(request.data?.curriculum)
+  const styleContext = await teacherSolutionStyleContext(request)
 
   if (!enunciado || enunciado.length > 60_000) {
     throw new HttpsError('invalid-argument', 'El enunciado es obligatorio y no puede superar 60.000 caracteres.')
@@ -1684,7 +1681,7 @@ export const generateExerciseSolution = onCall({
           { role: 'system', content: `${solutionSystemPrompt}${jsonModeInstruction(model)}` },
           {
             role: 'user',
-            content: `${curriculumContext ? `${curriculumContext}\n\n` : ''}REGLA OBLIGATORIA PARA \\info: usa exactamente \\info{${expectedInfo}} y sitúalo como último comando del ejercicio.\n\nEJERCICIO A RESOLVER:\n\n${exerciseForSolution}${previousAttempt ? `\n\nINTENTO ANTERIOR NO COMPILABLE: corrige este intento, conservando el enunciado y su solución matemática, pero reescribiendo el LaTeX defectuoso. No expliques el error; devuelve solamente el ejercicio completo compilable.\nERROR DEL COMPILADOR:\n${compileError || 'Error de sintaxis LaTeX.'}\n\nINTENTO A REPARAR:\n${previousAttempt}` : ''}`,
+            content: `${curriculumContext ? `${curriculumContext}\n\n` : ''}${styleContext ? `${styleContext}\n\n` : ''}REGLA OBLIGATORIA PARA \\info: usa exactamente \\info{${expectedInfo}} y sitúalo como último comando del ejercicio.\n\nEJERCICIO A RESOLVER:\n\n${exerciseForSolution}${previousAttempt ? `\n\nINTENTO ANTERIOR NO COMPILABLE: corrige este intento, conservando el enunciado y su solución matemática, pero reescribiendo el LaTeX defectuoso. No expliques el error; devuelve solamente el ejercicio completo compilable.\nERROR DEL COMPILADOR:\n${compileError || 'Error de sintaxis LaTeX.'}\n\nINTENTO A REPARAR:\n${previousAttempt}` : ''}`,
           },
         ],
         response_format: responseFormatForModel(model, solutionResponseFormat),
@@ -2100,6 +2097,7 @@ export const generateDocumentContent = onCall({
   const model = clean(request.data?.model, 180) || 'google/gemini-3-flash-preview'
   const modelConfig = await resolveAiModel(request, model)
   const mode = request.data?.mode === 'align' ? 'align' : request.data?.mode === 'exercise' ? 'exercise' : 'generate'
+  const teacherStyle = mode === 'align' ? '' : await teacherSolutionStyleContext(request)
   const sourceType = clean(request.data?.sourceType, 40)
   const course = clean(request.data?.course, 80)
   const subjectId = clean(request.data?.subjectId, 160)
@@ -2182,6 +2180,7 @@ export const generateDocumentContent = onCall({
       : 'Reconstruye fielmente el documento aportado como LaTeX editable y ejercicios Neope estructurados. Conserva no solo las preguntas, sino también su estructura visual, instrucciones, tablas de recogida de datos, espacios de respuesta, recuadros, líneas, rejillas, diagramas y dibujos; completa después respuestas, resoluciones, segmentación, contenidos y logros evaluables.'
   const promptPayload = {
     task,
+    teacherStyle,
     context: {
       course,
       subjectId,

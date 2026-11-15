@@ -155,7 +155,7 @@ function studentTrainingCountLabel(studentId) {
   const countLabel = count === undefined ? (studentTrainingCountsLoading.value ? 'Cargando ejercicios autoevaluados' : 'Número de ejercicios no disponible') : `${count} ejercicios autoevaluados`
   const conversations = pendingStudentMessages(studentId)
   const unread = unreadStudentMessages(studentId)
-  return `${countLabel}${access === false ? ' · Cuenta sin activar o sin acceso' : access === true ? '' : ' · Estado de acceso no disponible'}${conversations ? ` · ${conversations} conversaciones${unread ? `, ${unread} sin leer` : ''} · Abrir conversaciones` : ''}`
+  return `${countLabel}${access === false ? ' · Cuenta sin activar o sin acceso' : access === true ? '' : ' · Estado de acceso no disponible'}${conversations ? ` · ${conversations} conversaciones${unread ? `, ${unread} sin leer` : ''}` : ''} · Abrir actividad y conversaciones`
 }
 function unreadStudentMessages(studentId) {
   return studentMessages.value.filter((message) => message.studentCode === studentId && (message.studentLastAt || message.createdAt || '') > (message.teacherSeenAt || message.replyAt || (message.status !== 'pending' ? message.updatedAt : '') || '')).length
@@ -1390,7 +1390,7 @@ defineExpose({
 
 <template>
   <div class="gradebook" :class="{ 'gradebook-disabled': disabled, 'gradebook-configuration': configurationMode }">
-    <TeacherStudentMessages v-if="selectedMessageStudent" v-model="messagesDialog" :group-id="group.id" :student="selectedMessageStudent" @changed="studentMessages = $event" />
+    <TeacherStudentMessages v-if="selectedMessageStudent" v-model="messagesDialog" :group-id="group.id" :group="group" :student="selectedMessageStudent" @changed="studentMessages = $event" />
     <div class="gradebook-scroller">
       <table class="gradebook-table" :style="tableStyle">
         <colgroup>
@@ -1524,10 +1524,9 @@ defineExpose({
               </div>
             </th>
             <td class="gradebook-training-cell">
-              <button v-if="pendingStudentMessages(student.id)" type="button" class="gradebook-training-count gradebook-training-count-button" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)" @click.stop="openStudentMessages(student)">
-                {{ studentTrainingCounts[student.id] ?? '–' }}<span class="gradebook-message-light" :class="{ 'gradebook-message-light-unread': unreadStudentMessages(student.id) }" aria-hidden="true"></span>
+              <button type="button" class="gradebook-training-count gradebook-training-count-button" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)" @click.stop="openStudentMessages(student)">
+                {{ studentTrainingCounts[student.id] ?? '–' }}<span v-if="pendingStudentMessages(student.id)" class="gradebook-message-light" :class="{ 'gradebook-message-light-unread': unreadStudentMessages(student.id) }" aria-hidden="true"></span>
               </button>
-              <span v-else class="gradebook-training-count" :class="{ 'gradebook-training-count-inactive': studentTrainingAccess[student.id] !== true }" :title="studentTrainingCountLabel(student.id)" :aria-label="studentTrainingCountLabel(student.id)">{{ studentTrainingCounts[student.id] ?? '–' }}</span>
             </td>
             <td v-for="column in resultColumns" :key="column.key" :class="{ 'gradebook-mean-cell': column.kind === 'mean', 'gradebook-rubric-cell': column.kind === 'item' && (column.node.rubric || column.node.merits), 'gradebook-document-cell': column.kind === 'item' && column.node.documentAssessment }">
               <button

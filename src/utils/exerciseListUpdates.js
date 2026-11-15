@@ -9,3 +9,15 @@ export function mergeExercisePage(existing, incoming, { reset = false, protected
   }
   return [...byId.values()]
 }
+
+// Los filtros se aplican sobre las páginas ya recibidas: se continúa buscando
+// hasta reunir el número solicitado, incluso si hay páginas sin coincidencias.
+export function shouldLoadNextExercisePage({ visible, hasMore, loading, matchCount, targetCount }) {
+  if (!visible || !hasMore || loading) return false
+  return matchCount < targetCount
+}
+
+export function nextExerciseResultTarget({ visible, loading, matchCount, targetCount, hasMore, distanceToBottom, batchSize = 20 }) {
+  if (!visible || loading || distanceToBottom > 420 || matchCount < targetCount) return targetCount
+  return matchCount > targetCount || hasMore ? targetCount + batchSize : targetCount
+}

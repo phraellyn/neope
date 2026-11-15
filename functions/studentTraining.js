@@ -326,6 +326,70 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     const group = await db.doc(`grupos/${data.groupId}`).get()
     if (!group.exists || group.data()?.teacherId !== request.auth.uid) throw new HttpsError('permission-denied', 'Este grupo no pertenece al profesor.')
     const messages = db.collection('studentMessages')
+    if (data.studentId !== undefined) {
+      if (!validId(data.studentId) || !(await db.doc(`grupos/${data.groupId}/alumnos/${data.studentId}`).get()).exists) throw new HttpsError('not-found', 'No se ha encontrado al alumno en este grupo.')
+    }
+    if (data.trainingAction) {
+      if (!validId(data.studentId) || !group.data()?.subjectId) throw new HttpsError('invalid-argument', 'Falta el alumno o la asignatura.')
+      const attempts = db.collection(`studentTraining/${data.studentId}/attempts`)
+      const subjectId = group.data().subjectId
+      if (data.trainingAction === 'list') {
+        const snapshot = await attempts.where('subjectId', '==', subjectId).get()
+        const history = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((item) => item.status === 'completed')
+        const roots = new Map(await Promise.all([...new Set(history.map((item) => item.exerciseId).filter(validId))].map(async (id) => [id, (await db.doc(`ejercicios/${id}`).get()).data() || {}])))
+        return { history: history.map((item) => {
+          const root = roots.get(item.exerciseId) || {}
+          const version = item.variationId ? (root.variaciones || []).find((entry) => entry.id === item.variationId) || {} : root
+          const structure = version.structure || version
+          const parts = structure.parts || structure.apartados || []
+          const source = structure.statement?.latex || structure.enunciado || parts.find((part) => part?.statement?.latex || part?.enunciado)?.statement?.latex || parts.find((part) => part?.enunciado)?.enunciado || version.codigo || version.latex || version.titulo || root.titulo || 'Ejercicio de entrenamiento'
+          return { id: item.id, title: String(source).replace(/%[^\n]*/g, '').replace(/\\(?:ej|M|p)\s*(?:\{[^{}]*\})?/g, '').replace(/\s+/g, ' ').trim().slice(0, 180), completedAt: item.completedAt || '', updatedAt: item.updatedAt || '', segments: item.segments || [], assessmentSegments: item.assessmentSegments || [], criteriaIds: Array.isArray(item.criteriaIds) ? item.criteriaIds : null }
+        }).sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt))) }
+      }
+      if (!validId(data.attemptId)) throw new HttpsError('invalid-argument', 'El intento no es válido.')
+      const reference = attempts.doc(data.attemptId)
+      if (data.trainingAction === 'save') {
+        if (!Array.isArray(data.criteriaIds) || data.criteriaIds.some((id) => typeof id !== 'string' || id.length > 330)) throw new HttpsError('invalid-argument', 'Los criterios no son válidos.')
+        await db.runTransaction(async (tx) => {
+          const snapshot = await tx.get(reference)
+          const attempt = snapshot.data()
+          if (!attempt || attempt.status !== 'completed' || attempt.subjectId !== subjectId) throw new HttpsError('not-found', 'El intento ya no está disponible.')
+          if ((attempt.updatedAt || '') !== (data.updatedAt || '')) throw new HttpsError('aborted', 'La evaluación ha cambiado. Vuelve a cargarla antes de guardar.')
+          const segments = attempt.assessmentSegments
+          if (!Array.isArray(segments) || !segments.length) throw new HttpsError('failed-precondition', 'Este intento antiguo no conserva la matriz de evaluación.')
+          const selected = new Set(data.criteriaIds)
+          const allowed = new Set(segments.flatMap((segment) => segment.criteria.map((criterion) => `${segment.id}:${criterion.id}`)))
+          if ([...selected].some((id) => !allowed.has(id))) throw new HttpsError('invalid-argument', 'Hay criterios no válidos.')
+          tx.update(reference, { criteriaIds: [...selected], segments: segments.map((segment) => ({ conceptIds: segment.conceptIds, maximum: segment.maximum, obtained: segment.criteria.reduce((sum, criterion) => sum + (selected.has(`${segment.id}:${criterion.id}`) ? criterion.points : 0), 0) })), updatedAt: new Date().toISOString() })
+        })
+        return { saved: true }
+      }
+      if (data.trainingAction === 'pdf') {
+        const attempt = (await reference.get()).data()
+        if (!attempt || attempt.status !== 'completed' || attempt.subjectId !== subjectId || !validId(attempt.exerciseId)) throw new HttpsError('not-found', 'El intento ya no está disponible.')
+        const root = (await db.doc(`ejercicios/${attempt.exerciseId}`).get()).data()
+        const version = attempt.variationId ? (root?.variaciones || []).find((item) => item.id === attempt.variationId) : root
+        const path = pdfStoragePath(data.kind === 'solved' ? (version?.pdf?.solved || version?.pdf?.resuelto) : (version?.pdf?.statement || version?.pdf?.enunciado), attempt.exerciseId, bucket.name)
+        if (!path) throw new HttpsError('not-found', 'El PDF de este ejercicio ya no está disponible.')
+        let bytes
+        try { [bytes] = await bucket.file(path).download() } catch (error) { if (Number(error?.code) === 404) throw new HttpsError('not-found', 'El PDF de este ejercicio ya no está disponible.'); throw error }
+        if (bytes.length > 7_000_000) throw new HttpsError('resource-exhausted', 'El PDF es demasiado grande para mostrarlo.')
+        return { data: bytes.toString('base64') }
+      }
+      throw new HttpsError('invalid-argument', 'Operación desconocida.')
+    }
+    if (data.newConversation === true) {
+      if (!validId(data.studentId)) throw new HttpsError('invalid-argument', 'Falta el alumno.')
+      const reply = String(data.reply || '').trim()
+      if (!reply || reply.length > 2000) throw new HttpsError('invalid-argument', 'Escribe un mensaje de hasta 2000 caracteres.')
+      const reference = messages.doc()
+      const now = new Date().toISOString()
+      const batch = db.batch()
+      batch.set(reference, { groupId: data.groupId, studentCode: data.studentId, subjectId: group.data().subjectId, text: '', status: 'pending', conversationVersion: 2, reply, replyAt: now, teacherSeenAt: now, createdAt: now, updatedAt: now, lastText: reply })
+      batch.set(db.collection(`studentMessages/${reference.id}/entries`).doc(), { sender: 'teacher', text: reply, createdAt: now })
+      await batch.commit()
+      data.messageId = reference.id
+    }
     if (data.messageId !== undefined) {
       if (!validId(data.messageId) || (data.status !== undefined && !['pending', 'waiting', 'resolved', 'dismissed'].includes(data.status))) throw new HttpsError('invalid-argument', 'Estado o mensaje no válido.')
       const reply = String(data.reply || '').trim()
@@ -338,7 +402,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
         const now = new Date().toISOString()
         const changes = {}
         if (data.status !== undefined) { changes.status = data.status; changes.updatedAt = now }
-        if (reply && (data.append === true || reply !== message.data().reply)) {
+        if (!data.newConversation && reply && (data.append === true || reply !== message.data().reply)) {
           if (['resolved', 'dismissed'].includes(message.data().status)) throw new HttpsError('failed-precondition', 'Reabre la conversación antes de enviar mensajes.')
           tx.set(entry, { sender: 'teacher', text: reply, createdAt: now }); Object.assign(changes, legacyConversationFields(message.data()), { reply, replyAt: now, updatedAt: now, lastText: reply })
         }
@@ -348,7 +412,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     }
     const snapshot = await messages.where('groupId', '==', data.groupId).get()
     const selected = data.messageId ? snapshot.docs.find((doc) => doc.id === data.messageId) : null
-    const result = { messages: snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt))), entries: selected ? await conversationEntries(db, selected) : [] }
+    const result = { messages: snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt))), entries: selected ? await conversationEntries(db, selected) : [], conversationId: selected?.id || null }
     if (data.includeTrainingCounts === true && group.data()?.subjectId) {
       const roster = await db.collection(`grupos/${data.groupId}/alumnos`).get()
       const counts = await Promise.allSettled(roster.docs.filter((student) => validId(student.id)).map(async (student) => {

@@ -14,7 +14,7 @@ function doc(path) { return { path, id: path.split('/').at(-1), get: async () =>
 function collection(path) {
   return { doc: (...args) => { if (args.length && (typeof args[0] !== 'string' || !args[0])) throw new Error('Invalid document path'); return doc(`${path}/${args.length ? args[0] : `attempt${++nextId}`}`) }, add: async (value) => { const ref = doc(`${path}/message${++nextId}`); store.set(ref.path, structuredClone(value)); return ref }, get: async () => ({ docs: [...store.keys()].filter((key) => key.startsWith(`${path}/`) && key.slice(path.length + 1).indexOf('/') < 0).map(snapshot) }), where: (field, _op, value) => ({ get: async () => ({ docs: [...store.keys()].filter((key) => key.startsWith(`${path}/`) && key.slice(path.length + 1).indexOf('/') < 0 && field.split('.').reduce((obj, part) => obj?.[part], store.get(key)) === value).map(snapshot) }) }) }
 }
-const db = { doc, collection, runTransaction: async (callback) => callback({ get: async (ref) => ref.path ? snapshot(ref.path) : ref.get(), set: (ref, value) => store.set(ref.path, structuredClone(value)), update: (ref, value) => store.set(ref.path, { ...store.get(ref.path), ...structuredClone(value) }), delete: (ref) => store.delete(ref.path) }) }
+const db = { doc, collection, batch: () => { const writes = []; return { set: (ref, value) => writes.push([ref, value]), commit: async () => writes.forEach(([ref, value]) => store.set(ref.path, structuredClone(value))) } }, runTransaction: async (callback) => callback({ get: async (ref) => ref.path ? snapshot(ref.path) : ref.get(), set: (ref, value) => store.set(ref.path, structuredClone(value)), update: (ref, value) => store.set(ref.path, { ...store.get(ref.path), ...structuredClone(value) }), delete: (ref) => store.delete(ref.path) }) }
 const files = new Map()
 const missingPaths = new Set()
 const bucket = { name: 'bucket', file: (path) => ({ download: async () => { if (missingPaths.has(path)) throw Object.assign(new Error('missing'), { code: 404 }); return [files.get(path) || Buffer.from(path)] }, save: async (bytes) => { files.set(path, bytes) }, delete: async () => { files.delete(path) } }) }
@@ -145,6 +145,26 @@ const apiWithAuth = studentTrainingHandlers({ db, bucket, auth: { getUser: async
 assert.equal((await apiWithAuth.studentMessages(request({}))).teacherName, 'Carlos', 'The teacher account supplies a name when the profile does not')
 store.set('teachers/teacher', { displayName: 'Carlos Sánchez Catalá' })
 const teacher = (data) => ({ auth: { uid: 'teacher', token: { role: 'teacher' } }, data: { groupId: 'g1', ...data } })
+store.set('studentTraining/ABC234/attempts/teacher-test', { subjectId: 'subject', status: 'completed', exerciseId: 'ex1', completedAt: '2026-11-01', updatedAt: 'v1', segments: [{ conceptIds: ['a'], obtained: 0, maximum: 2 }], assessmentSegments: [{ id: 'exercise', conceptIds: ['a'], maximum: 2, criteria: [{ id: 'criterion', description: 'Paso', points: 2 }] }], criteriaIds: [] })
+const teacherHistory = await api.teacherMessages(teacher({ studentId: 'ABC234', trainingAction: 'list' }))
+assert.ok(teacherHistory.history.some((item) => item.id === 'teacher-test'))
+assert.ok((await api.teacherMessages(teacher({ studentId: 'ABC234', trainingAction: 'pdf', attemptId: 'teacher-test', kind: 'solved' }))).data)
+await assert.rejects(() => api.teacherMessages(teacher({ studentId: 'NOT-IN-GROUP', trainingAction: 'list' })), /alumno/)
+await assert.rejects(() => api.teacherMessages(teacher({ studentId: 'ABC234', trainingAction: 'save', attemptId: 'teacher-test', criteriaIds: ['exercise:fake'], updatedAt: 'v1' })), /criterios no válidos/)
+await assert.rejects(() => api.teacherMessages(teacher({ studentId: 'ABC234', trainingAction: 'save', attemptId: 'teacher-test', criteriaIds: [], updatedAt: 'old' })), /ha cambiado/)
+await api.teacherMessages(teacher({ studentId: 'ABC234', trainingAction: 'save', attemptId: 'teacher-test', criteriaIds: ['exercise:criterion'], updatedAt: 'v1' }))
+assert.equal(store.get('studentTraining/ABC234/attempts/teacher-test').segments[0].obtained, 2)
+assert.ok((await api.load(request({}))).progress.a.obtained >= 2, 'La corrección del profesor cuenta en el progreso')
+store.delete('studentTraining/ABC234/attempts/teacher-test')
+const teacherStarted = await api.teacherMessages(teacher({ studentId: 'ABC234', newConversation: true, reply: 'Hola, ¿cómo vas?' }))
+assert.equal(teacherStarted.entries[0].sender, 'teacher')
+const studentReceived = await api.studentMessages(request({ messageId: teacherStarted.conversationId }))
+assert.equal(studentReceived.entries[0].text, 'Hola, ¿cómo vas?')
+store.delete('studentTraining/ABC234/messageLimits/g1')
+const studentReply = await api.studentMessages(request({ messageId: teacherStarted.conversationId, text: 'Tengo una duda' }))
+assert.deepEqual(studentReply.entries.map((entry) => entry.sender), ['teacher', 'student'])
+await assert.rejects(() => api.teacherMessages(teacher({ studentId: 'NOT-IN-GROUP', newConversation: true, reply: 'Hola' })), /alumno/)
+store.delete(`studentMessages/${teacherStarted.conversationId}`)
 store.set('grupos/g1/alumnos/DEF234', {})
 store.set('studentTraining/DEF234/attempts/other-subject', { subjectId: 'other', status: 'completed' })
 store.set('studentTraining/DEF234/attempts/in-progress', { subjectId: 'subject', status: 'active' })

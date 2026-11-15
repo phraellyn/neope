@@ -1219,6 +1219,12 @@ async function generateOrRegenerateContent() {
       subjectId: curriculum.subjectId,
       subjectTitle: curriculum.subjectTitle,
       selectedConceptIds: curriculum.conceptIds,
+      styleConceptIds: [...new Set(curriculum.conceptIds.flatMap((id) => {
+        const parents = new Map(props.conceptNodes.map(node => [node.id, node.parentId]))
+        const result = []; const seen = new Set(); let current = id
+        while (current && !seen.has(current)) { result.push(current); seen.add(current); current = parents.get(current) }
+        return result
+      }))],
       concepts: generationConceptCatalog(curriculum),
       latex: sourceLatexCode.value,
       latexCapabilities: generationLatexCapabilities(),

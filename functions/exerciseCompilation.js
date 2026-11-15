@@ -134,9 +134,10 @@ export function sourceHash(code, context = '') {
   return createHash('sha256').update(`${context}\u0000${code}`).digest('hex')
 }
 
-export function compilationArtifacts(exercise, exerciseId, revision) {
+export function compilationArtifacts(exercise, exerciseId, revision, compilationId = '') {
   assertUniqueExercisePartIds(exercise.parts || [])
-  const root = `ejercicios/${exerciseId}/revisions/${revision}`
+  if (compilationId && !/^[A-Za-z0-9_-]+$/.test(compilationId)) throw new Error('Identificador de compilación no válido.')
+  const root = `ejercicios/${exerciseId}/revisions/${revision}${compilationId ? `/compilations/${compilationId}` : ''}`
   const artifacts = []
   const add = (key, storagePath, code, current, profile) => artifacts.push({
     key,
@@ -180,4 +181,28 @@ export function compilationArtifacts(exercise, exerciseId, revision) {
     }
   }
   return artifacts
+}
+
+export function pdfStoragePaths(target = {}) {
+  const paths = new Set()
+  const add = (reference) => { if (reference?.storagePath) paths.add(reference.storagePath) }
+  add(target.pdf?.statement)
+  add(target.pdf?.solved)
+  add(target.statement?.pdf)
+  add(target.answer?.pdf)
+  add(target.workedSolution?.pdf)
+  for (const part of target.parts || []) {
+    add(part.statement?.pdf)
+    add(part.answer?.pdf)
+    add(part.workedSolution?.pdf)
+  }
+  return paths
+}
+
+export function exercisePdfStoragePaths(exercise = {}) {
+  const paths = pdfStoragePaths(exercise)
+  for (const variation of exercise.variaciones || []) {
+    for (const path of pdfStoragePaths(variation)) paths.add(path)
+  }
+  return paths
 }

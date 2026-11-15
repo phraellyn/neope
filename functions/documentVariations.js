@@ -6,6 +6,7 @@ import { visualReferenceImages, visualMessageContent, visualModelCatalog } from 
 import { ensureAlignedInDisplayMath, normalizeDisplayMathDelimiters, normalizeLatexTextAccents } from './solutionLayout.js'
 import { criterionMathInstructions } from './achievementGranularity.js'
 import { normalizeGeneratedCriterionMath } from './criteriaLatex.js'
+import { teacherStylePrompt } from './solutionStyle.js'
 
 const clean = (value, length = 60000) => typeof value === 'string' ? value.trim().slice(0, length) : ''
 const ids = (value) => uniqueConceptIds(value).slice(0, 240)
@@ -99,6 +100,11 @@ export function documentVariationHandlers({ db, resolveModel, apiKey, requestMod
       const requiredConceptIds = ids(data.requiredConceptIds)
       const contractCriteria = (Array.isArray(data.contractCriteria) ? data.contractCriteria : []).slice(0, 240).map((criterion) => ({ partId: clean(criterion.partId, 180), points: Number(criterion.points) || 0, description: clean(criterion.description, 2000) }))
       const concepts = catalogFrom(data)
+      const parents = new Map(concepts.map(node => [node.id, node.parentId]))
+      const styleIds = new Set(requiredConceptIds)
+      for (const id of requiredConceptIds) { let parent = parents.get(id); const seen = new Set(); while (parent && !seen.has(parent)) { styleIds.add(parent); seen.add(parent); parent = parents.get(parent) } }
+      const teacher = request.auth?.uid ? await db.collection('teachers').doc(request.auth.uid).get() : null
+      const teacherStyle = teacherStylePrompt(teacher?.data()?.perfil, [...styleIds])
       let reference = contract
       if (data.origin === 'bank') {
         const exerciseId = clean(data.exerciseId, 180)
@@ -121,7 +127,7 @@ export function documentVariationHandlers({ db, resolveModel, apiKey, requestMod
           : 'Clona didácticamente el ejercicio original: crea una variante nueva de la misma dificultad y con las mismas destrezas, cambiando datos y contexto.'
       const prompt = { task, contract, reference: data.origin === 'new' ? '' : reference,
         course: clean(data.course, 80), subjectId: clean(data.subjectId, 180), requiredConceptIds,
-        concepts: concepts.filter((node) => requiredConceptIds.includes(node.id)), contractCriteria, instructions: clean(data.instructions, 3000),
+        concepts: concepts.filter((node) => requiredConceptIds.includes(node.id)), contractCriteria, instructions: clean(data.instructions, 3000), teacherStyle,
         previousProposals: (data.previousProposals || []).slice(-3).map((code) => clean(code, 20000)), latexCapabilities: data.latexCapabilities || {}, }
       prompt.criteriaInstruction = `En criteria devuelve exactamente los criterios de contractCriteria, con los mismos partId y puntos, pero adaptando las descripciones al ejercicio nuevo. Si contractCriteria está vacío, criteria también debe estar vacío. En partConcepts indica los conceptos requeridos que evalúa cada apartado, usando sus identificadores % neope:part como partId. Conserva los espacios y las cajas para responder y una extensión comparable al original.\n${criterionMathInstructions}`
       prompt.columnInstruction = 'No añadas, elimines ni desplaces los comandos \\newcolumn o \\columnbreak: conserva cada uno en el mismo apartado y dentro de los mismos entornos que en contract.'

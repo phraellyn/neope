@@ -11,6 +11,7 @@ import {
 import {
   codeForCompiler,
   compilationArtifacts,
+  exercisePdfStoragePaths,
   exerciseRenderProfiles,
 } from '../functions/exerciseCompilation.js'
 
@@ -111,6 +112,18 @@ assert.ok(artifacts.some((artifact) => artifact.key === 'pdf.statement'))
 assert.ok(artifacts.some((artifact) => artifact.key === 'pdf.solved'))
 assert.ok(artifacts.some((artifact) => artifact.key.endsWith('.statement.pdf')))
 assert.ok(artifacts.some((artifact) => artifact.key.endsWith('.workedSolution.pdf')))
+
+const originalJob = compilationArtifacts(document, 'demo', 1, 'originalJob')
+const variationJob = compilationArtifacts(document, 'demo', 1, 'variationJob')
+const otherJob = compilationArtifacts(document, 'demo', 1, 'otherJob')
+for (const [index, artifact] of originalJob.entries()) {
+  assert.notEqual(artifact.storagePath, variationJob[index].storagePath, 'Una variante no sobrescribe el PDF original aunque coincida la revisión')
+  assert.notEqual(artifact.storagePath, otherJob[index].storagePath, 'Dos compilaciones de la misma revisión usan archivos independientes')
+}
+assert.throws(() => compilationArtifacts(document, 'demo', 1, '../other'), /Identificador/)
+const sharedLegacyPdf = 'ejercicios/demo/revisions/1/parts/main/statement.pdf'
+const protectedPaths = exercisePdfStoragePaths({ statement: { pdf: { storagePath: 'new.pdf' } }, variaciones: [{ statement: { pdf: { storagePath: sharedLegacyPdf } } }] })
+assert.ok(protectedPaths.has(sharedLegacyPdf), 'No se elimina un PDF antiguo que todavía usa otra versión')
 
 const statementArtifact = artifacts.find((artifact) => artifact.key === 'pdf.statement')
 const solvedArtifact = artifacts.find((artifact) => artifact.key === 'pdf.solved')
