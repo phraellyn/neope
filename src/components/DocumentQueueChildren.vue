@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import ExercisePdfPreview from './ExercisePdfPreview.vue'
+import ExerciseVariantSelector from './ExerciseVariantSelector.vue'
 
 defineOptions({ name: 'DocumentQueueChildren' })
 
@@ -15,7 +16,7 @@ const props = defineProps({
   containerId: { type: String, required: true },
 })
 
-const emit = defineEmits(['drag-start', 'drop-block', 'remove', 'argument-change', 'metric-change'])
+const emit = defineEmits(['drag-start', 'drop-block', 'remove', 'argument-change', 'metric-change', 'version-change'])
 const toolsById = computed(() => new Map(props.tools.map((tool) => [tool.id, tool])))
 const exercisesById = computed(() => new Map(props.exercises.map((exercise) => [exercise.id, exercise])))
 
@@ -24,8 +25,12 @@ function toolFor(block) {
 }
 
 function exerciseTitle(block) {
-  const exercise = exercisesById.value.get(block?.exerciseId) || block?.snapshot
+  const exercise = exerciseFor(block)
   return exercise?.titulo || exercise?.info || exercise?.curriculum?.subjectTitle || 'Ejercicio'
+}
+
+function exerciseFor(block) {
+  return block?.snapshot || exercisesById.value.get(block?.exerciseId) || null
 }
 
 </script>
@@ -46,7 +51,8 @@ function exerciseTitle(block) {
       @dragover.prevent
       @drop.stop="emit('drop-block', $event, block.blockId, containerId)"
     >
-      <header>
+      <header :class="{ 'document-tool-child-header--variants': block.type !== 'tool' && exerciseFor(block)?.variaciones?.length }">
+        <ExerciseVariantSelector v-if="block.type !== 'tool'" :model-value="block.version || 0" :variations="exerciseFor(block)?.variaciones || []" compact class="document-child-variants" @update:model-value="emit('version-change', block, $event)" />
         <v-icon :icon="block.type === 'tool' ? (toolFor(block)?.icon || 'mdi-tools') : 'mdi-file-document-outline'" size="15" />
         <strong>{{ block.type === 'tool' ? (toolFor(block)?.label || 'Herramienta') : exerciseTitle(block) }}</strong>
         <v-spacer />
@@ -93,6 +99,7 @@ function exerciseTitle(block) {
         @remove="(item) => emit('remove', item)"
         @argument-change="(item, key, value) => emit('argument-change', item, key, value)"
         @metric-change="(item, field, value, index) => emit('metric-change', item, field, value, index)"
+        @version-change="(item, version) => emit('version-change', item, version)"
       />
     </article>
   </div>
@@ -136,6 +143,11 @@ function exerciseTitle(block) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.document-tool-child > header.document-tool-child-header--variants { padding-left:4px; }
+.document-child-variants { flex:0 1 auto; min-width:0; max-width:55%; overflow-x:auto; border:0; background:transparent; padding:0; }
+.document-child-variants :deep(.exercise-variant-label) { display:none; }
+.document-child-variants :deep(.exercise-variant-option) { flex:0 0 19px; }
 
 .document-tool-child-arguments {
   display: grid;

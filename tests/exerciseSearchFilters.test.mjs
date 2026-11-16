@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
-import { matchesExerciseStatusFilters as matches, nextExerciseFilterState } from '../src/utils/exerciseSearchFilters.js'
+import { hasPublishedExerciseVersion, matchesExerciseStatusFilters as matches, nextExerciseFilterState } from '../src/utils/exerciseSearchFilters.js'
 import { exerciseSolutionOrigin } from '../src/utils/exerciseCardMetadata.js'
 
 for (const [group, options] of Object.entries({ completeness: ['all', 'complete', 'incomplete'], publication: ['all', 'published', 'unpublished'], solution: ['all', 'ai', 'human'] })) {
   options.forEach((state, index) => assert.equal(nextExerciseFilterState(group, state), options[(index + 1) % options.length]))
 }
+assert.equal(hasPublishedExerciseVersion({}), false)
+assert.equal(hasPublishedExerciseVersion({ studentTrainingPublished: true, variaciones: [{ studentTrainingPublished: false }] }), true)
+assert.equal(hasPublishedExerciseVersion({ studentTrainingPublished: false, variaciones: [{ studentTrainingPublished: false }, { studentTrainingPublished: true }] }), true)
+assert.equal(hasPublishedExerciseVersion({ studentTrainingPublished: false, variaciones: [{}, { studentTrainingPublished: false }] }), false)
+assert.equal(hasPublishedExerciseVersion({ studentTrainingPublished: true, variaciones: [{}] }), true, 'Legacy variants inherit the original publication state')
 for (const complete of [false, true]) for (const published of [false, true]) for (const solutionOrigin of ['ai', 'human', 'unsolved']) {
   const item = { complete, published, solutionOrigin }
   assert.equal(matches(item), true)

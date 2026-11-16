@@ -73,7 +73,8 @@ import { useExerciseImages } from './composables/useExerciseImages'
 import { archivedImage, exerciseImageAssets, graphicReferences, imageAssetsSignature, imageGenerationMetadata, modelCapabilitiesOption, referencedImageFiles, replaceGraphicReference, revokePendingImage, versionImageFiles } from './utils/exerciseImages'
 import { validateExerciseSolutionSource } from '../functions/exerciseSolutionSource.js'
 import { trainingReadiness } from '../functions/studentTrainingLogic.js'
-import { matchesExerciseStatusFilters, nextExerciseFilterState } from './utils/exerciseSearchFilters'
+import { hasPublishedExerciseVersion, matchesExerciseStatusFilters } from './utils/exerciseSearchFilters'
+import ExerciseStatusFilters from './components/ExerciseStatusFilters.vue'
 import { mergeExercisePage, nextExerciseResultTarget, putExerciseFirst, shouldLoadNextExercisePage } from './utils/exerciseListUpdates'
 import { showAppErrorToast } from './composables/useAppErrorToast'
 import {
@@ -198,9 +199,6 @@ const exerciseSearchSubject = computed(() => exerciseSearchCurriculum.value.subj
 const exerciseSearchConceptKey = computed(() => JSON.stringify(exerciseSearchCurriculum.value.conceptIds || []))
 const exerciseResultBatchSize = 20
 const exerciseResultTarget = ref(exerciseResultBatchSize)
-const completenessFilterView = computed(() => ({ all: { icon: 'mdi-check-all', label: 'Integridad: todos' }, complete: { icon: 'mdi-check-circle-outline', label: 'Solo completos' }, incomplete: { icon: 'mdi-alert-circle-outline', label: 'Solo incompletos' } })[exerciseSearchCompleteness.value])
-const publicationFilterView = computed(() => ({ all: { icon: 'mdi-eye-settings-outline', label: 'Publicación: todos' }, published: { icon: 'mdi-eye-check-outline', label: 'Solo publicados' }, unpublished: { icon: 'mdi-eye-off-outline', label: 'Solo sin publicar' } })[exerciseSearchPublication.value])
-const solutionFilterView = computed(() => ({ all: { icon: 'mdi-account-switch-outline', label: 'Autoría de la solución: todas' }, ai: { icon: 'mdi-robot-outline', label: 'Solo soluciones de IA' }, human: { icon: 'mdi-account-outline', label: 'Solo soluciones humanas' } })[exerciseSearchSolution.value])
 const exerciseSearchCurriculumDialog = ref(false)
 const isLoadingExercises = ref(false)
 const isLoadingMoreExercises = ref(false)
@@ -441,7 +439,7 @@ const filteredExercises = computed(() => {
     if (!matchesSearch) return false
     if (!matchesExerciseStatusFilters({
       complete: appliedExerciseStatus.completeness === 'all' ? false : searchExerciseReadiness(exercise).complete,
-      published: searchExercisePublished(exercise),
+      published: hasPublishedExerciseVersion(exercise),
       solutionOrigin: appliedExerciseStatus.solution === 'all' ? null : exerciseSolutionOrigin(exercise, searchExerciseVersionIndex(exercise)),
     }, appliedExerciseStatus)) return false
     if (exerciseSearchCourse.value && exercise.curriculum.course !== exerciseSearchCourse.value) return false
@@ -1274,11 +1272,12 @@ function searchExerciseReadiness(exercise) {
   exerciseReadinessCache.set(source, { exerciseId: exercise.id, variant: index > 0, result })
   return result
 }
-async function toggleStudentTrainingPublication(exercise) {
+async function toggleStudentTrainingPublication(exercise, requestedVersion = null) {
   if (!exercise?.id || trainingPublicationBusy[exercise.id]) return
-  const index = searchExerciseVersionIndex(exercise)
-  const version = searchExerciseVersion(exercise)
-  const previous = searchExercisePublished(exercise)
+  const index = requestedVersion === null ? searchExerciseVersionIndex(exercise) : Number(requestedVersion)
+  const version = exerciseVersion(exercise, index)
+  if (!version) return
+  const previous = index ? (typeof version.studentTrainingPublished === 'boolean' ? version.studentTrainingPublished : exercise.studentTrainingPublished === true) : exercise.studentTrainingPublished === true
   const next = !previous
   trainingPublicationBusy[exercise.id] = true
   version.studentTrainingPublished = next
@@ -4958,8 +4957,11 @@ async function setActiveView(view) {
     await cancelExerciseEdit({ force: true })
   }
   if (active.value === 'Documentos' && view !== 'Documentos' && documentWorkflow.value.dirty) {
-    if (!window.confirm('Hay cambios sin guardar en el documento. ¿Quieres descartarlos?')) return
-    documentCreatorRef.value?.backToLibrary?.({ force: true })
+    if (documentWorkflow.value.mode !== 'editor' && !window.confirm('Hay cambios sin guardar en el documento. ¿Quieres descartarlos?')) return
+    if (documentWorkflow.value.mode === 'editor' && !(await documentCreatorRef.value?.saveDraft?.())) {
+      showAppErrorToast('No se ha podido guardar el borrador. Comprueba la conexión antes de salir.')
+      return
+    }
   }
   if (active.value === 'Grupo' && groupView.value === 'programming' && view !== 'Grupo') {
     await programmingRef.value?.flush?.()
@@ -4976,6 +4978,22 @@ async function setActiveView(view) {
   if (view !== 'Perfil') teacherProfileEditing.value = false
   if (view === 'Documentos') documentsTab.value = 'documents'
   active.value = view
+}
+
+async function setDocumentsTab(value) {
+  if (value !== 'documents' && documentsTab.value === 'documents' && documentWorkflow.value.dirty) {
+    if (documentWorkflow.value.mode !== 'editor' && !window.confirm('Hay cambios sin guardar en el documento. ¿Quieres descartarlos?')) return
+    if (documentWorkflow.value.mode === 'editor' && !(await documentCreatorRef.value?.saveDraft?.())) {
+      showAppErrorToast('No se ha podido guardar el borrador. Comprueba la conexión antes de salir.')
+      return
+    }
+  }
+  documentsTab.value = value
+}
+
+async function ensureDocumentExercises(ids) {
+  const missing = [...new Set(ids)].filter((id) => id && !exercises.value.some((item) => item.id === id))
+  await Promise.all(missing.map(async (id) => updateExerciseListFromSnapshot(await getDoc(doc(db, 'ejercicios', id)))))
 }
 
 function autosaveGradebook(options = {}) {
@@ -5419,7 +5437,7 @@ onBeforeUnmount(() => {
         </v-tooltip>
       </template>
       <template v-else-if="active === 'Documentos'">
-        <v-btn-toggle :model-value="documentsTab" mandatory density="compact" class="calendar-toolbar-modes documents-toolbar-tabs" aria-label="Sección de documentos" @update:model-value="documentsTab = $event">
+        <v-btn-toggle :model-value="documentsTab" mandatory density="compact" class="calendar-toolbar-modes documents-toolbar-tabs" aria-label="Sección de documentos" @update:model-value="setDocumentsTab">
           <v-btn value="documents">Documentos</v-btn>
           <v-btn value="templates">Plantillas</v-btn>
         </v-btn-toggle>
@@ -6166,12 +6184,15 @@ onBeforeUnmount(() => {
             :library-query="documentSearchQuery"
             :has-more-exercises="hasMoreExercises"
             :loading-more-exercises="isLoadingMoreExercises"
+            :publication-busy="trainingPublicationBusy"
+            :ensure-exercises="ensureDocumentExercises"
             v-model:ai-model="selectedAiModel"
             :ai-model-options="aiModelOptions"
             @busy-change="isCompilingDocument = $event"
             @state-change="documentWorkflow = $event"
             @assessment-saved="applyDocumentAssessmentToLoadedGroups"
             @load-more-exercises="loadNextDocumentExerciseBatch"
+            @toggle-publication="toggleStudentTrainingPublication"
           />
         </section>
 
@@ -6438,11 +6459,7 @@ onBeforeUnmount(() => {
             :exercise-counts="searchExerciseCountByConcept"
           >
             <template #tools>
-              <div class="exercise-map-status-controls" role="group" aria-label="Filtros de ejercicios">
-                <v-tooltip :text="`${completenessFilterView.label}. Pulsar para cambiar`" location="start"><template #activator="{ props }"><v-btn v-bind="props" :icon="completenessFilterView.icon" :class="`status-${exerciseSearchCompleteness}`" class="exercise-map-status-button" variant="text" :aria-label="`${completenessFilterView.label}. Pulsar para cambiar`" @click="exerciseSearchCompleteness = nextExerciseFilterState('completeness', exerciseSearchCompleteness)" /></template></v-tooltip>
-                <v-tooltip :text="`${publicationFilterView.label}. Pulsar para cambiar`" location="start"><template #activator="{ props }"><v-btn v-bind="props" :icon="publicationFilterView.icon" :class="`status-${exerciseSearchPublication}`" class="exercise-map-status-button" variant="text" :aria-label="`${publicationFilterView.label}. Pulsar para cambiar`" @click="exerciseSearchPublication = nextExerciseFilterState('publication', exerciseSearchPublication)" /></template></v-tooltip>
-                <v-tooltip :text="`${solutionFilterView.label}. Pulsar para cambiar`" location="start"><template #activator="{ props }"><v-btn v-bind="props" :icon="solutionFilterView.icon" :class="`status-${exerciseSearchSolution}`" class="exercise-map-status-button" variant="text" :aria-label="`${solutionFilterView.label}. Pulsar para cambiar`" @click="exerciseSearchSolution = nextExerciseFilterState('solution', exerciseSearchSolution)" /></template></v-tooltip>
-              </div>
+              <ExerciseStatusFilters v-model:completeness="exerciseSearchCompleteness" v-model:publication="exerciseSearchPublication" v-model:solution="exerciseSearchSolution" />
             </template>
           </ExerciseCurriculumPicker>
         </v-card-text>

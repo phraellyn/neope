@@ -139,6 +139,28 @@ try {
   bank.documentCurriculum.value = { course: '2ºBTO', subjectId: '2bto-matematicas-ii', conceptIds: [] }
   assert.equal(bank.requiresExercises.value, true)
   assert.equal(bank.matchingExercises.value.length, 1)
+  bank.appliedExerciseStatus.publication = 'published'
+  assert.equal(bank.matchingExercises.value.length, 0, 'The document filter excludes unpublished exercises')
+  bank.appliedExerciseStatus.publication = 'unpublished'
+  assert.equal(bank.matchingExercises.value.length, 1, 'The document filter includes unpublished exercises')
+  bank.appliedExerciseStatus.publication = 'all'
+  bank.appliedExerciseStatus.competencial = true
+  assert.equal(bank.matchingExercises.value.length, 0, 'The competency filter applies in the document selector')
+  bank.appliedExerciseStatus.competencial = false
+  bank.appliedExerciseStatus.completeness = 'complete'
+  assert.equal(bank.matchingExercises.value.length, 0, 'Incomplete exercises are excluded by the completeness filter')
+  bank.appliedExerciseStatus.completeness = 'all'
+  bank.appliedExerciseStatus.solution = 'ai'
+  assert.equal(bank.matchingExercises.value.length, 0, 'The solution-origin filter applies in the document selector')
+  bank.appliedExerciseStatus.solution = 'all'
+  const variantExercise = { ...exercise, studentTrainingPublished: false, variaciones: [{ id: 'variant', studentTrainingPublished: true, workedSolution: { latex: 'Solución de la variante.' } }] }
+  const variantBank = component.setup({ ...props, templates: [bankTemplate], exercises: [variantExercise] }, { expose() {}, emit() {} })
+  variantBank.appliedExerciseStatus.publication = 'published'
+  assert.equal(variantBank.matchingExercises.value.length, 1, 'A published variant makes the exercise visible even if the original is unpublished')
+  variantBank.setSelectedVersion(variantExercise, 1)
+  assert.equal(variantBank.matchingExercises.value.length, 1, 'Changing the selected variant does not hide a published exercise')
+  variantBank.appliedExerciseStatus.solution = 'human'
+  assert.equal(variantBank.matchingExercises.value.length, 0, 'The selected AI variant is excluded from human solutions')
   bank.exerciseQueue.value = [bank.createExerciseDocumentBlock('exercise')]
   const documentBody = () => bank.generatedCodeForTemplate(bank.selectedTemplates.value[0]).split('\\begin{document}').at(-1)
   assert.match(documentBody(), /\\lsol\{2\}/)
@@ -174,6 +196,34 @@ try {
   const selectivityBody = selectivity.generatedCodeForTemplate(selectivity.selectedTemplates.value[0])
   assert.match(selectivityBody, /\\begin\{selectividadcuatro\}[\s\S]*Primero\.[\s\S]*\\end\{selectividadcuatro\}/)
   assert.match(selectivityBody, /\\begin\{selectividadcinco\}[\s\S]*Primero\.[\s\S]*\\end\{selectividadcinco\}/)
+  const solvedTemplate = { id: 'solved-selectivity', archivo: 'examen-resuelto.tex', nombre: 'Examen - Resuelto', codigo: readFileSync(resolve('templates/examen-resuelto.tex'), 'utf8') }
+  const pairedSelectivity = component.setup({ ...props, templates: [selectivityTemplate, solvedTemplate], exercises: [structuredExercise] }, { expose() {}, emit() {} })
+  pairedSelectivity.newDocument()
+  pairedSelectivity.selectTemplate(pairedSelectivity.documentTemplates.value.find((template) => template.key === 'selectivity'))
+  pairedSelectivity.addTemplateToQueue(pairedSelectivity.documentTemplates.value.find((template) => template.key === 'solved-selectivity'))
+  pairedSelectivity.addTool(pairedSelectivity.documentTools.value.find((tool) => tool.id === 'selectividad-pregunta-4'))
+  pairedSelectivity.addTool(pairedSelectivity.documentTools.value.find((tool) => tool.id === 'selectividad-pregunta-5'))
+  for (const tool of pairedSelectivity.exerciseQueue.value) tool.children.push(pairedSelectivity.createExerciseDocumentBlock('structured'))
+  const pairedStatement = pairedSelectivity.generatedCodeForTemplate(pairedSelectivity.selectedTemplates.value.find((template) => template.key === 'selectivity')).split('\\begin{document}').at(-1)
+  const pairedSolution = pairedSelectivity.generatedCodeForTemplate(pairedSelectivity.selectedTemplates.value.find((template) => template.key === 'solved-selectivity')).split('\\begin{document}').at(-1)
+  assert.match(pairedStatement, /\\begin\{selectividadcuatro\}[\s\S]*Primero\.[\s\S]*\\end\{selectividadcuatro\}/)
+  assert.match(pairedStatement, /\\begin\{selectividadcinco\}[\s\S]*Primero\.[\s\S]*\\end\{selectividadcinco\}/)
+  assert.doesNotMatch(pairedSolution, /selectividad(?:cuatro|cinco)/, 'Los entornos de selectividad no se insertan en la plantilla de soluciones')
+  assert.equal((pairedSolution.match(/Primero\./g) || []).length, 2, 'Los ejercicios optativos siguen incluidos en la solución')
+  const exerciseWithVariant = { ...structuredExercise, variaciones: [{ ...structuredExercise, id: 'v1', statement: { latex: 'Variante elegida.' }, parts: [{ id: 'vpart', statement: { latex: 'Apartado de la variante.' }, puntuacion: 3 }], pdf: { enunciado: 'variante.pdf' } }] }
+  const variantSelectivity = component.setup({ ...props, templates: [selectivityTemplate], exercises: [exerciseWithVariant] }, { expose() {}, emit() {} })
+  variantSelectivity.newDocument()
+  variantSelectivity.selectTemplate(variantSelectivity.documentTemplates.value[0])
+  variantSelectivity.addTool(variantSelectivity.documentTools.value.find((tool) => tool.id === 'selectividad-pregunta-4'))
+  variantSelectivity.addTool(variantSelectivity.documentTools.value.find((tool) => tool.id === 'selectividad-pregunta-5'))
+  const [fourth, fifth] = variantSelectivity.exerciseQueue.value
+  fourth.children.push(variantSelectivity.createExerciseDocumentBlock('structured'))
+  fifth.children.push(variantSelectivity.createExerciseDocumentBlock('structured'))
+  variantSelectivity.setQueueBlockVersion(fourth.children[0], 1)
+  assert.equal(fourth.children[0].version, 1, 'La variante seleccionada se guarda dentro del bloque optativo')
+  assert.equal(fifth.children[0].version, 0, 'Cambiar una opción no modifica otro bloque del mismo ejercicio')
+  assert.equal(variantSelectivity.queueExercisePdf(fourth.children[0]), 'variante.pdf', 'La vista previa utiliza la variante seleccionada')
+  assert.match(variantSelectivity.generatedCodeForTemplate(variantSelectivity.selectedTemplates.value[0]), /Apartado de la variante\./, 'El documento usa el contenido de la variante')
   const firstOptional = selectivity.exerciseQueue.value[0]
   const nestedExercise = firstOptional.children[0]
   const secondOptionalId = selectivity.exerciseQueue.value[1].blockId
@@ -371,6 +421,16 @@ Contenido conservado.
   assert.equal(copy.documentContent.value.source.options.variation.sourceDocumentId, 'original-document')
   assert.equal(copy.workflowState.value.dirty, true, 'The accepted draft must ask about unsaved work')
   assert.equal(exercise.enunciado.includes('8+8'), false, 'Generated exercises must not mutate the bank')
+  const draftState = copy.captureDraft()
+  assert.deepEqual(copy.documentCardTemplates({ isDraft: true, state: draftState }), [copy.selectedTemplates.value[0].nombre], 'Draft cards display the selected templates')
+  assert.deepEqual(copy.documentCardTemplates({ isDraft: true, state: { selectedTemplateKeys: draftState.selectedTemplateKeys } }), [copy.selectedTemplates.value[0].nombre], 'Previously saved drafts resolve their template names')
+  const restored = component.setup({ ...props, templates: [bankTemplate], exercises: [exercise], ensureExercises: async () => {} }, { expose() {}, emit() {} })
+  await restored.editDraft({ id: 'draft-1', state: draftState })
+  assert.equal(restored.activeDraftId.value, 'draft-1')
+  assert.equal(restored.selectedDocumentId.value, null, 'Restoring a copy keeps the original document intact')
+  assert.equal(restored.exerciseQueue.value.length, copy.exerciseQueue.value.length, 'A draft retains the exercise blocks')
+  assert.deepEqual(restored.selectedTemplateKeys.value, draftState.selectedTemplateKeys)
+  assert.equal(restored.documentCode.value, draftState.documentCode, 'A draft preserves edited LaTeX')
   copy.revokePreview()
   copy.revokeGeneratedSegmentArtifacts()
   await nextTick()

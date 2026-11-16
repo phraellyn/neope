@@ -9,6 +9,11 @@ export function nextExerciseFilterState(group, current) {
   return options.length ? options[(options.indexOf(current) + 1) % options.length] : 'all'
 }
 
+export function hasPublishedExerciseVersion(exercise = {}) {
+  if (exercise.studentTrainingPublished === true) return true
+  return Array.isArray(exercise.variaciones) && exercise.variaciones.some((version) => version?.studentTrainingPublished === true)
+}
+
 export function matchesExerciseStatusFilters({ complete, published, solutionOrigin }, { completeness = 'all', publication = 'all', solution = 'all' } = {}) {
   if (completeness === 'complete' && !complete) return false
   if (completeness === 'incomplete' && complete) return false

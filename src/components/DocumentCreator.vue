@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import standardExerciseTemplate from '../../templates/ejercicios.tex?raw'
@@ -9,6 +9,7 @@ import { mathSubjects } from '../data/mathCurriculum'
 import ExerciseCurriculumPicker from './ExerciseCurriculumPicker.vue'
 import ExercisePdfPreview from './ExercisePdfPreview.vue'
 import ExerciseVariantSelector from './ExerciseVariantSelector.vue'
+import ExerciseStatusFilters from './ExerciseStatusFilters.vue'
 import DocumentPdfPreview from './DocumentPdfPreview.vue'
 import DocumentCodeEditor from './DocumentCodeEditor.vue'
 import DocumentVariationDialog from './DocumentVariationDialog.vue'
@@ -17,7 +18,9 @@ import DocumentAssessmentAlignmentEditor from './DocumentAssessmentAlignmentEdit
 import DocumentQueueChildren from './DocumentQueueChildren.vue'
 import MasonryGrid from './MasonryGrid.vue'
 import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, exerciseStructureFromDocument, mergeExerciseStructure, normalizeCriteriaUnicode, parseExerciseLatex } from '../utils/exerciseStructure'
-import { compactExerciseConceptLabel, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
+import { compactExerciseConceptLabel, exerciseSolutionOrigin, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
+import { hasPublishedExerciseVersion, matchesExerciseStatusFilters } from '../utils/exerciseSearchFilters'
+import { trainingReadiness } from '../../functions/studentTrainingLogic'
 import { normalizeAlignedLineBreaks, normalizeDisplayMathDelimiters } from '../utils/latexNormalization'
 import { appendShortAnswers, canonicalFieldKey, ensureShortAnswerTikzCompatibility, ensureTikzPaddingCompatibility, isInternalTemplate, migrateDocumentTemplate, readDocumentTemplate, renderTemplateWrapper, splitFinalDocumentCode, templateHeader, upgradeExerciseCollectionHeader } from '../utils/documentTemplate'
 import { documentSourceContent, editableDocumentParts, repairNestedLegacyDocument } from '../utils/latexDocumentSource'
@@ -57,9 +60,11 @@ const props = defineProps({
   aiModelOptions: { type: Array, default: () => [] },
   hasMoreExercises: { type: Boolean, default: false },
   loadingMoreExercises: { type: Boolean, default: false },
+  publicationBusy: { type: Object, default: () => ({}) },
+  ensureExercises: { type: Function, default: async () => {} },
 })
 
-const emit = defineEmits(['busy-change', 'state-change', 'assessment-saved', 'update:ai-model', 'load-more-exercises'])
+const emit = defineEmits(['busy-change', 'state-change', 'assessment-saved', 'update:ai-model', 'load-more-exercises', 'toggle-publication'])
 const documentAiModel = computed({
   get: () => props.aiModel,
   set: (value) => emit('update:ai-model', value),
@@ -90,6 +95,12 @@ const mode = ref('library')
 const currentStep = ref(1)
 const maxVisitedStep = ref(1)
 const documents = ref([])
+const drafts = ref([])
+const activeDraftId = ref(null)
+const draftError = ref('')
+let draftTimer
+let draftWrites = Promise.resolve()
+let restoringDraft = false
 const isLoadingDocuments = ref(false)
 const documentsError = ref('')
 watch(documentsError, (message) => {
@@ -110,6 +121,13 @@ const documentAssessment = reactive({ evaluable: false, groupId: null, shortName
 const documentCurriculum = ref(emptyCurriculum())
 const curriculumPickerKey = ref(0)
 const exerciseQuery = ref('')
+const exerciseCompleteness = ref('all')
+const exercisePublication = ref('all')
+const exerciseSolution = ref('all')
+const appliedExerciseStatus = reactive({ completeness: 'all', publication: 'all', solution: 'all', competencial: false })
+let filterApplyFrame = 0
+let filterApplyTimer = 0
+const documentFilterCount = computed(() => Number(Boolean(documentCurriculum.value.course)) + Number(Boolean(documentCurriculum.value.subjectId)) + (documentCurriculum.value.conceptIds || []).length + Number(Boolean(documentCurriculum.value.competencial)) + Number(exerciseCompleteness.value !== 'all') + Number(exercisePublication.value !== 'all') + Number(exerciseSolution.value !== 'all'))
 const selectedVersions = reactive({})
 const documentContent = ref(createDocumentContent())
 const curriculumDialog = ref(false)
@@ -825,9 +843,11 @@ const teacherSignatureImages = computed(() => (Array.isArray(props.teacherProfil
   .filter((image) => image?.url))
 const filteredDocuments = computed(() => {
   const query = normalizeName(props.libraryQuery)
-  if (!query) return documents.value
-  return documents.value.filter((documentData) => normalizeName([
+  const all = [...drafts.value, ...documents.value]
+  if (!query) return all
+  return all.filter((documentData) => normalizeName([
     documentData.plantilla?.nombre,
+    ...documentCardTemplates(documentData),
     documentCardTitle(documentData),
     ...Object.values(documentData.campos || {}),
   ].join(' ')).includes(query))
@@ -915,6 +935,112 @@ function documentFingerprint() {
     finalCodes: { ...finalCodes },
   })
 }
+
+function draftCollection(uid = auth.currentUser?.uid) {
+  return uid ? collection(db, 'teachers', uid, 'documentDrafts') : null
+}
+
+function captureDraft() {
+  return {
+    selectedDocumentId: selectedDocumentId.value, createdAt: createdAt.value, creationContext: creationContext.value,
+    selectedTemplateKeys: [...selectedTemplateKeys.value], selectedTemplateLabels: selectedTemplates.value.map((template) => ({ key: template.key, nombre: template.nombre || template.metadata.name || template.archivo })), selectedPreviewTemplateKey: selectedPreviewTemplateKey.value,
+    fields: { ...fieldValues }, assessment: { ...documentAssessment }, curriculum: { ...documentCurriculum.value },
+    searchStatus: { completeness: exerciseCompleteness.value, publication: exercisePublication.value, solution: exerciseSolution.value },
+    content: serializeDocumentContent(documentContent.value), sourceLatex: sourceLatexDraft.value,
+    finalCodes: { ...finalCodes }, documentCode: documentCode.value, documentCodeNeedsRegeneration: documentCodeNeedsRegeneration.value,
+    currentStep: currentStep.value, maxVisitedStep: maxVisitedStep.value, optionalRequiredCount: optionalRequiredCount.value,
+    sourceFiles: sourceFiles.value.map((file) => ({ id: file.id, name: file.name, compilerName: file.compilerName, contentType: file.contentType || '', size: Number(file.size) || 0, path: file.path || '', url: file.url || '', file: file.file || null })),
+  }
+}
+
+async function saveDraft() {
+  clearTimeout(draftTimer)
+  if (restoringDraft || mode.value !== 'editor' || !workflowState.value.dirty) return true
+  const uid = auth.currentUser?.uid
+  const draftsRef = draftCollection(uid)
+  if (!draftsRef) { draftError.value = 'Inicia sesión para guardar el borrador.'; return false }
+  const id = activeDraftId.value || doc(draftsRef).id
+  activeDraftId.value = id
+  const state = captureDraft()
+  const title = String(state.fields.title || state.fields.titulo || state.fields.subject || state.fields.asignatura || 'Documento sin título')
+  const save = async () => {
+    const files = []
+    for (const file of state.sourceFiles) {
+      let { path, url } = file
+      if (file.file && !path) {
+        path = `teachers/${uid}/documentDrafts/${id}/${file.id}`
+        await uploadBytes(storageRef(storage, path), file.file, { contentType: file.contentType || file.file.type || 'application/octet-stream' })
+        url = await getDownloadURL(storageRef(storage, path))
+        if (activeDraftId.value === id) {
+          const current = sourceFiles.value.find((entry) => entry.id === file.id && entry.file === file.file)
+          if (current) { current.path = path; current.url = url }
+        }
+      }
+      files.push({ id: file.id, name: file.name || '', compilerName: file.compilerName || '', contentType: file.contentType, size: file.size, path, url })
+    }
+    state.sourceFiles = files
+    if (state.content?.source?.options && files.length) state.content.source.options.files = files
+    const clean = JSON.parse(JSON.stringify({ state, title, updatedAt: new Date().toISOString() }))
+    await setDoc(doc(draftsRef, id), clean)
+    if (auth.currentUser?.uid === uid) {
+      drafts.value = [{ id, isDraft: true, ...clean, campos: clean.state.fields, curriculum: clean.state.curriculum }, ...drafts.value.filter((item) => item.id !== id)]
+      draftError.value = ''
+    }
+  }
+  const result = draftWrites.catch(() => {}).then(save)
+  draftWrites = result
+  try { await result; return true } catch (error) { draftError.value = 'No se ha podido guardar el borrador. Comprueba la conexión y vuelve a intentarlo.'; console.error('Error al guardar borrador:', error); return false }
+}
+
+async function loadDrafts() {
+  const reference = draftCollection()
+  if (!reference) return
+  try {
+    const snapshot = await getDocs(reference)
+    drafts.value = snapshot.docs.map((item) => ({ id: item.id, isDraft: true, ...item.data(), campos: item.data().state?.fields || {}, curriculum: item.data().state?.curriculum || {} })).sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+  } catch (error) { draftError.value = 'No se han podido cargar los borradores.'; console.error('Error al cargar borradores:', error) }
+}
+
+async function editDraft(draft) {
+  const state = draft.state || {}
+  try { await props.ensureExercises(flattenDocumentBlocks(state.content?.blocks || []).map((block) => block.exerciseId).filter(Boolean)) }
+  catch (error) { draftError.value = 'No se han podido cargar los ejercicios del borrador.'; console.error(error); return }
+  restoringDraft = true
+  resetWorkflow()
+  activeDraftId.value = draft.id
+  selectedDocumentId.value = state.selectedDocumentId || null
+  createdAt.value = state.createdAt || null
+  creationContext.value = state.creationContext || null
+  selectedTemplateKeys.value = Array.isArray(state.selectedTemplateKeys) ? state.selectedTemplateKeys : []
+  selectedTemplateKey.value = selectedTemplateKeys.value[0] || ''
+  selectedPreviewTemplateKey.value = state.selectedPreviewTemplateKey || selectedTemplateKey.value
+  Object.assign(fieldValues, state.fields || {})
+  Object.assign(documentAssessment, state.assessment || {})
+  documentCurriculum.value = { ...emptyCurriculum(), ...(state.curriculum || {}) }
+  exerciseCompleteness.value = state.searchStatus?.completeness || 'all'
+  exercisePublication.value = state.searchStatus?.publication || 'all'
+  exerciseSolution.value = state.searchStatus?.solution || 'all'
+  Object.assign(appliedExerciseStatus, { completeness: exerciseCompleteness.value, publication: exercisePublication.value, solution: exerciseSolution.value, competencial: Boolean(documentCurriculum.value.competencial) })
+  documentContent.value = createDocumentContent(state.content || {})
+  sourceLatexDraft.value = state.sourceLatex || ''
+  sourceFiles.value = (state.sourceFiles || []).map((file) => ({ ...file, previewUrl: file.url || '', file: null }))
+  Object.assign(finalCodes, state.finalCodes || {})
+  documentCode.value = state.documentCode || ''
+  documentCodeNeedsRegeneration.value = state.documentCodeNeedsRegeneration !== false
+  optionalRequiredCount.value = state.optionalRequiredCount || 1
+  currentStep.value = Math.min(Number(state.currentStep) || 1, 2)
+  maxVisitedStep.value = Math.max(currentStep.value, Math.min(Number(state.maxVisitedStep) || 1, 2))
+  exerciseQueue.value.forEach((item) => { if (item.exerciseId) selectedVersions[item.exerciseId] = item.version || 0 })
+  mode.value = 'editor'
+  documentEditorBaseline.value = '__draft__'
+  restoringDraft = false
+}
+
+watch(() => [mode.value, documentFingerprint(), currentStep.value, exerciseCompleteness.value, exercisePublication.value, exerciseSolution.value], () => {
+  if (restoringDraft || mode.value !== 'editor' || !workflowState.value.dirty) return
+  clearTimeout(draftTimer)
+  draftTimer = setTimeout(() => { void saveDraft() }, 1200)
+}, { flush: 'post' })
 
 function markDocumentBaseline() {
   documentEditorBaseline.value = documentFingerprint()
@@ -1584,6 +1710,32 @@ function cardConceptLabel(exercise) {
   return compactExerciseConceptLabel(exercise?.curriculum?.conceptIds || [], props.conceptNodes)
 }
 
+const documentReadinessCache = new WeakMap()
+function documentExerciseReadiness(exercise, versionIndex) {
+  const version = activeVersion(exercise, versionIndex)
+  const source = version?._trainingSource || version
+  const options = { exerciseId: exercise.id, bucketName: storage?.app?.options?.storageBucket, variant: versionIndex > 0 }
+  if (!source || typeof source !== 'object') return trainingReadiness({}, options)
+  const cached = documentReadinessCache.get(source)
+  if (cached?.exerciseId === exercise.id && cached.variant === options.variant) return cached.result
+  const result = trainingReadiness(source, options)
+  documentReadinessCache.set(source, { exerciseId: exercise.id, variant: options.variant, result })
+  return result
+}
+
+const documentFilterExerciseCounts = computed(() => {
+  const counts = new Map()
+  props.exercises.forEach((exercise) => {
+    if (documentCurriculum.value.course && exercise.curriculum?.course !== documentCurriculum.value.course) return
+    if (documentCurriculum.value.subjectId && exercise.curriculum?.subjectId !== documentCurriculum.value.subjectId) return
+    conceptClosure(exercise.curriculum?.conceptIds || []).forEach((id) => {
+      if (!counts.has(id)) counts.set(id, new Set())
+      counts.get(id).add(exercise.id)
+    })
+  })
+  return Object.fromEntries([...counts].map(([id, exercises]) => [id, exercises.size]))
+})
+
 const matchingExercises = computed(() => {
   const query = normalizeName(exerciseQuery.value)
   const filter = documentCurriculum.value
@@ -1592,8 +1744,15 @@ const matchingExercises = computed(() => {
     if (queuedIds.has(exercise.id)) return false
     const searchText = normalizeName(exerciseStatementText(exercise))
     if (query && !searchText.includes(query)) return false
+    const versionIndex = selectedVersionFor(exercise)
+    if (!matchesExerciseStatusFilters({
+      complete: appliedExerciseStatus.completeness === 'all' ? false : documentExerciseReadiness(exercise, versionIndex).complete,
+      published: hasPublishedExerciseVersion(exercise),
+      solutionOrigin: appliedExerciseStatus.solution === 'all' ? null : exerciseSolutionOrigin(exercise, versionIndex),
+    }, appliedExerciseStatus)) return false
     if (filter.course && exercise.curriculum?.course !== filter.course) return false
     if (filter.subjectId && exercise.curriculum?.subjectId !== filter.subjectId) return false
+    if (appliedExerciseStatus.competencial && !exercise.curriculum?.competencial) return false
     const filteredConceptIds = terminalConceptIds(filter.conceptIds || [])
     if (filteredConceptIds.length) {
       const closure = conceptClosure(exercise.curriculum?.conceptIds || [])
@@ -1602,6 +1761,24 @@ const matchingExercises = computed(() => {
     return true
   })
 })
+
+watch([exerciseCompleteness, exercisePublication, exerciseSolution, () => documentCurriculum.value.competencial], async () => {
+  cancelAnimationFrame(filterApplyFrame)
+  clearTimeout(filterApplyTimer)
+  await nextTick()
+  filterApplyFrame = requestAnimationFrame(() => {
+    filterApplyTimer = setTimeout(() => {
+      Object.assign(appliedExerciseStatus, { completeness: exerciseCompleteness.value, publication: exercisePublication.value, solution: exerciseSolution.value, competencial: Boolean(documentCurriculum.value.competencial) })
+    }, 30)
+  })
+})
+
+function clearDocumentFilters() {
+  exerciseCompleteness.value = 'all'
+  exercisePublication.value = 'all'
+  exerciseSolution.value = 'all'
+  onDocumentCurriculumUpdate(emptyCurriculum())
+}
 
 function requestMoreMatchingExercises() {
   if (!props.hasMoreExercises || props.loadingMoreExercises) return
@@ -1644,6 +1821,12 @@ function selectedVersionFor(exercise) {
 function activeVersion(exercise, version = selectedVersionFor(exercise)) {
   if (!exercise) return null
   return version === 0 ? exercise : exercise.variaciones?.[version - 1] || exercise
+}
+
+function versionPublished(exercise) {
+  const version = activeVersion(exercise)
+  return selectedVersionFor(exercise) && typeof version?.studentTrainingPublished === 'boolean'
+    ? version.studentTrainingPublished : exercise?.studentTrainingPublished === true
 }
 
 function versionStructure(exercise, version = selectedVersionFor(exercise)) {
@@ -1732,6 +1915,15 @@ function setSelectedVersion(exercise, version) {
     return
   }
   invalidatePreview()
+}
+
+function setQueueBlockVersion(item, version) {
+  const exercise = exerciseForQueue(item)
+  if (!exercise || !activeVersion(exercise, version)) return
+  item.version = version
+  item.metrics = metricsForVersion(exercise, version)
+  selectedVersions[exercise.id] = version
+  invalidateContentPreview()
 }
 
 function stripBalancedCommands(text, commandNames) {
@@ -2149,6 +2341,11 @@ function toolCode(item, index = -1, template = selectedTemplate.value, siblings 
   const sharedTool = toolForQueue(item)
   if (!sharedTool) return ''
   if (sharedTool.behavior === 'column-break' && !sharedTool.templateDefinitions?.[template?.key]) return ''
+  // Las agrupaciones son propias de la plantilla que las declara. En las
+  // demás se conservan los ejercicios interiores, sin emitir su entorno.
+  if (sharedTool.kind === 'environment' && !sharedTool.templateDefinitions?.[template?.key]) {
+    return renderDocumentBlocks(item.children || [], template)
+  }
   const tool = sharedTool.templateDefinitions?.[template?.key] || sharedTool
   const args = toolArguments(item, tool)
   if (tool.behavior === 'required-section') {
@@ -2797,6 +2994,8 @@ function resetDocumentAssessment() {
 }
 
 function resetWorkflow() {
+  clearTimeout(draftTimer)
+  activeDraftId.value = null
   if (documentVariation.state.visible) documentVariation.close()
   revokeSourceFiles()
   revokeGeneratedSegmentArtifacts()
@@ -2811,6 +3010,10 @@ function resetWorkflow() {
   Object.keys(fieldValues).forEach((key) => delete fieldValues[key])
   resetDocumentAssessment()
   documentCurriculum.value = emptyCurriculum()
+  exerciseCompleteness.value = 'all'
+  exercisePublication.value = 'all'
+  exerciseSolution.value = 'all'
+  Object.assign(appliedExerciseStatus, { completeness: 'all', publication: 'all', solution: 'all', competencial: false })
   exerciseQuery.value = ''
   documentContent.value = createDocumentContent()
   optionalRequiredCount.value = 1
@@ -2846,13 +3049,24 @@ function newDocumentWithContext(context) {
   markDocumentBaseline()
 }
 
-function backToLibrary(options = {}) {
-  const force = options?.force === true
-  if (!force && workflowState.value.dirty && !window.confirm('Hay cambios sin guardar en el documento. ¿Quieres descartarlos?')) return false
+async function backToLibrary(options = {}) {
+  if (!options?.saved && !(await saveDraft())) return false
   resetWorkflow()
   mode.value = 'library'
   documentEditorBaseline.value = ''
   return true
+}
+
+async function removeDraft(draft) {
+  if (!draft?.id || !window.confirm(`¿Eliminar el borrador «${draft.title || 'Documento sin título'}»?`)) return
+  try {
+    await draftWrites.catch(() => {})
+    await deleteDoc(doc(draftCollection(), draft.id))
+    const uid = auth.currentUser?.uid
+    const prefix = `teachers/${uid}/documentDrafts/${draft.id}/`
+    await Promise.allSettled((draft.state?.sourceFiles || []).filter((file) => file.path?.startsWith(prefix)).map((file) => deleteObject(storageRef(storage, file.path))))
+    drafts.value = drafts.value.filter((item) => item.id !== draft.id)
+  } catch (error) { draftError.value = 'No se ha podido eliminar el borrador.'; console.error('Error al eliminar borrador:', error) }
 }
 
 async function assessmentModelsForDocument(documentData) {
@@ -3337,6 +3551,14 @@ function documentCardDate(documentData) {
 }
 
 function documentCardTemplates(documentData) {
+  if (documentData.isDraft) {
+    const state = documentData.state || {}
+    return (state.selectedTemplateKeys || []).map((key) => {
+      const template = documentTemplates.value.find((item) => item.key === key)
+      const saved = (state.selectedTemplateLabels || []).find((item) => item.key === key)
+      return template?.nombre || template?.metadata?.name || saved?.nombre || key
+    })
+  }
   const templates = Array.isArray(documentData.plantillas) && documentData.plantillas.length ? documentData.plantillas : [documentData.plantilla]
   return templates.filter(Boolean).map((template) => template.nombre || template.archivo || 'Plantilla')
 }
@@ -3641,7 +3863,7 @@ async function saveDocument() {
     for (const [index, sourceFile] of activeSourceFiles.entries()) {
       const originalDocumentId = documentContent.value.source.options?.recycledFromDocumentId || documentContent.value.source.options?.variation?.sourceDocumentId
       const originalPath = sourceFile.path || storagePathFromUrl(sourceFile.url)
-      if (!selectedDocumentId.value && originalDocumentId && !sourceFile.file && sourceFile.url && originalPath?.startsWith(`documentos/${originalDocumentId}/`)) {
+      if (!sourceFile.file && sourceFile.url && ((originalDocumentId && !selectedDocumentId.value && originalPath?.startsWith(`documentos/${originalDocumentId}/`)) || (activeDraftId.value && originalPath?.startsWith(`teachers/${auth.currentUser?.uid}/documentDrafts/${activeDraftId.value}/`)))) {
         const response = await fetch(browserAssetUrl(sourceFile.url))
         if (!response.ok) throw new Error(`No se ha podido copiar el adjunto ${sourceFile.name} (HTTP ${response.status}).`)
         sourceFile.file = new File([await response.blob()], sourceFile.name || sourceFile.compilerName || `fuente-${index}`, { type: sourceFile.contentType || response.headers.get('Content-Type') || '' })
@@ -3790,7 +4012,14 @@ async function saveDocument() {
     if (existingIndex === -1) documents.value.unshift(saved)
     else documents.value.splice(existingIndex, 1, saved)
     documents.value.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
-    backToLibrary()
+    const completedDraftId = activeDraftId.value
+    clearTimeout(draftTimer)
+    await draftWrites.catch(() => {})
+    if (completedDraftId) {
+      try { await deleteDoc(doc(draftCollection(), completedDraftId)); drafts.value = drafts.value.filter((item) => item.id !== completedDraftId) }
+      catch (error) { console.error('No se ha podido retirar el borrador guardado:', error) }
+    }
+    await backToLibrary({ saved: true })
   } catch (error) {
     documentsError.value = error.message || 'No se ha podido guardar el documento.'
     console.error('Error al guardar documento:', error)
@@ -3802,8 +4031,12 @@ async function saveDocument() {
 
 onMounted(() => {
   void loadDocuments()
+  void loadDrafts()
 })
 onBeforeUnmount(() => {
+  void saveDraft()
+  cancelAnimationFrame(filterApplyFrame)
+  clearTimeout(filterApplyTimer)
   revokePreview()
   revokeSourceFiles()
   revokeGeneratedSegmentArtifacts()
@@ -3814,6 +4047,7 @@ defineExpose({
   newDocumentWithContext,
   copyDocumentWithContext,
   backToLibrary,
+  saveDraft,
   previous: previousStep,
   next: nextStep,
   compile: () => compileDocument(true),
@@ -3823,11 +4057,13 @@ defineExpose({
 
 <template>
   <div class="document-creator">
+    <v-alert v-if="draftError && mode !== 'library'" type="error" variant="tonal" density="compact" closable @click:close="draftError = ''">{{ draftError }}</v-alert>
     <div v-if="mode !== 'library' && selectedTemplates.length" class="d-flex justify-end mb-3">
       <v-btn prepend-icon="mdi-auto-fix" variant="tonal" color="primary" :disabled="isCompiling || isSaving || isGeneratingContent || documentVariation.state.busy" @click="openDocumentVariation()">IA: crear una copia</v-btn>
     </div>
     <DocumentVariationDialog :controller="documentVariation" :models="aiModelOptions" :model="documentAiModel" @update:model="documentAiModel = $event" />
     <section v-if="mode === 'library'" class="document-library">
+      <v-alert v-if="draftError" type="error" variant="tonal" density="compact" closable @click:close="draftError = ''">{{ draftError }}</v-alert>
       <div v-if="isLoadingDocuments" class="document-library-empty">
         <v-progress-circular indeterminate color="primary" />
         <span>Cargando documentos…</span>
@@ -3837,6 +4073,7 @@ defineExpose({
           v-for="documentData in filteredDocuments"
           :key="documentData.id"
           class="document-library-card"
+          :class="{ 'document-library-card--draft': documentData.isDraft }"
           elevation="1"
         >
           <header class="document-library-card-header">
@@ -3846,9 +4083,10 @@ defineExpose({
             </div>
             <strong :title="documentCardTitle(documentData)">{{ documentCardTitle(documentData) }}</strong>
           </header>
-          <button v-if="documentCardPdf(documentData)" type="button" class="document-library-thumbnail" :aria-label="`Visualizar ${documentCardTitle(documentData)}`" @click="viewDocument(documentData)">
+          <button v-if="documentCardPdf(documentData)" type="button" class="document-library-thumbnail" :aria-label="`${documentData.isDraft ? 'Continuar borrador' : 'Visualizar'} ${documentCardTitle(documentData)}`" @click="documentData.isDraft ? editDraft(documentData) : viewDocument(documentData)">
             <span class="document-library-paper"><ExercisePdfPreview :src="documentCardPdf(documentData)" :title="`Primera página de ${documentCardTitle(documentData)}`" :aspect-ratio="0.707" thumbnail /></span>
           </button>
+          <button v-else-if="documentData.isDraft" type="button" class="document-library-thumbnail document-library-draft-thumbnail" :aria-label="`Continuar borrador ${documentCardTitle(documentData)}`" @click="editDraft(documentData)"><span class="document-library-draft-stamp" aria-hidden="true">Borrador</span></button>
           <div v-else class="document-library-thumbnail document-library-thumbnail-empty"><v-icon icon="mdi-file-document-outline" size="38" /><span>PDF no disponible</span></div>
           <footer>
             <div class="document-library-templates" aria-label="Plantillas utilizadas">
@@ -3856,29 +4094,29 @@ defineExpose({
               <span v-if="!documentCardTemplates(documentData).length">Sin plantilla</span>
             </div>
             <div class="document-library-actions">
-              <v-tooltip text="Crear copia con IA" location="top">
+              <v-tooltip v-if="!documentData.isDraft" text="Crear copia con IA" location="top">
                 <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-auto-fix" size="x-small" rounded="circle" variant="text" color="primary" aria-label="Crear copia del documento con IA" @click="openDocumentVariation(documentData)" /></template>
               </v-tooltip>
-              <v-tooltip text="Visualizar PDF" location="top">
+              <v-tooltip v-if="!documentData.isDraft" text="Visualizar PDF" location="top">
                 <template #activator="{ props: tooltipProps }">
                   <v-btn v-bind="tooltipProps" icon="mdi-eye-outline" size="x-small" rounded="circle" variant="text" color="primary" aria-label="Visualizar PDF" :disabled="!documentCardPdf(documentData)" @click="viewDocument(documentData)" />
                 </template>
               </v-tooltip>
               <v-tooltip text="Editar documento" location="top">
                 <template #activator="{ props: tooltipProps }">
-                  <v-btn v-bind="tooltipProps" icon="mdi-pencil-outline" size="x-small" rounded="circle" variant="text" color="primary" aria-label="Editar documento" @click="editDocument(documentData)" />
+                  <v-btn v-bind="tooltipProps" icon="mdi-pencil-outline" size="x-small" rounded="circle" variant="text" color="primary" aria-label="Editar documento" @click="documentData.isDraft ? editDraft(documentData) : editDocument(documentData)" />
                 </template>
               </v-tooltip>
               <v-tooltip text="Eliminar documento" location="top">
                 <template #activator="{ props: tooltipProps }">
-                  <v-btn v-bind="tooltipProps" icon="mdi-delete-outline" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar documento" @click="requestDeleteDocument(documentData)" />
+                  <v-btn v-bind="tooltipProps" icon="mdi-delete-outline" size="x-small" rounded="circle" variant="text" color="error" aria-label="Eliminar documento" @click="documentData.isDraft ? removeDraft(documentData) : requestDeleteDocument(documentData)" />
                 </template>
               </v-tooltip>
             </div>
           </footer>
         </v-card>
       </div>
-      <div v-else-if="documents.length" class="document-library-empty">
+      <div v-else-if="documents.length || drafts.length" class="document-library-empty">
         <v-icon icon="mdi-file-search-outline" size="52" color="primary" />
         <strong>No hay documentos que coincidan con la búsqueda.</strong>
         <span>Prueba con el título, la asignatura, la fecha o el curso.</span>
@@ -4259,6 +4497,7 @@ defineExpose({
                       <div class="document-exercise-card-identity">
                         <span>{{ subjectLabel(exercise) }}</span>
                         <div class="document-exercise-add-actions">
+                          <v-btn :icon="versionPublished(exercise) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'" size="x-small" variant="text" :loading="publicationBusy[exercise.id]" :aria-label="versionPublished(exercise) ? 'Despublicar para alumnos' : 'Publicar para alumnos'" :title="versionPublished(exercise) ? 'Despublicar para alumnos' : 'Publicar para alumnos'" @click.stop="emit('toggle-publication', exercise, selectedVersionFor(exercise))" />
                           <v-tooltip text="Añadir ejercicio" location="top">
                             <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-plus" size="x-small" color="primary" variant="text" elevation="0" aria-label="Añadir ejercicio" @click="addExercise(exercise)" /></template>
                           </v-tooltip>
@@ -4268,6 +4507,8 @@ defineExpose({
                         :model-value="selectedVersionFor(exercise)"
                         :variations="exercise.variaciones || []"
                         compact
+                        show-publication
+                        :publication-root="exercise.studentTrainingPublished === true"
                         @update:model-value="setSelectedVersion(exercise, $event)"
                       />
                     </header>
@@ -4381,6 +4622,7 @@ defineExpose({
                       @remove="removeQueuedBlock"
                       @argument-change="(block, key, value) => setToolArgument(block, key, value)"
                       @metric-change="updateQueueMetric"
+                      @version-change="setQueueBlockVersion"
                     />
                     <ExerciseVariantSelector
                       v-if="!isTool(item)"
@@ -4574,22 +4816,27 @@ defineExpose({
     </v-card>
   </v-dialog>
   <v-dialog v-model="curriculumDialog" max-width="1180" height="min(88dvh, 860px)">
-    <v-card class="document-curriculum-dialog">
-      <v-card-title>
+    <v-card class="document-curriculum-dialog exercise-filter-dialog">
+      <v-card-title class="exercise-filter-dialog-title">
         <span>Filtrar ejercicios</span>
-        <v-spacer />
+        <div class="exercise-filter-title-actions">
+        <v-tooltip text="Limpiar filtros" location="bottom"><template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-filter-off-outline" variant="text" :disabled="!documentFilterCount" aria-label="Limpiar filtros" @click="clearDocumentFilters" /></template></v-tooltip>
         <v-btn icon="mdi-close" size="small" variant="text" rounded="circle" aria-label="Cerrar filtros" @click="curriculumDialog = false" />
+        </div>
       </v-card-title>
-      <v-card-text>
+      <v-divider />
+      <v-card-text class="exercise-filter-dialog-content">
         <ExerciseCurriculumPicker
           :key="`filters-${curriculumPickerKey}`"
           :model-value="documentCurriculum"
           class="document-curriculum-step"
           :nodes="conceptNodes"
           :subject-selections="subjectSelections"
-          :exercise-counts="exerciseCounts"
+          :exercise-counts="documentFilterExerciseCounts"
           @update:model-value="onDocumentCurriculumUpdate"
-        />
+        >
+          <template #tools><ExerciseStatusFilters v-model:completeness="exerciseCompleteness" v-model:publication="exercisePublication" v-model:solution="exerciseSolution" /></template>
+        </ExerciseCurriculumPicker>
       </v-card-text>
     </v-card>
   </v-dialog>
@@ -4642,10 +4889,15 @@ defineExpose({
 .document-library-card-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .document-library-card-meta time { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .document-library-card-header strong { display: -webkit-box; margin-top: 3px; overflow: hidden; color: #26486f; font-size: .6rem; font-weight: 700; line-height: 1.3; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.document-library-card--draft .document-library-card-header { background:#55759b; border-bottom-color:#55759b; }
+.document-library-card--draft .document-library-card-meta { color:#e0e9f4; }
+.document-library-card--draft .document-library-card-header strong { color:#fff; }
 .document-library-thumbnail { display: grid; width: 100%; min-height: 0; flex: 1 1 0; grid-template-rows: minmax(0, 1fr); aspect-ratio: 2.121; place-items: start stretch; padding: 0; border: 0; background: #fff; cursor: pointer; }
 .document-library-thumbnail:focus-visible { outline: 3px solid #477ebd; outline-offset: -3px; }
 .document-library-paper { display: block; width: 100%; height: 100%; overflow: hidden; background: #fff; }
 .document-library-thumbnail-empty { align-content: center; gap: 5px; color: #8293a8; font-size: .72rem; cursor: default; }
+.document-library-draft-thumbnail { place-items:center; overflow:hidden; background:#fbfcfe; }
+.document-library-draft-stamp { display:inline-block; padding:3px 7px; border:2px solid currentColor; border-radius:2px; color:#a75e61; font-family:ui-monospace, Consolas, monospace; font-size:.83rem; font-weight:800; letter-spacing:.11em; line-height:1; text-transform:uppercase; transform:rotate(-15deg); opacity:.8; }
 .document-library-card footer { display: flex; flex-direction: column; border-top: 1px solid #e1e8f1; background: #fff; }
 .document-library-templates { display: flex; min-width: 0; max-height: 56px; flex-direction: column; gap: 2px; overflow-y: auto; padding: 6px 9px; color: #6c819b; font-size: .55rem; line-height: 1.25; }
 .document-library-templates span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
