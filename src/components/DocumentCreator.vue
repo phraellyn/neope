@@ -121,6 +121,7 @@ const documentAssessment = reactive({ evaluable: false, groupId: null, shortName
 const documentCurriculum = ref(emptyCurriculum())
 const curriculumPickerKey = ref(0)
 const exerciseQuery = ref('')
+const generationInstructions = ref('')
 const exerciseCompleteness = ref('all')
 const exercisePublication = ref('all')
 const exerciseSolution = ref('all')
@@ -933,6 +934,7 @@ function documentFingerprint() {
     content: serializeDocumentContent(documentContent.value),
     sourceLatex: sourceLatexDraft.value,
     finalCodes: { ...finalCodes },
+    generationInstructions: generationInstructions.value,
   })
 }
 
@@ -948,7 +950,7 @@ function captureDraft() {
     searchStatus: { completeness: exerciseCompleteness.value, publication: exercisePublication.value, solution: exerciseSolution.value },
     content: serializeDocumentContent(documentContent.value), sourceLatex: sourceLatexDraft.value,
     finalCodes: { ...finalCodes }, documentCode: documentCode.value, documentCodeNeedsRegeneration: documentCodeNeedsRegeneration.value,
-    currentStep: currentStep.value, maxVisitedStep: maxVisitedStep.value, optionalRequiredCount: optionalRequiredCount.value,
+    currentStep: currentStep.value, maxVisitedStep: maxVisitedStep.value, optionalRequiredCount: optionalRequiredCount.value, generationInstructions: generationInstructions.value,
     sourceFiles: sourceFiles.value.map((file) => ({ id: file.id, name: file.name, compilerName: file.compilerName, contentType: file.contentType || '', size: Number(file.size) || 0, path: file.path || '', url: file.url || '', file: file.file || null })),
   }
 }
@@ -1023,6 +1025,7 @@ async function editDraft(draft) {
   Object.assign(appliedExerciseStatus, { completeness: exerciseCompleteness.value, publication: exercisePublication.value, solution: exerciseSolution.value, competencial: Boolean(documentCurriculum.value.competencial) })
   documentContent.value = createDocumentContent(state.content || {})
   sourceLatexDraft.value = state.sourceLatex || ''
+  generationInstructions.value = state.generationInstructions || ''
   sourceFiles.value = (state.sourceFiles || []).map((file) => ({ ...file, previewUrl: file.url || '', file: null }))
   Object.assign(finalCodes, state.finalCodes || {})
   documentCode.value = state.documentCode || ''
@@ -1344,6 +1347,7 @@ async function generateOrRegenerateContent() {
       course: curriculum.course,
       subjectId: curriculum.subjectId,
       subjectTitle: curriculum.subjectTitle,
+      instructions: sourceType === DOCUMENT_CONTENT_SOURCE_TYPES.CURRICULUM ? generationInstructions.value : '',
       selectedConceptIds: curriculum.conceptIds,
       styleConceptIds: [...new Set(curriculum.conceptIds.flatMap((id) => {
         const parents = new Map(props.conceptNodes.map(node => [node.id, node.parentId]))
@@ -3015,6 +3019,7 @@ function resetWorkflow() {
   exerciseSolution.value = 'all'
   Object.assign(appliedExerciseStatus, { completeness: 'all', publication: 'all', solution: 'all', competencial: false })
   exerciseQuery.value = ''
+  generationInstructions.value = ''
   documentContent.value = createDocumentContent()
   optionalRequiredCount.value = 1
   Object.keys(selectedVersions).forEach((key) => delete selectedVersions[key])
@@ -4404,6 +4409,10 @@ defineExpose({
                 </v-list-item>
               </template>
             </v-select>
+            <v-menu v-if="contentWorkspaceMode === 'curriculum'" :close-on-content-click="false" location="bottom end">
+              <template #activator="{ props: menuProps }"><v-btn v-bind="menuProps" icon="mdi-text-box-edit-outline" size="small" variant="text" :color="generationInstructions.trim() ? 'primary' : undefined" aria-label="Indicaciones para generar ejercicios" title="Indicaciones para generar ejercicios" /></template>
+              <v-card class="document-ai-instructions"><v-card-text><v-textarea v-model="generationInstructions" label="Indicaciones para los ejercicios (opcional)" placeholder="Por ejemplo: evita las funciones con radicales." rows="3" auto-grow maxlength="3000" variant="outlined" hide-details /></v-card-text></v-card>
+            </v-menu>
             <v-btn
               prepend-icon="mdi-auto-fix"
               size="small"
@@ -4869,6 +4878,7 @@ defineExpose({
 </template>
 
 <style scoped>
+.document-ai-instructions { width:min(420px, calc(100vw - 32px)); border-radius:5px; }
 .final-code-dialog { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 .final-code-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 0 0 auto; }
 .final-code-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }

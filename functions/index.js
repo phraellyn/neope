@@ -26,6 +26,9 @@ import { validateExerciseSolutionSource } from './exerciseSolutionSource.js'
 import { normalizeGeneratedCriterionMath } from './criteriaLatex.js'
 import { curriculumPromptContext } from './curriculumContext.js'
 import { teacherStylePrompt } from './solutionStyle.js'
+import { cleanGenerationInstructions, documentGenerationInstructions, solutionGenerationInstruction } from './generationInstructions.js'
+import { variationStrategyFromAnalysis } from './variationStrategy.js'
+import { applyReferenceCriterionPoints, exerciseVariationMode, validReferenceCriteria, validateConceptVariation } from './exerciseVariationModes.js'
 import { achievementGranularityInstructions, criterionMathInstructions } from './achievementGranularity.js'
 import { generateExerciseRaster, prepareVisualVariation, regenerateTikzFigure, visualMessageContent, visualModelCatalog, visualVariationFormat } from './visualGeneration.js'
 import { graphicReferences, tikzFigures } from './exerciseVisualsShared.js'
@@ -992,7 +995,7 @@ const analysisSystemPrompt = String.raw`Analiza un ejercicio de Matemáticas de 
 
 Identifica la estructura matemática esencial, las destrezas evaluadas, la dificultad, el esquema de solución y los elementos que deben preservarse. Propón un plan de transformación que cambie de manera estructural el objeto, la restricción, la magnitud, la representación o la pregunta, sin reducir la dificultad ni convertirlo en un simple cambio de datos. El nuevo ejercicio deberá poder resolverse con un esquema de razonamiento comparable, pero no ser clónico del original.
 
-Si recibes un MARCO CURRICULAR OBLIGATORIO, úsalo como límite estricto al analizar la dificultad, los prerrequisitos y el plan de transformación.`
+Si recibes un MARCO CURRICULAR OBLIGATORIO, úsalo como límite estricto al analizar la dificultad, los prerrequisitos y el plan de transformación. Sé breve: utiliza frases cortas, entre dos y cuatro elementos por lista y no más de 200 palabras en total.`
 
 const systemPrompt = String.raw`Eres un profesor de Matemáticas de Secundaria y Bachillerato que redacta ejercicios rigurosos en LaTeX.
 
@@ -1013,6 +1016,10 @@ Contrato obligatorio de salida:
 - Conserva exactamente el entorno de apartados del original, incluido \begin{apartadosc}...\end{apartadosc}. La aplicación generará una copia temporal en una sola columna únicamente al compilar la versión resuelta; no hagas esa sustitución en el código devuelto.
 - Las reglas de diseño de 8 cm se aplican SOLO dentro de \begin{solucion}...\end{solucion}; no alteres el enunciado para adaptarte a ellas. En cada solución deja una línea en blanco antes de \begin{solucion}, usa matrizp, detp y sistemap en lugar de matrices estándar, compón las cadenas largas con aligned solo cuando lo necesiten y no pongas dos matrices compactas en una misma fila de aligned. Si la solución incluye una figura, sigue las mismas reglas de composición con TikZ. No uses nunca \begin{center} ni \end{center} dentro de una solución: para centrar un tikzpicture usa \noindent\hfill antes y \hfill\mbox{}\par después. Todo símbolo o comando matemático debe estar dentro de $...$ o de $$...$$; en particular, no escribas \text, \mathrm, \frac, \sqrt, ^, _ ni variables matemáticas en texto normal. Comprueba que cada $ tiene su pareja antes de responder. En problemas de geometría o modelización espacial que describan una construcción, transformación o relación entre figuras, el TikZ explicativo es obligatorio.
 - Evita copiar literalmente el enunciado original y las variaciones anteriores.`
+
+const conceptVariationSystemPrompt = String.raw`Eres profesor de Matemáticas de Secundaria y Bachillerato. Diseña un ejercicio nuevo, riguroso y creativo que evalúe los conceptos seleccionados y sea apropiado para el curso y asignatura indicados. El ejercicio original sirve como referencia de nivel, puntuación y contenidos; no copies su enunciado ni necesitas conservar su número de apartados o su estructura. Evita contenidos de niveles posteriores y comprueba las hipótesis, la coherencia y las soluciones.
+
+Devuelve un único ejercicio Neope en LaTeX: un comando \ej con puntuación total positiva \M{...}; si tiene apartados, usa un entorno apartados o apartadosc y un comando \ap con \p{...} positivo por apartado. La suma de las puntuaciones debe coincidir con \M. Incluye la solución completa de cada apartado en su propio entorno solucion, o una solución al final si no hay apartados. Deja una línea en blanco antes de cada \begin{solucion}; usa aligned solo dentro de matemáticas y sin líneas en blanco en su interior. No generes identificadores % neope:part: Neope los asignará. Coloca \info al final con el valor solicitado. No añadas preámbulo, documento ni criterios de calificación al LaTeX; estos se generan por separado. No uses \sol ni \lsol. Usa matemática entre $...$ o $$...$$, entornos y llaves equilibrados y respeta la guía del profesor y las opciones de imagen.`
 
 const solutionSystemPrompt = String.raw`Eres un profesor de Matemáticas de Secundaria y Bachillerato. Incorpora al ejercicio recibido una solución completa, rigurosa y pedagógica.
 
@@ -1426,12 +1433,18 @@ export const generateExerciseVariation = onCall({
     ? request.data.variaciones.filter((variation) => typeof variation === 'string').slice(-8).map(stripLegacySolutionCommands)
     : []
   const model = typeof request.data?.model === 'string' ? request.data.model : 'google/gemini-3-flash-preview'
-  const experimental = request.data?.experimental === true
+  const variationMode = exerciseVariationMode(request.data?.variationMode)
+  const conceptMode = variationMode === 'concepts'
+  const experimental = conceptMode || request.data?.experimental === true
+  const instructions = cleanGenerationInstructions(request.data?.instructions)
   const curriculumContext = curriculumPromptContext(request.data?.curriculum)
   const styleContext = await teacherSolutionStyleContext(request)
 
   if (!enunciado || enunciado.length > 60_000) {
     throw new HttpsError('invalid-argument', 'El enunciado es obligatorio y no puede superar 60.000 caracteres.')
+  }
+  if (conceptMode && (!request.data?.curriculum?.subjectId || !Array.isArray(request.data?.curriculum?.conceptPaths) || !request.data.curriculum.conceptPaths.some((path) => Array.isArray(path) && path.some((item) => typeof item === 'string' && item.trim())))) {
+    throw new HttpsError('invalid-argument', 'Asigna una asignatura y al menos un concepto antes de crear una variante por contenidos.')
   }
   const modelConfig = await resolveAiModel(request, model)
   const exerciseForGeneration = normalizeDisplayMathDelimiters(stripLegacySolutionCommands(enunciado))
@@ -1446,7 +1459,7 @@ export const generateExerciseVariation = onCall({
       curriculumSubjectId: request.data?.curriculum?.subjectId || null,
     })
     const solutionEnvironmentCount = countMatches(exerciseForGeneration, /\\begin\s*\{solucion\}/g)
-    const solutionRequirement = solutionEnvironmentCount
+    const solutionRequirement = conceptMode ? 'REQUISITO DE SOLUCIONES: incluye una resolución completa y rigurosa para cada apartado del ejercicio nuevo.' : solutionEnvironmentCount
       ? `REQUISITO DE SOLUCIONES: conserva y recalcula ${solutionEnvironmentCount} entorno(s) solucion. Ninguna solución puede estar vacía.`
       : 'REQUISITO DE SOLUCIONES: el original no contiene soluciones; no añadas ninguna.'
     const expectedInfo = experimental ? `Variación experimental -- ${modelLabel}` : `Generado por ${modelLabel}`
@@ -1466,6 +1479,9 @@ export const generateExerciseVariation = onCall({
       ['apartados', /\\begin\s*\{apartados\}/g],
       ['apartadosc', /\\begin\s*\{apartadosc\}/g],
     ].map(([name, pattern]) => `${name}: ${countMatches(exerciseForGeneration, pattern)}`).join(', ')
+    const gradingReference = variationMode === 'original' && Array.isArray(request.data?.gradingReference)
+      ? request.data.gradingReference.slice(0, 24).map((segment) => ({ label: String(segment?.label || '').slice(0, 100), criteria: (Array.isArray(segment?.criteria) ? segment.criteria : []).slice(0, 30).map((criterion) => ({ description: String(criterion?.description || '').slice(0, 1200), points: Number(criterion?.points) || 0 })) }))
+      : []
     let experimentalStrategy = ''
     if (experimental) {
       console.info('OpenRouter experimental variation analysis started', { model })
@@ -1482,27 +1498,29 @@ export const generateExerciseVariation = onCall({
           reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
           messages: [
             { role: 'system', content: analysisSystemPrompt },
-            { role: 'user', content: visualMessageContent([curriculumContext, 'EJERCICIO BASE:', exerciseForGeneration].filter(Boolean).join('\n\n'), visual?.files || []) },
+            { role: 'user', content: visualMessageContent([curriculumContext, instructions && `INDICACIONES DEL PROFESOR PARA LA NUEVA VARIANTE: ${instructions}`, 'EJERCICIO BASE:', exerciseForGeneration].filter(Boolean).join('\n\n'), visual?.files || []) },
           ],
           response_format: exerciseAnalysisResponseFormat,
           provider: { require_parameters: true, data_collection: 'deny' },
-          max_tokens: 1_500,
+          max_tokens: 3_000,
         }),
         signal: AbortSignal.timeout(Math.max(1, 40_000 - (Date.now() - startedAt))),
       })
       const analysisPayload = await analysisResponse.json().catch(() => ({}))
       const analysisContent = analysisResponse.ok ? choiceContent(analysisPayload.choices?.[0]) : ''
-      if (!analysisContent) {
-        throw new HttpsError('unavailable', analysisPayload.error?.message || 'La IA no ha podido analizar el ejercicio base.')
-      }
-      const analysis = JSON.parse(analysisContent)
-      experimentalStrategy = `ANÁLISIS DIDÁCTICO DEL EJERCICIO BASE:\n- Núcleo: ${analysis.core}\n- Destrezas: ${analysis.skills.join('; ')}\n- Dificultad: ${analysis.difficulty}\n- Esquema de solución: ${analysis.solutionOutline}\n- Elementos que deben mantenerse: ${analysis.invariants.join('; ')}\n\nPLAN OBLIGATORIO DE TRANSFORMACIÓN ESTRUCTURAL:\n${analysis.transformationPlan}\n\nNo hagas un cambio cosmético ni solo numérico. Aplica ese plan y comprueba que el resultado sea claramente distinto al original, pero de dificultad y extensión comparables.`
+      if (!analysisResponse.ok) throw new HttpsError('unavailable', openRouterErrorText(analysisPayload, analysisResponse.status))
+      const analysisResult = variationStrategyFromAnalysis(analysisContent)
+      experimentalStrategy = analysisResult.strategy
+      if (analysisResult.usedFallback) console.warn('OpenRouter experimental analysis incomplete; requesting internal analysis during generation', { model, finishReason: analysisPayload.choices?.[0]?.finish_reason || null, outputCharacters: analysisContent.length, completionTokens: analysisPayload.usage?.completion_tokens || 0 })
     }
     const originalRequest = [
       curriculumContext,
       styleContext,
+      instructions && `INDICACIONES DEL PROFESOR PARA LA NUEVA VARIANTE (respétalas siempre que sean compatibles con las reglas matemáticas y técnicas):\n${instructions}`,
       `ETIQUETAS: ${tags.length ? tags.join(', ') : 'sin etiquetas'}`,
-      `CONTRATO DE ESTRUCTURA: ${structureSummary}. Conserva exactamente esas cantidades cuando sean mayores que cero.`,
+      conceptMode ? 'Crea libremente la estructura del ejercicio a partir de los contenidos seleccionados; no copies identificadores de apartados del original.' : `CONTRATO DE ESTRUCTURA: ${structureSummary}. Conserva exactamente esas cantidades cuando sean mayores que cero.`,
+      conceptMode && `CURSO Y CONTENIDOS SELECCIONADOS: ${JSON.stringify({ course: request.data.curriculum.course || '', subjectId: request.data.curriculum.subjectId, conceptPaths: request.data.curriculum.conceptPaths.slice(0, 50) })}`,
+      gradingReference.length && `CRITERIOS DEL ORIGINAL (mantén las mismas habilidades evaluadas y puntuaciones, adaptando las referencias al nuevo enunciado):\n${JSON.stringify(gradingReference)}`,
       solutionRequirement,
       infoRequirement,
       experimentalStrategy,
@@ -1536,7 +1554,7 @@ ${variation?.enunciado || ''}`
           model,
           reasoning: { effort: modelConfig.reasoningEffort, exclude: true },
           messages: [
-            { role: 'system', content: visual ? `${systemPrompt}\n\nUsa una envoltura JSON de transporte con enunciado e imagePlan. El campo enunciado contiene exclusivamente el ejercicio LaTeX.` : systemPrompt },
+            { role: 'system', content: `${conceptMode ? conceptVariationSystemPrompt : variationMode === 'original' ? systemPrompt.replace('Genera UNA variación pedagógicamente sustancial del ejercicio recibido. Debe evaluar los mismos conceptos y destrezas, conservar dificultad y extensión comparables, pero cambiar de manera razonable los datos, el enfoque, la representación o lo que se pide. No te limites a sustituir números.', 'Genera UNA variante fiel al ejercicio original. Conserva su estructura, conceptos, destrezas, dificultad y criterios de evaluación; cambia los datos y adapta los cálculos sin alterar lo que se evalúa.') : systemPrompt}${visual ? '\n\nUsa una envoltura JSON de transporte con enunciado e imagePlan. El campo enunciado contiene exclusivamente el ejercicio LaTeX.' : ''}` },
             { role: 'user', content: visualMessageContent([originalRequest, repairRequest].filter(Boolean).join('\n\n'), visual?.files || []) },
           ],
           response_format: visual ? visualVariationFormat : variationResponseFormat,
@@ -1568,7 +1586,17 @@ ${variation?.enunciado || ''}`
         : Array.isArray(rawContent)
           ? rawContent.map((part) => typeof part === 'string' ? part : part?.text || '').join('')
           : ''
-      variation = content ? JSON.parse(content) : null
+      try { variation = content ? JSON.parse(content) : null }
+      catch {
+        const truncated = choice?.finish_reason === 'length'
+        console.warn('OpenRouter variation returned invalid JSON', { model, attempt, finishReason: choice?.finish_reason || null, outputCharacters: content.length })
+        if (attempt < 2 && Date.now() - startedAt < 90_000) {
+          validationIssues = [truncated ? 'La respuesta anterior se cortó: devuelve JSON completo y conciso.' : 'La respuesta anterior no era JSON válido: devuelve el objeto completo con el LaTeX correctamente escapado.']
+          variation = null
+          continue
+        }
+        throw new HttpsError('internal', truncated ? 'El modelo ha cortado la respuesta antes de terminar. Prueba de nuevo o selecciona otro modelo.' : 'El modelo ha devuelto una respuesta con un formato no válido. Prueba de nuevo o selecciona otro modelo.')
+      }
       if (!variation?.enunciado?.trim()) {
         console.error('OpenRouter variation response had no usable content', {
           model,
@@ -1583,7 +1611,9 @@ ${variation?.enunciado || ''}`
       }
 
       variation.enunciado = splitOverloadedCompactRows(normalizeDisplayMathDelimiters(compactAlignedChains(stripLegacySolutionCommands(variation.enunciado.trim()))))
-      validationIssues = validateLatexVariation(exerciseForGeneration, variation.enunciado, expectedInfo)
+      validationIssues = conceptMode
+        ? [...validateLatexVariation(variation.enunciado, variation.enunciado, expectedInfo), ...validateConceptVariation(variation.enunciado)]
+        : validateLatexVariation(exerciseForGeneration, variation.enunciado, expectedInfo)
       if (visual) {
         const references = graphicReferences(variation.enunciado)
         const generated = references.some((entry) => entry.name === 'neope_generated_1')
@@ -1597,7 +1627,7 @@ ${variation?.enunciado || ''}`
       if (experimental && !variation.enunciado.includes(`\\info{${expectedInfo}}`)) {
         validationIssues.push(`La variación experimental debe terminar con \\info{${expectedInfo}}.`)
       }
-      if (solutionEnvironmentCount) validationIssues.push(...validateSolutionLayout(variation.enunciado))
+      if (solutionEnvironmentCount || conceptMode) validationIssues.push(...validateSolutionLayout(variation.enunciado))
       validationIssues = [...new Set(validationIssues)]
       if (!validationIssues.length) break
       console.warn('OpenRouter variation failed LaTeX validation', {
@@ -1649,6 +1679,7 @@ export const generateExerciseSolution = onCall({
   const compileError = typeof request.data?.compileError === 'string' ? request.data.compileError.trim().slice(0, 2_000) : ''
   const curriculumContext = curriculumPromptContext(request.data?.curriculum)
   const styleContext = await teacherSolutionStyleContext(request)
+  const solutionInstruction = solutionGenerationInstruction(request.data?.instructions)
 
   if (!enunciado || enunciado.length > 60_000) {
     throw new HttpsError('invalid-argument', 'El enunciado es obligatorio y no puede superar 60.000 caracteres.')
@@ -1681,7 +1712,7 @@ export const generateExerciseSolution = onCall({
           { role: 'system', content: `${solutionSystemPrompt}${jsonModeInstruction(model)}` },
           {
             role: 'user',
-            content: `${curriculumContext ? `${curriculumContext}\n\n` : ''}${styleContext ? `${styleContext}\n\n` : ''}REGLA OBLIGATORIA PARA \\info: usa exactamente \\info{${expectedInfo}} y sitúalo como último comando del ejercicio.\n\nEJERCICIO A RESOLVER:\n\n${exerciseForSolution}${previousAttempt ? `\n\nINTENTO ANTERIOR NO COMPILABLE: corrige este intento, conservando el enunciado y su solución matemática, pero reescribiendo el LaTeX defectuoso. No expliques el error; devuelve solamente el ejercicio completo compilable.\nERROR DEL COMPILADOR:\n${compileError || 'Error de sintaxis LaTeX.'}\n\nINTENTO A REPARAR:\n${previousAttempt}` : ''}`,
+            content: `${curriculumContext ? `${curriculumContext}\n\n` : ''}${styleContext ? `${styleContext}\n\n` : ''}${solutionInstruction ? `${solutionInstruction}\n\n` : ''}REGLA OBLIGATORIA PARA \\info: usa exactamente \\info{${expectedInfo}} y sitúalo como último comando del ejercicio.\n\nEJERCICIO A RESOLVER:\n\n${exerciseForSolution}${previousAttempt ? `\n\nINTENTO ANTERIOR NO COMPILABLE: corrige este intento, conservando el enunciado y su solución matemática, pero reescribiendo el LaTeX defectuoso. No expliques el error; devuelve solamente el ejercicio completo compilable.\nERROR DEL COMPILADOR:\n${compileError || 'Error de sintaxis LaTeX.'}\n\nINTENTO A REPARAR:\n${previousAttempt}` : ''}`,
           },
         ],
         response_format: responseFormatForModel(model, solutionResponseFormat),
@@ -1922,6 +1953,10 @@ export const suggestExerciseGradingCriteria = onCall({
   const course = cleanText(request.data?.course, 80)
   const subjectId = cleanText(request.data?.subjectId, 120)
 
+  if ((Array.isArray(request.data?.segments) ? request.data.segments : []).some((segment) => Array.isArray(segment?.referenceCriteria) && segment.referenceCriteria.length > 30)) {
+    throw new HttpsError('invalid-argument', 'Un apartado no puede tener más de 30 criterios de referencia.')
+  }
+
   const segments = (Array.isArray(request.data?.segments) ? request.data.segments : [])
     .slice(0, 24)
     .map((segment) => ({
@@ -1932,10 +1967,14 @@ export const suggestExerciseGradingCriteria = onCall({
       answer: cleanText(segment?.answer, 5_000),
       workedSolution: cleanText(segment?.workedSolution, 20_000),
       contentIds: (Array.isArray(segment?.contentIds) ? segment.contentIds : []).slice(0, 80).map((id) => cleanText(id, 160)).filter(Boolean),
+      referenceCriteria: (Array.isArray(segment?.referenceCriteria) ? segment.referenceCriteria : []).slice(0, 30).map((criterion) => ({ description: cleanText(criterion?.description, 1200), points: Math.round((Number(criterion?.points) || 0) * 100) / 100 })),
     }))
     .filter((segment) => segment.id && segment.statement && segment.points > 0)
   if (!segments.length) {
     throw new HttpsError('invalid-argument', 'No hay ningún segmento evaluable con enunciado y puntuación.')
+  }
+  if (segments.some((segment) => segment.referenceCriteria.length && !validReferenceCriteria(segment.referenceCriteria, segment.points))) {
+    throw new HttpsError('failed-precondition', 'Los criterios originales no suman la puntuación del apartado. Revísalos antes de usarlos como referencia.')
   }
 
   try {
@@ -1953,7 +1992,7 @@ export const suggestExerciseGradingCriteria = onCall({
         messages: [
           {
             role: 'system',
-            content: `Eres especialista en corrección analítica y diseño de ejercicios de Matemáticas. Descompón la puntuación de cada segmento en criterios de calificación observables, independientes y corregibles. No redactes niveles de desempeño, referencias legales ni criterios genéricos; describe exactamente qué debe demostrar el alumno en ese ejercicio. Usa el enunciado, la respuesta breve, la resolución, el curso y los contenidos como contexto, pero no premies dos veces la misma acción.
+            content: `Eres especialista en corrección analítica y diseño de ejercicios de Matemáticas. Descompón la puntuación de cada segmento en criterios de calificación observables, independientes y corregibles. No redactes niveles de desempeño, referencias legales ni criterios genéricos; describe exactamente qué debe demostrar el alumno en ese ejercicio. Usa el enunciado, la respuesta breve, la resolución, el curso y los contenidos como contexto, pero no premies dos veces la misma acción. Cuando un segmento incluya referenceCriteria, conserva exactamente su número, orden y puntuaciones; adapta cada descripción a los datos de la nueva variante sin cambiar la habilidad evaluada.
 
 ${achievementGranularityInstructions(course)}
 
@@ -1997,7 +2036,7 @@ Antes de devolver la respuesta, revisa que ninguna descripción contenga varias 
       const segment = segmentById.get(generatedSegment?.segmentId)
       if (!segment || normalizedSegments.some((item) => item.segmentId === segment.id)) continue
       let gradingCriteria = (Array.isArray(generatedSegment.gradingCriteria) ? generatedSegment.gradingCriteria : [])
-        .slice(0, 10)
+        .slice(0, segment.referenceCriteria.length ? 30 : 10)
         .map((criterion) => {
           return {
             id: `criterion-${randomUUID()}`,
@@ -2010,6 +2049,13 @@ Antes de devolver la respuesta, revisa que ninguna descripción contenga varias 
         .filter((criterion) => criterion.description)
 
       if (!gradingCriteria.length) continue
+      if (segment.referenceCriteria.length) {
+        const adapted = applyReferenceCriterionPoints(gradingCriteria, segment.referenceCriteria)
+        if (!adapted) throw new HttpsError('failed-precondition', 'La IA no ha conservado todos los criterios originales. Vuelve a intentarlo o revísalos manualmente.')
+        gradingCriteria = adapted
+        normalizedSegments.push({ segmentId: segment.id, gradingCriteria })
+        continue
+      }
       const rawTotal = gradingCriteria.reduce((total, criterion) => total + criterion.points, 0)
       if (rawTotal <= 0) gradingCriteria = gradingCriteria.map((criterion) => ({ ...criterion, points: 1 }))
       const weightTotal = gradingCriteria.reduce((total, criterion) => total + criterion.points, 0)
@@ -2178,9 +2224,11 @@ export const generateDocumentContent = onCall({
     : sourceType === 'curriculum'
       ? 'Diseña un conjunto breve y coherente de ejercicios nuevos que evalúe los conceptos seleccionados, con dificultad adecuada al curso, solución completa, respuestas breves, segmentación y desglose competencial.'
       : 'Reconstruye fielmente el documento aportado como LaTeX editable y ejercicios Neope estructurados. Conserva no solo las preguntas, sino también su estructura visual, instrucciones, tablas de recogida de datos, espacios de respuesta, recuadros, líneas, rejillas, diagramas y dibujos; completa después respuestas, resoluciones, segmentación, contenidos y logros evaluables.'
+  const teacherInstructions = documentGenerationInstructions(mode, sourceType, request.data?.instructions)
   const promptPayload = {
     task,
     teacherStyle,
+    ...(teacherInstructions ? { teacherInstructions } : {}),
     context: {
       course,
       subjectId,

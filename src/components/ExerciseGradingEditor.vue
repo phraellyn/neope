@@ -11,10 +11,11 @@ const props = defineProps({
   curriculum: { type: Object, default: () => ({}) },
   subjects: { type: Array, default: () => [] },
   aiModel: { type: String, default: 'google/gemini-3-flash-preview' },
+  aiModelOptions: { type: Array, default: () => [] },
   latex: { type: String, default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'update:target', 'generated'])
+const emit = defineEmits(['update:modelValue', 'update:target', 'update:aiModel', 'generated'])
 const generating = ref(false)
 
 const clone = (value) => JSON.parse(JSON.stringify(value))
@@ -130,6 +131,7 @@ watch(segments, (next) => {
       </div>
       <div class="exercise-grading-score" :class="{ valid: pointsMatch, invalid: !pointsMatch }"><span>{{ formatPoints(assignedPoints) }} / {{ formatPoints(targetPoints) }}</span><small>puntos</small></div>
       <v-spacer />
+      <v-menu :close-on-content-click="false" location="bottom end"><template #activator="{ props: menuProps }"><v-btn v-bind="menuProps" icon="mdi-brain" size="small" variant="text" aria-label="Seleccionar modelo de IA" title="Seleccionar modelo de IA" :disabled="generating" /></template><v-card class="grading-model-menu"><v-card-text><v-select :model-value="aiModel" :items="aiModelOptions" item-title="title" item-value="value" label="Modelo de IA" variant="outlined" density="compact" hide-details @update:model-value="emit('update:aiModel', $event)" /></v-card-text></v-card></v-menu>
       <v-btn size="small" variant="tonal" color="secondary" prepend-icon="mdi-auto-fix" :loading="generating" @click="generateWithAi">Completar con IA</v-btn>
       <v-btn size="small" variant="text" color="primary" prepend-icon="mdi-plus" @click="addCriterion">Añadir logro</v-btn>
     </header>
@@ -148,6 +150,7 @@ watch(segments, (next) => {
 
 <style scoped>
 .exercise-grading-editor { display:grid; height:100%; min-height:0; grid-template-rows:auto minmax(0,1fr); overflow:hidden; background:#f5f8fc; }
+.grading-model-menu { width:min(360px, calc(100vw - 32px)); border-radius:5px; }
 .exercise-grading-header { display:flex; min-height:52px; align-items:center; gap:12px; padding:7px 14px; border-bottom:1px solid #d7e1ec; background:#fff; }
 .exercise-grading-segments { display:flex; gap:5px; }
 .exercise-grading-segments button { min-width:34px; height:34px; padding:0 10px; border:1px solid #bfd0e2; border-radius:18px; background:#f2f6fb; color:#58708d; font-weight:800; cursor:pointer; }

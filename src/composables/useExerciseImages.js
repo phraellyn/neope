@@ -104,7 +104,7 @@ export function useExerciseImages({ exercise, selectedVersion, model, teacherRea
   const targetVersion = ref(null)
   const sourceCode = ref('')
   const renderedOriginal = ref('')
-  const form = reactive({ target: '', instructions: '', imageModel: '', imageMode: 'auto', experimental: false })
+  const form = reactive({ target: '', instructions: '', exerciseInstructions: '', imageModel: '', imageMode: 'auto', experimental: false })
   const generationDialog = ref(false)
   const targets = ref([])
   let exerciseIdentity = null

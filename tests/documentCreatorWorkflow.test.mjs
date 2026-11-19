@@ -421,6 +421,7 @@ Contenido conservado.
   assert.equal(copy.documentContent.value.source.options.variation.sourceDocumentId, 'original-document')
   assert.equal(copy.workflowState.value.dirty, true, 'The accepted draft must ask about unsaved work')
   assert.equal(exercise.enunciado.includes('8+8'), false, 'Generated exercises must not mutate the bank')
+  copy.generationInstructions.value = 'Evita las funciones con radicales.'
   const draftState = copy.captureDraft()
   assert.deepEqual(copy.documentCardTemplates({ isDraft: true, state: draftState }), [copy.selectedTemplates.value[0].nombre], 'Draft cards display the selected templates')
   assert.deepEqual(copy.documentCardTemplates({ isDraft: true, state: { selectedTemplateKeys: draftState.selectedTemplateKeys } }), [copy.selectedTemplates.value[0].nombre], 'Previously saved drafts resolve their template names')
@@ -431,6 +432,7 @@ Contenido conservado.
   assert.equal(restored.exerciseQueue.value.length, copy.exerciseQueue.value.length, 'A draft retains the exercise blocks')
   assert.deepEqual(restored.selectedTemplateKeys.value, draftState.selectedTemplateKeys)
   assert.equal(restored.documentCode.value, draftState.documentCode, 'A draft preserves edited LaTeX')
+  assert.equal(restored.generationInstructions.value, 'Evita las funciones con radicales.', 'A draft preserves optional generation instructions')
   copy.revokePreview()
   copy.revokeGeneratedSegmentArtifacts()
   await nextTick()

@@ -1,29 +1,38 @@
 <script setup>
 import DocumentPdfPreview from './DocumentPdfPreview.vue'
-defineProps({ state: { type: Object, required: true }, textModels: { type: Array, default: () => [] }, textModel: { type: String, default: '' }, generatingVariation: { type: Boolean, default: false }, variationError: { type: String, default: '' }, pendingVariation: { type: Boolean, default: false } })
+defineProps({ state: { type: Object, required: true }, textModels: { type: Array, default: () => [] }, textModel: { type: String, default: '' }, generatingVariation: { type: Boolean, default: false }, variationError: { type: String, default: '' }, pendingVariation: { type: Boolean, default: false }, conceptContextReady: { type: Boolean, default: false }, progress: { type: String, default: '' } })
 const emit = defineEmits(['generate-variation', 'update:textModel'])
 </script>
 
 <template>
   <v-dialog v-model="state.generationDialog" max-width="660" :persistent="generatingVariation">
     <v-card>
-      <v-card-title>{{ state.form.experimental ? 'Variación experimental' : 'Generar variante' }}</v-card-title>
+      <v-card-title>Generar variante</v-card-title>
       <v-card-text class="visual-generation-form">
         <v-select :model-value="textModel" :items="textModels" label="Modelo para el ejercicio" variant="outlined" density="compact" :disabled="generatingVariation" @update:model-value="emit('update:textModel', $event)">
           <template #item="{ props, item }"><v-list-item v-bind="props" :subtitle="item.raw.subtitle" /></template>
         </v-select>
+        <v-radio-group v-model="state.form.experimental" label="Tipo de variante" :disabled="generatingVariation || pendingVariation" hide-details>
+          <v-radio :value="false" label="Basada en el enunciado original" />
+          <p class="visual-generation-hint ml-8">Mantiene la estructura y adapta los criterios del ejercicio.</p>
+          <v-radio :value="true" label="Basada en contenidos · más creativa" />
+          <p class="visual-generation-hint ml-8">Diseña un ejercicio a partir de los conceptos y el nivel de la asignatura.</p>
+        </v-radio-group>
+        <v-alert v-if="state.form.experimental && !conceptContextReady" type="info" variant="tonal" density="compact">Asigna una asignatura y al menos un concepto al ejercicio antes de generar una variante por contenidos.</v-alert>
+        <v-textarea v-model="state.form.exerciseInstructions" label="Indicaciones para el ejercicio (opcional)" placeholder="Por ejemplo: evita las funciones con radicales." rows="2" auto-grow maxlength="3000" variant="outlined" :disabled="generatingVariation || pendingVariation" />
         <v-select v-model="state.form.imageMode" :items="[{ title: 'Automática: cuando ayude al ejercicio', value: 'auto' }, { title: 'Generar una figura nueva', value: 'required' }, { title: 'Sin imágenes externas', value: 'none' }]" label="Imagen" variant="outlined" density="compact" :disabled="generatingVariation || pendingVariation" />
         <v-select v-if="state.form.imageMode !== 'none' && state.imageModels.length" v-model="state.form.imageModel" :items="state.imageModels" label="Modelo configurado para generar la imagen" variant="outlined" density="compact" :loading="state.catalogLoading" :disabled="generatingVariation">
           <template #item="{ props, item }"><v-list-item v-bind="props" :subtitle="item.raw.subtitle" /></template>
         </v-select>
         <p v-if="!state.catalogLoading && !state.catalogError && !state.imageModels.length && state.form.imageMode !== 'none'" class="visual-generation-hint">Tus modelos configurados crean las figuras mediante código LaTeX/TikZ. Comprender imágenes y generar archivos de imagen son capacidades distintas.</p>
         <v-textarea v-if="state.form.imageMode !== 'none'" v-model="state.form.instructions" label="Indicaciones opcionales para la imagen" placeholder="Por ejemplo: blanco y negro, fondo blanco y etiquetas grandes." rows="3" maxlength="2000" variant="outlined" :disabled="generatingVariation" />
-        <p class="visual-generation-hint">Se utilizarán el enunciado original y las imágenes que contiene. Las figuras y gráficas exactas pueden generarse en TikZ. Las imágenes nuevas se guardarán al guardar el ejercicio.</p>
+        <p class="visual-generation-hint">{{ state.form.experimental ? 'El ejercicio original servirá de referencia para el nivel y los contenidos.' : 'Se utilizarán el enunciado original y las imágenes que contiene.' }} Las figuras y gráficas exactas pueden generarse en TikZ. Las imágenes nuevas se guardarán al guardar el ejercicio.</p>
         <v-alert v-if="state.catalogError" type="warning" variant="tonal" density="compact">{{ state.catalogError }}<v-btn variant="text" size="small" @click="state.loadCatalog">Actualizar modelos</v-btn></v-alert>
         <v-alert v-if="variationError" type="error" variant="tonal" density="compact">{{ variationError }}</v-alert>
+        <p v-if="generatingVariation && progress" class="visual-generation-hint" role="status" aria-live="polite">{{ progress }}</p>
         <p v-if="pendingVariation" class="visual-generation-hint">El enunciado ya está preparado. Al volver a intentarlo se generará únicamente su imagen.</p>
       </v-card-text>
-      <v-card-actions><v-btn variant="text" :disabled="generatingVariation" @click="state.generationDialog = false">Cancelar</v-btn><v-spacer /><v-btn color="primary" variant="flat" :loading="generatingVariation" :disabled="state.catalogLoading || (state.form.imageMode === 'required' && state.imageModels.length > 0 && !state.form.imageModel)" @click="emit('generate-variation')">{{ pendingVariation ? 'Generar imagen pendiente' : 'Generar' }}</v-btn></v-card-actions>
+      <v-card-actions><v-btn variant="text" :disabled="generatingVariation" @click="state.generationDialog = false">Cancelar</v-btn><v-spacer /><v-btn color="primary" variant="flat" :loading="generatingVariation" :disabled="(state.form.experimental && !conceptContextReady) || state.catalogLoading || (state.form.imageMode === 'required' && state.imageModels.length > 0 && !state.form.imageModel)" @click="emit('generate-variation')">{{ pendingVariation ? 'Generar imagen pendiente' : 'Generar' }}</v-btn></v-card-actions>
     </v-card>
   </v-dialog>
 

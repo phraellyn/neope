@@ -209,6 +209,9 @@ const exerciseDeleteDialog = ref(false)
 const exerciseDeleteError = ref('')
 const isGeneratingVariation = ref(false)
 const isGeneratingSolution = ref(false)
+const solutionInstructionsDialog = ref(false)
+const solutionInstructions = ref('')
+const solutionTargetPart = ref(null)
 const isDeletingSolution = ref(false)
 const variationProgressText = ref('')
 const selectedExerciseVersion = ref(0)
@@ -1210,6 +1213,19 @@ function exerciseAiCurriculum() {
       .filter((path) => path.length),
   }
 }
+
+function variationConceptIds() {
+  const curriculum = normalizeCurriculum(exerciseEditor.value?.curriculum)
+  const structure = exerciseEditor.value?.structure || {}
+  return [...new Set([...(curriculum.conceptIds || []), ...(structure.contenidos || []), ...(structure.contenidosGenerales || []), ...(structure.apartados || []).flatMap((part) => part.contenidos || [])])]
+}
+
+function variationCurriculum() {
+  const curriculum = normalizeCurriculum(exerciseEditor.value?.curriculum)
+  const ids = variationConceptIds()
+  return { subjectId: curriculum.subjectId || '', course: curriculum.course || '', conceptPaths: terminalConceptIds(ids).map((id) => conceptTitlePath(id)).filter((path) => path.length) }
+}
+const variationConceptContextReady = computed(() => Boolean(variationCurriculum().subjectId && variationCurriculum().conceptPaths.length))
 
 function exerciseStyleConceptIds() {
   const curriculumIds = normalizeCurriculum(exerciseEditor.value?.curriculum).conceptIds
@@ -3095,12 +3111,12 @@ async function exerciseFilesForAi() {
   return files
 }
 
-function exerciseGenerationConceptCatalog() {
+function exerciseGenerationConceptCatalog(selectedIds = normalizeCurriculum(exerciseEditor.value.curriculum).conceptIds) {
   return mathConceptNodes.value.map((node) => ({
     id: node.id,
     title: node.title,
     path: conceptTitlePath(node.id).join(' · '),
-    selected: normalizeCurriculum(exerciseEditor.value.curriculum).conceptIds.includes(node.id),
+    selected: selectedIds.includes(node.id),
   }))
 }
 
@@ -3295,7 +3311,21 @@ function deleteSelectedVariation() {
   mountLatexEditor()
 }
 
-async function generateOriginalExerciseSolution() {
+function openSolutionInstructions(apartadoIndex = null) {
+  solutionTargetPart.value = apartadoIndex
+  solutionInstructions.value = ''
+  solutionInstructionsDialog.value = true
+}
+
+function confirmSolutionGeneration() {
+  const instructions = solutionInstructions.value.trim()
+  const target = solutionTargetPart.value
+  solutionInstructionsDialog.value = false
+  if (target === null) void generateOriginalExerciseSolution(instructions)
+  else void generateExercisePartSolution(target, instructions)
+}
+
+async function generateOriginalExerciseSolution(instructions = '') {
   if (selectedExerciseVersion.value !== 0 || isGeneratingSolution.value || hasExerciseSolutions(activeExerciseCode.value)) return
   if (!isAppCheckConfigured) {
     exercisesError.value = 'App Check no está configurado en este entorno. Añade VITE_FIREBASE_APP_CHECK_KEY y registra el token de depuración de localhost en Firebase.'
@@ -3326,6 +3356,7 @@ async function generateOriginalExerciseSolution() {
         model: selectedAiModel.value,
         curriculum: exerciseAiCurriculum(),
         styleConceptIds: exerciseStyleConceptIds(),
+        instructions,
         previousAttempt,
         compileError,
       })
@@ -3409,7 +3440,7 @@ async function deleteOriginalExerciseSolution() {
   }
 }
 
-async function generateExercisePartSolution(apartadoIndex) {
+async function generateExercisePartSolution(apartadoIndex, instructions = '') {
   const structure = activeExerciseStructure.value
   const apartado = structure.apartados[apartadoIndex]
   if (!apartado || apartado.solucion?.trim() || isGeneratingPartSolution.value !== null) return
@@ -3433,6 +3464,7 @@ async function generateExercisePartSolution(apartadoIndex) {
       model: selectedAiModel.value,
       curriculum: exerciseAiCurriculum(),
       styleConceptIds: exerciseStyleConceptIds(),
+      instructions,
       previousAttempt: '',
       compileError: '',
     })
@@ -3481,10 +3513,11 @@ function deleteExercisePartSolution(apartadoIndex) {
   }
 }
 
-async function openVariationGeneration(experimental = false) {
+async function openVariationGeneration() {
   if (isGeneratingVariation.value || isSavingExercise.value) return
-  exerciseVisuals.form.experimental = experimental === true
+  exerciseVisuals.form.experimental = false
   exerciseVisuals.form.instructions = ''
+  exerciseVisuals.form.exerciseInstructions = ''
   pendingVisualVariant.value = null
   exercisesError.value = ''
   exerciseVisuals.generationDialog = true
@@ -3496,9 +3529,13 @@ async function addExerciseVariation(experimental = false) {
   if (!original || isGeneratingVariation.value) return
   if (!isAppCheckConfigured) { exercisesError.value = 'App Check no está configurado en este entorno.'; return }
   const editor = exerciseEditor.value
+  const sourceStructure = editor.structure || parseExerciseLatex(editor.enunciado)
+  const sourceConceptIds = variationConceptIds()
+  const sourceSegments = sourceStructure.apartados?.length ? sourceStructure.apartados : [sourceStructure]
+  const gradingReference = sourceSegments.map((segment, index) => ({ label: sourceStructure.apartados?.length ? `Apartado ${String.fromCharCode(97 + index)}` : 'Ejercicio', criteria: (segment.gradingCriteria || []).map(({ description, points }) => ({ description, points })) }))
   const model = selectedAiModel.value
   const imageOutput = exerciseVisuals.imageModels.length ? 'raster' : 'tikz'
-  const cacheKey = JSON.stringify([editor.id, original, model, experimental === true, exerciseVisuals.form.imageMode, imageOutput])
+  const cacheKey = JSON.stringify([editor.id, original, model, experimental === true, exerciseVisuals.form.imageMode, imageOutput, exerciseVisuals.form.exerciseInstructions.trim()])
   isGeneratingVariation.value = true
   const startedAt = Date.now()
   let progressPhase = 'Preparando referencia visual'
@@ -3515,8 +3552,10 @@ async function addExerciseVariation(experimental = false) {
       updateProgressText()
       const response = await httpsCallable(functions, 'generateExerciseVariation', { timeout: 125000 })({
         enunciado: original, tags: editor.tags, variaciones: editor.variaciones.map((variation) => variation.enunciado),
-        model, experimental: experimental === true, curriculum: exerciseAiCurriculum(),
+        model, experimental: experimental === true, variationMode: experimental ? 'concepts' : 'original', curriculum: variationCurriculum(),
         styleConceptIds: exerciseStyleConceptIds(),
+        gradingReference: experimental ? [] : gradingReference,
+        instructions: exerciseVisuals.form.exerciseInstructions,
         visualGeneration: true, imageMode: exerciseVisuals.form.imageMode,
         imageOutput,
         imageInstructions: exerciseVisuals.form.instructions, referenceImages: references,
@@ -3544,14 +3583,16 @@ async function addExerciseVariation(experimental = false) {
     pendingVisualVariant.value = null
     exerciseVisuals.generationDialog = false
     selectExerciseVersion(editor.variaciones.length)
-    const originalStructure = editor.structure || parseExerciseLatex(editor.enunciado)
+    const originalStructure = sourceStructure
     let structure = parseExerciseLatex(variation.enunciado)
-    structure.contenidosGenerales = [...(originalStructure.contenidosGenerales || [])]
-    structure.contenidos = [...(originalStructure.contenidos || [])]
-    structure.apartados.forEach((part, index) => {
-      const originalPart = (originalStructure.apartados || []).find((item) => item.id === part.id) || originalStructure.apartados?.[index]
-      part.contenidos = [...(originalPart?.contenidos || [])]
-    })
+    if (!experimental) {
+      structure.contenidosGenerales = [...(originalStructure.contenidosGenerales || [])]
+      structure.contenidos = [...(originalStructure.contenidos || [])]
+      structure.apartados.forEach((part, index) => {
+        const originalPart = (originalStructure.apartados || []).find((item) => item.id === part.id) || originalStructure.apartados?.[index]
+        part.contenidos = [...(originalPart?.contenidos || [])]
+      })
+    }
     variation.structure = aggregateExerciseStructure(structure)
     const needsSolution = structure.apartados.length ? structure.apartados.some((part) => !part.solucion?.trim()) : !structure.solucion?.trim()
     if (needsSolution) {
@@ -3568,19 +3609,24 @@ async function addExerciseVariation(experimental = false) {
     variation.solucionIA = true
     let segments = structure.apartados.length ? structure.apartados : [structure]
     if (segments.some((part) => !part.solucion?.trim())) throw new Error('La variante se ha creado, pero falta la solución de algún apartado.')
-    if (segments.some((part) => !part.contenidos?.length) && editor.curriculum.subjectId) {
+    if ((experimental || segments.some((part) => !part.contenidos?.length)) && editor.curriculum.subjectId) {
       progressPhase = 'Asignando contenidos'
       updateProgressText()
-      const alignment = await httpsCallable(functions, 'generateDocumentContent', { timeout: 310000 })({ model, mode: 'align', course: editor.curriculum.course, subjectId: editor.curriculum.subjectId, concepts: exerciseGenerationConceptCatalog(), exercises: [{ sourceBlockId: variation.id, latex: variation.enunciado, segments: segments.map((part, index) => ({ segmentIndex: structure.apartados.length ? index : -1, points: Number(part.puntuacion) || 0, statement: part.enunciado || '', answer: part.respuesta || '', workedSolution: part.solucion || '', contentIds: part.contenidos || [], gradingCriteria: [] })) }] })
+      const alignment = await httpsCallable(functions, 'generateDocumentContent', { timeout: 310000 })({ model, mode: 'align', course: editor.curriculum.course, subjectId: editor.curriculum.subjectId, selectedConceptIds: sourceConceptIds, concepts: exerciseGenerationConceptCatalog(sourceConceptIds), exercises: [{ sourceBlockId: variation.id, latex: variation.enunciado, segments: segments.map((part, index) => ({ segmentIndex: structure.apartados.length ? index : -1, points: Number(part.puntuacion) || 0, statement: part.enunciado || '', answer: part.respuesta || '', workedSolution: part.solucion || '', contentIds: part.contenidos || [], gradingCriteria: [] })) }] })
       for (const item of alignment.data?.alignments || []) {
         const target = structure.apartados.length ? structure.apartados[item.segmentIndex] : structure
-        if (target && !target.contenidos?.length) target.contenidos = item.contentIds || []
+        if (target && (experimental || !target.contenidos?.length)) target.contenidos = item.contentIds || []
       }
       variation.structure = aggregateExerciseStructure(structure)
       structure = variation.structure
       segments = structure.apartados.length ? structure.apartados : [structure]
     }
-    const eligible = segments.map((part, index) => ({ id: structure.apartados.length ? part.id : 'exercise', label: structure.apartados.length ? `Apartado ${String.fromCharCode(97 + index)}` : 'Ejercicio', points: Number(part.puntuacion) || 0, statement: part.enunciado || '', answer: part.respuesta || '', workedSolution: part.solucion || '', contentIds: part.contenidos || [] }))
+    if (experimental) {
+      const covered = exerciseConceptClosure(segments.flatMap((part) => part.contenidos || []))
+      const missing = terminalConceptIds(sourceConceptIds).filter((id) => !covered.has(id))
+      if (missing.length) throw new Error('La variante se ha creado, pero no se han podido vincular todos los conceptos originales. Revisa sus contenidos antes de publicarla.')
+    }
+    const eligible = segments.map((part, index) => ({ id: structure.apartados.length ? part.id : 'exercise', label: structure.apartados.length ? `Apartado ${String.fromCharCode(97 + index)}` : 'Ejercicio', points: Number(part.puntuacion) || 0, statement: part.enunciado || '', answer: part.respuesta || '', workedSolution: part.solucion || '', contentIds: part.contenidos || [], ...(!experimental && gradingReference[index]?.criteria?.length ? { referenceCriteria: gradingReference[index].criteria } : {}) }))
     if (eligible.some((part) => !part.points || !part.statement.trim())) throw new Error('La variante se ha creado, pero hay que asignar puntuaciones y revisar sus apartados antes de generar los criterios.')
     progressPhase = 'Preparando criterios de calificación'
     updateProgressText()
@@ -5263,62 +5309,7 @@ onBeforeUnmount(() => {
             :title="variation.modelo ? `Generada con ${variation.modelo}` : `Variación ${index + 1}`"
           >{{ index + 1 }}</v-btn>
         </v-btn-toggle>
-        <v-tooltip text="Generar una variación con IA" location="bottom">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              color="primary"
-              variant="flat"
-              :prepend-icon="isGeneratingVariation ? undefined : 'mdi-dice-multiple'"
-              class="exercise-add-variation app-toolbar-primary-action"
-              :disabled="!exerciseEditor.enunciado.trim() || isSavingExercise"
-              @click="openVariationGeneration(false)"
-            >
-              <template v-if="isGeneratingVariation">
-                <v-progress-circular indeterminate :size="16" :width="2" />
-                <span class="exercise-variation-progress" role="status" aria-live="polite">{{ variationProgressText }}</span>
-              </template>
-              <template v-else>Añadir variante</template>
-            </v-btn>
-          </template>
-        </v-tooltip>
-        <v-tooltip text="Generar variación experimental con análisis didáctico" location="bottom">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              icon="mdi-flask-outline"
-              variant="tonal"
-              color="secondary"
-              rounded="circle"
-              aria-label="Generar variación experimental"
-              class="mx-2"
-              :disabled="!exerciseEditor.enunciado.trim() || isSavingExercise || isGeneratingVariation"
-              @click="openVariationGeneration(true)"
-            />
-          </template>
-        </v-tooltip>
-        <v-select
-          v-model="selectedAiModel"
-          :items="aiModelOptions"
-          item-title="title"
-          item-value="value"
-          aria-label="Modelo de inteligencia artificial"
-          prepend-inner-icon="mdi-brain"
-          variant="outlined"
-          density="compact"
-          rounded="pill"
-          single-line
-          hide-details
-          :disabled="isGeneratingVariation || isSavingExercise"
-          class="exercise-ai-model"
-        >
-          <template #item="{ props, item }">
-            <v-list-item v-bind="props">
-              <v-list-item-title class="ai-model-option-title">{{ item.raw.title }}</v-list-item-title>
-              <v-list-item-subtitle>{{ item.raw.subtitle }}</v-list-item-subtitle>
-            </v-list-item>
-          </template>
-        </v-select>
+        <v-tooltip text="Generar una variante con IA" location="bottom"><template #activator="{ props }"><v-btn v-bind="props" icon="mdi-dice-multiple-outline" variant="tonal" color="primary" rounded="circle" class="mx-2" aria-label="Generar variante con IA" :loading="isGeneratingVariation" :disabled="!exerciseEditor.enunciado.trim() || isSavingExercise || isGeneratingVariation" @click="openVariationGeneration()" /></template></v-tooltip>
         <v-spacer />
         <v-tooltip v-if="isEditingPersistedExercise" text="Eliminar ejercicio" location="bottom">
           <template #activator="{ props }">
@@ -5996,7 +5987,8 @@ onBeforeUnmount(() => {
                     :target="exerciseGradingTarget"
                     :curriculum="{ ...exerciseEditor.curriculum, ...(exerciseAiCurriculum() || {}) }"
                     :subjects="mathSubjects"
-                    :ai-model="selectedAiModel"
+                    v-model:ai-model="selectedAiModel"
+                    :ai-model-options="aiModelOptions"
                     :latex="activeExerciseCode"
                     @update:model-value="updateExerciseGrading"
                     @update:target="exerciseGradingTarget = $event"
@@ -6051,7 +6043,7 @@ onBeforeUnmount(() => {
                         </v-tooltip>
                         <v-tooltip v-if="selectedExerciseVersion === 0" text="Generar todas las soluciones" location="bottom">
                           <template #activator="{ props }">
-                            <v-btn v-bind="props" icon="mdi-auto-fix" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" aria-label="Generar todas las soluciones" :disabled="hasExerciseSolutions(activeExerciseCode)" :loading="isGeneratingSolution" @click="generateOriginalExerciseSolution" />
+                            <v-btn v-bind="props" icon="mdi-auto-fix" size="x-small" variant="tonal" color="primary" rounded="circle" class="exercise-segment-icon" aria-label="Generar todas las soluciones" :disabled="hasExerciseSolutions(activeExerciseCode)" :loading="isGeneratingSolution" @click="openSolutionInstructions()" />
                           </template>
                         </v-tooltip>
                         <v-tooltip v-if="selectedExerciseVersion === 0 && hasExerciseSolutions(activeExerciseCode)" text="Eliminar todas las soluciones" location="bottom">
@@ -6139,7 +6131,7 @@ onBeforeUnmount(() => {
                         <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-format-list-checks" size="x-small" rounded="circle" class="exercise-segment-icon" :variant="exerciseGradingTarget === apartadoIndex && exerciseEditorTab === 'grading' ? 'flat' : 'tonal'" color="primary" :aria-label="`Definir criterios de calificación del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="selectExercisePartGrading(apartadoIndex)" /></template>
                       </v-tooltip>
                       <v-tooltip v-if="!apartado.solucion" text="Generar solución de este apartado" location="bottom">
-                        <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-auto-fix" size="x-small" rounded="circle" class="exercise-segment-icon" variant="tonal" color="primary" :loading="isGeneratingPartSolution === apartadoIndex" :disabled="isGeneratingPartSolution !== null" :aria-label="`Generar solución del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="generateExercisePartSolution(apartadoIndex)" /></template>
+                        <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-auto-fix" size="x-small" rounded="circle" class="exercise-segment-icon" variant="tonal" color="primary" :loading="isGeneratingPartSolution === apartadoIndex" :disabled="isGeneratingPartSolution !== null" :aria-label="`Generar solución del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="openSolutionInstructions(apartadoIndex)" /></template>
                       </v-tooltip>
                       <v-tooltip v-else text="Eliminar solución de este apartado" location="bottom">
                         <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-eraser" size="x-small" rounded="circle" class="exercise-segment-icon" variant="tonal" color="error" :aria-label="`Eliminar solución del apartado ${String.fromCharCode(97 + apartadoIndex)}`" @click="deleteExercisePartSolution(apartadoIndex)" /></template>
@@ -6481,11 +6473,23 @@ onBeforeUnmount(() => {
       </v-card>
     </v-dialog>
 
+    <v-dialog v-model="solutionInstructionsDialog" max-width="560">
+      <v-card>
+        <v-card-title>{{ solutionTargetPart === null ? 'Generar soluciones' : `Generar solución del apartado ${String.fromCharCode(97 + solutionTargetPart)}` }}</v-card-title>
+        <v-card-text>
+          <v-select v-model="selectedAiModel" :items="aiModelOptions" item-title="title" item-value="value" label="Modelo de IA" variant="outlined" density="compact" />
+          <v-textarea v-model="solutionInstructions" label="Indicaciones para la solución (opcional)" placeholder="Por ejemplo: utiliza el teorema de Rolle y explica sus condiciones." rows="3" auto-grow maxlength="3000" variant="outlined" hide-details />
+        </v-card-text>
+        <v-card-actions><v-spacer /><v-btn variant="text" @click="solutionInstructionsDialog = false">Cancelar</v-btn><v-btn color="primary" variant="flat" @click="confirmSolutionGeneration">Generar</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-dialog v-model="exerciseSourceDialog" max-width="620" persistent>
       <v-card>
         <v-card-title class="d-flex align-center"><v-icon icon="mdi-image-auto-adjust" class="mr-2" />Crear ejercicio con IA</v-card-title>
         <v-card-text>
           <p class="mb-4">Elige qué partes debe completar el modelo a partir de las imágenes o PDF adjuntos.</p>
+          <v-select v-model="selectedAiModel" :items="aiModelOptions" item-title="title" item-value="value" label="Modelo de IA" variant="outlined" density="compact" :disabled="isGeneratingExerciseFromFiles" />
           <div class="exercise-source-options">
             <v-checkbox v-model="exerciseSourceOptions.transcribeLatex" label="Transcribir y maquetar el código LaTeX" hide-details density="compact" />
             <v-checkbox v-model="exerciseSourceOptions.inferClassification" label="Elegir curso y asignatura" hide-details density="compact" />
@@ -6593,7 +6597,7 @@ onBeforeUnmount(() => {
     </v-dialog>
 
     </template>
-    <ExerciseImageDialog :state="exerciseVisuals" :text-model="selectedAiModel" :text-models="aiModelOptions" :generating-variation="isGeneratingVariation" :variation-error="exercisesError" :pending-variation="Boolean(pendingVisualVariant)" @update:text-model="selectedAiModel = $event" @generate-variation="addExerciseVariation(exerciseVisuals.form.experimental)" />
+    <ExerciseImageDialog :state="exerciseVisuals" :text-model="selectedAiModel" :text-models="aiModelOptions" :generating-variation="isGeneratingVariation" :variation-error="exercisesError" :pending-variation="Boolean(pendingVisualVariant)" :concept-context-ready="variationConceptContextReady" :progress="variationProgressText" @update:text-model="selectedAiModel = $event" @generate-variation="addExerciseVariation(exerciseVisuals.form.experimental)" />
     <AppErrorToast />
   </v-app>
 </template>
