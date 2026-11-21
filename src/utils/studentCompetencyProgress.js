@@ -1,3 +1,5 @@
+import { criterionDescriptorIds as descriptorsForCriterion } from './criterionEvidence.js'
+
 const EVIDENCE_WEIGHT = { weak: 1, medium: 2, strong: 3 }
 
 function finiteNonNegative(value) {
@@ -33,6 +35,23 @@ function criterionDescriptorIds(subjectLaw = {}, criterionIds = []) {
 
 function competencyShares(alignment = {}, descriptorToCompetency, subjectLaw) {
   let evidence = (alignment.descriptorEvidence || []).filter((item) => descriptorToCompetency.has(item?.descriptorId))
+  const explicit = new Map()
+  const selected = new Set(alignment.criterionIds || [])
+  for (const item of alignment.criterionEvidence || []) {
+    if (!selected.has(item?.criterionId) || !EVIDENCE_WEIGHT[item?.strength]) continue
+    for (const descriptorId of descriptorsForCriterion(subjectLaw, item.criterionId)) {
+      if (!descriptorToCompetency.has(descriptorId)) continue
+      if ((EVIDENCE_WEIGHT[item.strength] || 0) > (EVIDENCE_WEIGHT[explicit.get(descriptorId)] || 0)) explicit.set(descriptorId, item.strength)
+    }
+  }
+  if (explicit.size) {
+    const merged = new Map(evidence.map((item) => [item.descriptorId, item.strength]))
+    explicit.forEach((strength, id) => merged.set(id, strength))
+    for (const descriptorId of criterionDescriptorIds(subjectLaw, alignment.criterionIds)) {
+      if (descriptorToCompetency.has(descriptorId) && !merged.has(descriptorId)) merged.set(descriptorId, 'medium')
+    }
+    evidence = [...merged].map(([descriptorId, strength]) => ({ descriptorId, strength }))
+  }
   if (!evidence.length) {
     evidence = criterionDescriptorIds(subjectLaw, alignment.criterionIds)
       .filter((descriptorId) => descriptorToCompetency.has(descriptorId))

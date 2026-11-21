@@ -41,6 +41,38 @@ assert.equal(segmented.rows[0].achievements.length, 0)
 assert.deepEqual(segmented.rows[1].achievements.map((item) => item.key), ['segmented:2:part-a:a'])
 assert.deepEqual(segmented.achievements.map((item) => item.id), ['a', 'b'])
 
+const adjusted = assessmentExerciseModel({
+  exerciseId: 'adjusted',
+  structure: { apartados: [
+    { id: 'a', gradingCriteria: [{ id: 'one', points: 0.25 }, { id: 'two', points: 0.25 }] },
+    { id: 'b', gradingCriteria: [{ id: 'three', points: 0.75 }] },
+    { id: 'c', gradingCriteria: [{ id: 'four', points: 0.75 }] },
+  ] },
+  metrics: { apartados: [{ puntuacion: 1 }, { puntuacion: 1 }, { puntuacion: 1 }] },
+})
+assert.deepEqual(adjusted.rows.slice(1).map((row) => row.achievements.map((item) => item.points)), [[0.5, 0.5], [1], [1]])
+assert.deepEqual(adjusted.achievements.map((item) => item.id), ['one', 'two', 'three', 'four'])
+
+const aligned = assessmentExerciseModel({
+  exerciseId: 'aligned', structure: { apartados: [] },
+  metrics: { puntuacion: 1 },
+  assessment: { segments: { exercise: [{ id: 'a', points: 1 }, { id: 'b', points: 2 }] } },
+})
+assert.deepEqual(aligned.achievements.map((item) => item.points), [0.25, 0.75])
+
+const equalShares = assessmentExerciseModel({
+  exerciseId: 'equal', structure: { apartados: [] }, metrics: { puntuacion: 1 },
+  assessment: { segments: { exercise: [{ id: 'a', points: 1 }, { id: 'b', points: 1 }, { id: 'c', points: 1 }] } },
+})
+assert.deepEqual(equalShares.achievements.map((item) => item.points), [0.5, 0.25, 0.25])
+assert.equal(equalShares.achievements.reduce((sum, item) => sum + item.points, 0), 1)
+
+const quantized = assessmentExerciseModel({
+  exerciseId: 'quantized', structure: { apartados: [] }, metrics: { puntuacion: 1 },
+  assessment: { segments: { exercise: [{ id: 'a', points: 0.4 }, { id: 'b', points: 0.6 }] } },
+})
+assert.deepEqual(quantized.achievements.map((item) => item.points), [0.5, 0.5])
+
 const embeddedSnapshot = { id: 'generated', structure: { achievements: [{ id: 'achievement' }] } }
 const resolvedReferences = resolveDocumentAssessmentReferences(
   [{ exerciseId: 'generated', version: 0, order: 0 }],
@@ -49,6 +81,10 @@ const resolvedReferences = resolveDocumentAssessmentReferences(
 assert.equal(resolvedReferences.length, 1)
 assert.equal(resolvedReferences[0].blockId, 'block-1')
 assert.deepEqual(resolvedReferences[0].snapshot, embeddedSnapshot)
+assert.deepEqual(resolveDocumentAssessmentReferences(
+  [{ exerciseId: 'generated', metrics: { puntuacion: 2 } }],
+  [{ exerciseId: 'generated', metrics: { puntuacion: 3 } }],
+)[0].metrics, { puntuacion: 3 })
 
 const directSnapshot = { id: 'newer' }
 assert.deepEqual(

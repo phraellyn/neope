@@ -3,6 +3,7 @@ import MathText from './MathText.vue'
 import { computed } from 'vue'
 import ExercisePdfPreview from './ExercisePdfPreview.vue'
 import lomloeMathLaw from '../data/lomloeMathLaw.json'
+import { criterionStrength } from '../utils/criterionEvidence'
 
 const props = defineProps({
   exercises: { type: Array, default: () => [] },
@@ -15,7 +16,6 @@ const props = defineProps({
 
 const emit = defineEmits(['toggle-achievement'])
 
-const strengthRank = Object.freeze({ weak: 1, medium: 2, strong: 3 })
 const strengthLabel = Object.freeze({ weak: 'Evidencia débil', medium: 'Evidencia media', strong: 'Evidencia fuerte' })
 const subjectLaws = Object.values(lomloeMathLaw.subjects || {})
 const competencyById = new Map(subjectLaws
@@ -54,12 +54,6 @@ function fallbackReferenceCode(id, type) {
   return value.split('-').at(-1)?.toUpperCase() || value
 }
 
-function strongestStrength(values = []) {
-  return values.reduce((strongest, value) => (
-    (strengthRank[value] || 0) > (strengthRank[strongest] || 0) ? value : strongest
-  ), '')
-}
-
 function achievementAlignment(achievement) {
   if (achievement && alignmentCache.has(achievement)) return alignmentCache.get(achievement)
   const alignment = achievement?.alignment || {}
@@ -72,7 +66,6 @@ function achievementAlignment(achievement) {
       strength: item.strength || '',
     }
   })
-  const evidenceStrength = new Map(evidence.map((item) => [item.id, item.strength]))
   const criteria = (alignment.criterionIds || []).map((criterionId) => {
     const criterion = criterionById.get(criterionId)
     const competency = competencyById.get(criterion?.competenceId)
@@ -81,7 +74,7 @@ function achievementAlignment(achievement) {
       id: criterionId,
       code: criterion?.code || fallbackReferenceCode(criterionId, 'criterion'),
       description: criterion?.description || '',
-      strength: strongestStrength(descriptorIds.map((id) => evidenceStrength.get(id)).filter(Boolean)),
+      strength: criterionStrength(alignment, criterionId, descriptorIds) || 'medium',
     }
   })
   const result = { criteria, evidence }

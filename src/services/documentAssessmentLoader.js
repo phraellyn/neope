@@ -14,9 +14,9 @@ function exerciseSourceStructure(source = {}) {
   return mergeExerciseStructure(parseExerciseLatex(source.codigo || source.latex || source.enunciado || ''), source.structure || source)
 }
 
-function assessmentExerciseModel(exerciseId, version, source, order, assessment = {}) {
+function assessmentExerciseModel(exerciseId, version, source, order, assessment = {}, metrics = null) {
   const structure = exerciseSourceStructure(source)
-  return createAssessmentExerciseModel({ exerciseId, version, structure, assessment, order })
+  return createAssessmentExerciseModel({ exerciseId, version, structure, assessment, metrics, order })
 }
 
 export async function loadDocumentAssessmentExercises(item) {
@@ -41,7 +41,7 @@ export async function loadDocumentAssessmentExercises(item) {
       }
       const version = Number(reference.version) || 0
       const source = version === 0 ? exercise : exercise.variaciones?.[version - 1] || exercise
-      return assessmentExerciseModel(reference.exerciseId, version, source, order, reference.snapshot?.assessment || reference.assessment || {})
+      return assessmentExerciseModel(reference.exerciseId, version, source, order, reference.snapshot?.assessment || reference.assessment || {}, reference.metrics)
     }))
     .then((items) => items.filter(Boolean))
 }

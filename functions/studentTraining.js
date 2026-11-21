@@ -480,7 +480,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
       const embedded = stored.find((candidate) => reference.blockId && candidate.blockId === reference.blockId)
         || stored.find((candidate) => candidate.order === (reference.order ?? order) && candidate.exerciseId === reference.exerciseId && (Number(candidate.version) || 0) === version)
         || stored.find((candidate) => candidate.exerciseId === reference.exerciseId && (Number(candidate.version) || 0) === version)
-      return { ...embedded, ...reference, order: reference.order ?? embedded?.order ?? order, snapshot: reference.snapshot || embedded?.snapshot || null }
+      return { ...embedded, ...reference, order: reference.order ?? embedded?.order ?? order, snapshot: reference.snapshot || embedded?.snapshot || null, metrics: embedded?.metrics ?? reference.metrics ?? null }
     }).sort((a, b) => a.order - b.order)
     const exercises = (await Promise.all(references.map(async (reference, order) => {
       if (!validId(reference.exerciseId)) return null
@@ -488,7 +488,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
       if (!source) { const exercise = await db.doc(`ejercicios/${reference.exerciseId}`).get(); if (!exercise.exists) return null; source = exercise.data() }
       const version = Number(reference.version) || 0
       const active = version ? source.variaciones?.[version - 1] || source : source
-      return { exerciseId: reference.exerciseId, version, order, source: safeExamExercise(active), assessment: safeExamAssessment(reference.snapshot?.assessment || reference.assessment || {}) }
+      return { exerciseId: reference.exerciseId, version, order, source: safeExamExercise(active), assessment: safeExamAssessment(reference.snapshot?.assessment || reference.assessment || {}), metrics: reference.metrics }
     }))).filter(Boolean)
     return { pdf, matrix: exercises.length ? { exercises, selectedAchievementIds: result.selectedAchievementIds.filter((id) => typeof id === 'string') } : null }
   }

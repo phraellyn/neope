@@ -30,6 +30,7 @@ export function resolveDocumentAssessmentReferences(itemReferences = [], documen
       ...reference,
       order: reference.order ?? embedded?.order ?? order,
       snapshot: reference.snapshot || embedded?.snapshot || null,
+      metrics: embedded?.metrics ?? reference.metrics ?? null,
     }
   })
 }

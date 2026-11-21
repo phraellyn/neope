@@ -29,13 +29,31 @@ function assessmentAchievements(assessment, segmentId, gradingCriteria = []) {
   }))
 }
 
-export function assessmentExerciseModel({ exerciseId, sourceBlockId = '', version = 0, structure = {}, assessment = {}, order = 0 }) {
+// Los criterios pertenecen al ejercicio original; el documento puede asignar
+// otra puntuación al mismo apartado. Repartimos cuartos de punto según los
+// pesos relativos, conservando los IDs y la suma total del apartado.
+function documentPoints(achievements, metric) {
+  if (metric === undefined || metric === null || metric === '') return achievements
+  const target = Number(metric)
+  const total = achievements.reduce((sum, item) => sum + Math.max(0, Number(item.points) || 0), 0)
+  if (!Number.isFinite(target) || target < 0 || !total) return achievements
+  const units = Math.round(target * 4)
+  const shares = achievements.map((item) => Math.max(0, Number(item.points) || 0) / total * units)
+  const rounded = shares.map(Math.floor)
+  const remaining = units - rounded.reduce((sum, value) => sum + value, 0)
+  const indices = shares.map((share, index) => ({ index, fraction: share - rounded[index] }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index)
+  for (let i = 0; i < remaining; i += 1) rounded[indices[i].index] += 1
+  return achievements.map((item, index) => ({ ...item, points: rounded[index] / 4 }))
+}
+
+export function assessmentExerciseModel({ exerciseId, sourceBlockId = '', version = 0, structure = {}, assessment = {}, metrics = null, order = 0 }) {
   const parts = Array.isArray(structure.apartados) ? structure.apartados : []
   const label = `Ejercicio ${order + 1}`
 
   if (!parts.length) {
     const achievements = achievementRows(
-      assessmentAchievements(assessment, 'exercise', structure.gradingCriteria),
+      documentPoints(assessmentAchievements(assessment, 'exercise', structure.gradingCriteria), metrics?.puntuacion),
       exerciseId,
       version,
       'general',
@@ -68,7 +86,7 @@ export function assessmentExerciseModel({ exerciseId, sourceBlockId = '', versio
       label: partLabel,
       pdf: text(part.pdfsolucion),
       achievements: achievementRows(
-        assessmentAchievements(assessment, partKey, part.gradingCriteria),
+        documentPoints(assessmentAchievements(assessment, partKey, part.gradingCriteria), metrics?.apartados?.[index]?.puntuacion),
         exerciseId,
         version,
         partKey,

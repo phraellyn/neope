@@ -841,6 +841,15 @@ const rubricAlignmentResponseFormat = {
           items: { type: 'string' },
           uniqueItems: true,
         },
+        criterionEvidence: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { criterionId: { type: 'string' }, strength: { type: 'string', enum: ['weak', 'medium', 'strong'] } },
+            required: ['criterionId', 'strength'],
+            additionalProperties: false,
+          },
+        },
         descriptorEvidence: {
           type: 'array',
           items: {
@@ -854,7 +863,7 @@ const rubricAlignmentResponseFormat = {
           },
         },
       },
-      required: ['criterionIds', 'descriptorEvidence'],
+      required: ['criterionIds', 'criterionEvidence', 'descriptorEvidence'],
       additionalProperties: false,
     },
   },
@@ -1886,7 +1895,7 @@ export const suggestRubricAlignment = onCall({
         messages: [
           {
             role: 'system',
-            content: 'Eres especialista en evaluación competencial LOMLOE. Vincula una categoría completa de una rúbrica exclusivamente con los identificadores del catálogo legal proporcionado. La categoría puede definirse mediante varios niveles de desempeño con puntuaciones concretas o mediante una horquilla entera. Selecciona solo los criterios que la categoría permite observar realmente. Para cada descriptor operativo relacionado que produzca evidencia, indica weak, medium o strong según la calidad y directitud de esa evidencia. No inventes identificadores, no selecciones por mera afinidad temática y devuelve solo el JSON solicitado.',
+            content: 'Eres especialista en evaluación competencial LOMLOE. Vincula la categoría o logro exclusivamente con los identificadores del catálogo legal proporcionado. Selecciona solo los criterios que permite observar realmente. Para cada criterio seleccionado devuelve exactamente una entrada criterionEvidence con criterionId y fuerza weak, medium o strong según la calidad y directitud de la evidencia. Para cada descriptor operativo relacionado que produzca evidencia indica también su fuerza. No inventes identificadores, no selecciones por mera afinidad temática y devuelve solo el JSON solicitado.',
           },
           {
             role: 'user',
@@ -1924,11 +1933,14 @@ export const suggestRubricAlignment = onCall({
     const allowedCriteria = new Set(criteria.map((criterion) => criterion.id))
     const allowedDescriptors = new Set(descriptors.map((descriptor) => descriptor.id))
     const criterionIds = [...new Set((suggestion.criterionIds || []).filter((id) => allowedCriteria.has(id)))]
+    const criterionEvidence = (Array.isArray(suggestion.criterionEvidence) ? suggestion.criterionEvidence : [])
+      .filter((item) => criterionIds.includes(item?.criterionId) && ['weak', 'medium', 'strong'].includes(item?.strength))
+      .filter((item, index, items) => items.findIndex((candidate) => candidate.criterionId === item.criterionId) === index)
     const descriptorEvidence = (suggestion.descriptorEvidence || [])
       .filter((item) => allowedDescriptors.has(item?.descriptorId) && ['weak', 'medium', 'strong'].includes(item?.strength))
       .filter((item, index, items) => items.findIndex((candidate) => candidate.descriptorId === item.descriptorId) === index)
 
-    return { criterionIds, descriptorEvidence, model }
+    return { criterionIds, criterionEvidence, descriptorEvidence, model }
   } catch (error) {
     if (error instanceof HttpsError) throw error
     if (error?.name === 'TimeoutError') throw new HttpsError('deadline-exceeded', 'La IA ha tardado demasiado en proponer la vinculación curricular.')

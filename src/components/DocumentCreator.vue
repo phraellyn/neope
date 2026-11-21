@@ -14,7 +14,7 @@ import DocumentPdfPreview from './DocumentPdfPreview.vue'
 import DocumentCodeEditor from './DocumentCodeEditor.vue'
 import DocumentVariationDialog from './DocumentVariationDialog.vue'
 import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
-import DocumentAssessmentAlignmentEditor from './DocumentAssessmentAlignmentEditor.vue'
+import DocumentAssessmentEditor from './DocumentAssessmentEditor.vue'
 import DocumentQueueChildren from './DocumentQueueChildren.vue'
 import MasonryGrid from './MasonryGrid.vue'
 import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, exerciseStructureFromDocument, mergeExerciseStructure, normalizeCriteriaUnicode, parseExerciseLatex } from '../utils/exerciseStructure'
@@ -214,7 +214,10 @@ const documentVariation = reactive(useDocumentVariation({
   accept: acceptDocumentVariation, fingerprint: documentFingerprint,
   onBusy: (busy) => emit('busy-change', busy),
 }))
-const assessmentAlignmentDialog = ref(false)
+const assessmentEditorDialog = ref(false)
+const assessmentEditorLoading = ref(false)
+const assessmentEditorSections = ref([])
+const assessmentEditorAiBusy = ref(false)
 const queueStructureCache = new WeakMap()
 const grayscaleLogoCache = new Map()
 const generatedSegmentArtifacts = new Map()
@@ -1099,8 +1102,8 @@ function generationConceptCatalog(curriculum) {
     }))
 }
 
-function structureWithQueueMetrics(item) {
-  const structure = aggregateExerciseStructure(queueStructure(item))
+function structureWithQueueMetrics(item, sourceStructure = null) {
+  const structure = aggregateExerciseStructure(sourceStructure || queueStructure(item))
   const metrics = queueMetrics(item)
   if (structure.apartados.length) {
     structure.apartados.forEach((part, index) => {
@@ -2103,6 +2106,7 @@ const assessmentPreviewExercises = computed(() => selectedExercises.value
         pdfsolucioncompleto: structure.pdfsolucioncompleto || active?.pdf?.resuelto || '',
       },
       assessment: item.snapshot?.assessment || {},
+      metrics: item.metrics,
       order: index,
     })
   }))
@@ -2116,12 +2120,13 @@ function emptyAchievementFromCriterion(criterion) {
   }
 }
 
-function ensureAssessmentSnapshots() {
+function ensureAssessmentSnapshots(loadedExercises = new Map()) {
   selectedExercises.value.forEach((item) => {
     if (!item.snapshot) {
-      const original = props.exercises.find((exercise) => exercise.id === item.exerciseId)
+      const original = props.exercises.find((exercise) => exercise.id === item.exerciseId) || loadedExercises.get(item.exerciseId)
       const active = activeVersion(original, item.version)
-      const structure = structureWithQueueMetrics(item)
+      if (!item.metrics) item.metrics = metricsForVersion(original, item.version)
+      const structure = structureWithQueueMetrics(item, versionStructure(original, item.version))
       item.snapshot = {
         ...(original || {}),
         ...(active || {}),
@@ -2148,19 +2153,48 @@ function ensureAssessmentSnapshots() {
   exerciseQueue.value = [...exerciseQueue.value]
 }
 
-function openAssessmentAlignment() {
-  ensureAssessmentSnapshots()
-  assessmentAlignmentDialog.value = true
-  invalidateContentPreview()
+async function openAssessmentEditor() {
+  if (assessmentEditorDialog.value) { selectAssessmentPreview(); return }
+  assessmentEditorLoading.value = true
+  try {
+    const missing = [...new Set(selectedExercises.value.filter((item) => !item.snapshot && !props.exercises.some((exercise) => exercise.id === item.exerciseId)).map((item) => item.exerciseId))]
+    const loaded = new Map(await Promise.all(missing.map(async (id) => {
+      const snapshot = await getDoc(doc(db, 'ejercicios', id))
+      if (!snapshot.exists()) throw new Error('No se encuentra uno de los ejercicios del documento.')
+      return [id, { id, ...snapshot.data() }]
+    })))
+    ensureAssessmentSnapshots(loaded)
+    assessmentEditorSections.value = assessmentPreviewExercises.value.flatMap((exercise, index) => {
+      const item = selectedExercises.value[index]
+      const metrics = queueMetrics(item)
+      const context = generationExercisePayload(item)
+      return exercise.rows.filter((row) => row.kind !== 'statement').map((row, partIndex) => ({
+        blockId: item.blockId,
+        segmentId: row.kind === 'exercise' ? 'exercise' : row.key,
+        exerciseLabel: exercise.label,
+        label: row.kind === 'exercise' ? 'Ejercicio' : row.label,
+        maximum: Number(row.kind === 'exercise' ? metrics.puntuacion : metrics.apartados?.[partIndex]?.puntuacion) || 0,
+        context: { latex: context.latex, segment: context.segments[partIndex] || context.segments[0] },
+        achievements: row.achievements.map(({ key, exerciseId, sourceBlockId, version, segmentId, section, ...achievement }) => achievement),
+      }))
+    })
+    if (mode.value === 'viewer') { mode.value = 'editor'; currentStep.value = lastStep.value }
+    selectAssessmentPreview()
+    assessmentEditorDialog.value = true
+  } catch (error) {
+    showAppErrorToast(error.message || 'No se ha podido abrir el editor de la matriz.')
+  } finally {
+    assessmentEditorLoading.value = false
+  }
 }
 
-function updateDocumentAchievementAlignment(achievement, alignment) {
-  const item = selectedExercises.value.find((candidate) => candidate.blockId === achievement.sourceBlockId)
-  const list = item?.snapshot?.assessment?.segments?.[achievement.segmentId]
-  const target = list?.find((candidate) => candidate.id === achievement.id)
-  if (!target) return
-  target.alignment = alignment
+function applyAssessmentEdits(sections) {
+  sections.forEach((section) => {
+    const item = selectedExercises.value.find((candidate) => candidate.blockId === section.blockId)
+    if (item?.snapshot?.assessment?.segments) item.snapshot.assessment.segments[section.segmentId] = section.achievements
+  })
   exerciseQueue.value = [...exerciseQueue.value]
+  assessmentEditorDialog.value = false
 }
 
 const isAssessmentPreviewSelected = computed(() => selectedPreviewTemplateKey.value === ASSESSMENT_PREVIEW_KEY)
@@ -2999,6 +3033,8 @@ function resetDocumentAssessment() {
 
 function resetWorkflow() {
   clearTimeout(draftTimer)
+  assessmentEditorDialog.value = false
+  assessmentEditorSections.value = []
   activeDraftId.value = null
   if (documentVariation.state.visible) documentVariation.close()
   revokeSourceFiles()
@@ -3055,6 +3091,8 @@ function newDocumentWithContext(context) {
 }
 
 async function backToLibrary(options = {}) {
+  if (assessmentEditorAiBusy.value) return false
+  if (assessmentEditorDialog.value && !options?.saved && !window.confirm('Hay cambios en el editor de la matriz sin aplicar. ¿Quieres salir y descartarlos?')) return false
   if (!options?.saved && !(await saveDraft())) return false
   resetWorkflow()
   mode.value = 'library'
@@ -3097,6 +3135,7 @@ async function assessmentModelsForDocument(documentData) {
         pdfsolucioncompleto: structure.pdfsolucioncompleto || active?.pdf?.resuelto || '',
       },
       assessment: reference.snapshot?.assessment || reference.assessment || {},
+      metrics: reference.metrics,
       order,
     })
   })).then((models) => models.filter(Boolean))
@@ -3304,6 +3343,7 @@ function setOptionalRequiredCount(value) {
 }
 
 function previousStep() {
+  if (assessmentEditorAiBusy.value) return
   if (currentStep.value > 1) currentStep.value -= 1
 }
 
@@ -3319,6 +3359,7 @@ async function nextStep() {
 }
 
 async function goToVisitedStep(step) {
+  if (assessmentEditorAiBusy.value) return
   if (step > maxVisitedStep.value || step === currentStep.value) return
   currentStep.value = step
   if (step === lastStep.value) {
@@ -3789,7 +3830,12 @@ function documentAssessmentItem(documentId) {
 }
 
 async function saveDocument() {
-  if (currentStep.value !== lastStep.value || isSaving.value) return
+  if (currentStep.value !== lastStep.value || isSaving.value || assessmentEditorAiBusy.value) return
+  if (assessmentEditorDialog.value) {
+    showAppErrorToast('Aplica o cancela los cambios de la matriz antes de guardar el documento.')
+    selectAssessmentPreview()
+    return
+  }
   const pendingHeader = Object.keys(recycledHeadersToReview).find((key) => finalCodes[key] === recycledHeadersToReview[key])
   if (pendingHeader) {
     showAppErrorToast('Revisa y actualiza la cabecera del documento en el editor de código antes de guardar la copia.')
@@ -4180,6 +4226,7 @@ defineExpose({
               <v-icon icon="mdi-table-check" size="18" />
               <span>Matriz de evaluación</span>
             </button>
+            <span class="document-preview-actions"><v-btn icon="mdi-pencil-outline" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Editar matriz de evaluación" title="Editar matriz de evaluación" :loading="assessmentEditorLoading" @click.stop="openAssessmentEditor" /></span>
           </div>
         </aside>
         <div class="document-preview-render">
@@ -4701,14 +4748,6 @@ defineExpose({
 
         <div v-else-if="currentStep === 3" class="document-preview-step">
           <div class="document-preview-display-toolbar">
-            <v-btn
-              v-if="documentAssessment.evaluable"
-              prepend-icon="mdi-link-variant"
-              size="small"
-              rounded="pill"
-              variant="text"
-              @click="openAssessmentAlignment"
-            >Vinculación curricular</v-btn>
             <v-spacer />
             <v-btn
               prepend-icon="mdi-refresh"
@@ -4784,16 +4823,31 @@ defineExpose({
                   <v-icon icon="mdi-table-check" size="18" />
                   <span>Matriz de evaluación</span>
                 </button>
+                <span class="document-preview-actions"><v-btn icon="mdi-pencil-outline" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Editar matriz de evaluación" title="Editar matriz de evaluación" :loading="assessmentEditorLoading" @click.stop="openAssessmentEditor" /></span>
               </div>
             </aside>
             <div class="document-preview-render">
+              <DocumentAssessmentEditor
+                v-if="assessmentEditorDialog"
+                v-show="isAssessmentPreviewSelected"
+                :sections="assessmentEditorSections"
+                :subject-id="documentCurriculum.subjectId || selectedGroupOption?.subjectId || ''"
+                :course="documentCurriculum.course || selectedGroupOption?.course || ''"
+                :model="documentAiModel"
+                :models="aiModelOptions"
+                @update:model="documentAiModel = $event"
+                @update:sections="assessmentEditorSections = $event"
+                @busy-change="assessmentEditorAiBusy = $event; emit('busy-change', $event)"
+                @apply="applyAssessmentEdits"
+                @cancel="assessmentEditorDialog = false"
+              />
               <DocumentAssessmentMatrix
-                v-if="isAssessmentPreviewSelected"
+                v-if="isAssessmentPreviewSelected && !assessmentEditorDialog"
                 :exercises="assessmentPreviewExercises"
                 subtitle="Resoluciones segmentadas y logros del documento"
                 :badge="documentAssessment.shortName"
               />
-              <DocumentPdfPreview v-else :src="previewUrl" />
+              <DocumentPdfPreview v-else-if="!isAssessmentPreviewSelected" :src="previewUrl" />
             </div>
           </div>
         </div>
@@ -4847,19 +4901,6 @@ defineExpose({
           <template #tools><ExerciseStatusFilters v-model:completeness="exerciseCompleteness" v-model:publication="exercisePublication" v-model:solution="exerciseSolution" /></template>
         </ExerciseCurriculumPicker>
       </v-card-text>
-    </v-card>
-  </v-dialog>
-  <v-dialog v-model="assessmentAlignmentDialog" max-width="1280" width="calc(100% - 28px)">
-    <v-card>
-      <v-card-title class="d-flex align-center"><v-icon icon="mdi-link-variant" class="mr-2" />Vinculación curricular del documento<v-spacer /><v-btn icon="mdi-close" rounded="circle" variant="text" aria-label="Cerrar" @click="assessmentAlignmentDialog = false" /></v-card-title>
-      <v-divider />
-      <DocumentAssessmentAlignmentEditor
-        :exercises="assessmentPreviewExercises"
-        :subject-id="documentCurriculum.subjectId || selectedGroupOption?.subjectId || ''"
-        @update-alignment="updateDocumentAchievementAlignment"
-      />
-      <v-divider />
-      <v-card-actions><v-spacer /><v-btn color="primary" variant="flat" @click="assessmentAlignmentDialog = false">Listo</v-btn></v-card-actions>
     </v-card>
   </v-dialog>
   <v-dialog v-model="documentDeleteDialog" max-width="430" persistent>

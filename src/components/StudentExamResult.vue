@@ -26,7 +26,7 @@ const exercises = computed(() => (matrix.value?.exercises || []).map((entry) => 
   const structure = Number(source.schemaVersion) >= 3 && source.statement
     ? aggregateExerciseStructure(exerciseStructureFromDocument(source))
     : mergeExerciseStructure(parseExerciseLatex(source.codigo || ''), source.structure || source)
-  return assessmentExerciseModel({ exerciseId: entry.exerciseId, version: entry.version, order: entry.order, structure, assessment: entry.assessment })
+  return assessmentExerciseModel({ exerciseId: entry.exerciseId, version: entry.version, order: entry.order, structure, assessment: entry.assessment, metrics: entry.metrics })
 }))
 const hasMatrix = computed(() => exercises.value.some((exercise) => exercise.achievements.length > 0))
 function clearPdf() { if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value); pdfUrl.value = '' }
