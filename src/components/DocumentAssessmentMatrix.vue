@@ -12,9 +12,15 @@ const props = defineProps({
   title: { type: String, default: 'Matriz de evaluación' },
   subtitle: { type: String, default: '' },
   badge: { type: String, default: '' },
+  feedback: { type: Object, default: () => ({}) },
+  feedbackEditable: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['toggle-achievement'])
+const emit = defineEmits(['toggle-achievement', 'update-feedback'])
+
+function sectionFeedback(key) {
+  return (props.feedback?.sections || []).find((entry) => entry.key === key)?.text || ''
+}
 
 const strengthLabel = Object.freeze({ weak: 'Evidencia débil', medium: 'Evidencia media', strong: 'Evidencia fuerte' })
 const subjectLaws = Object.values(lomloeMathLaw.subjects || {})
@@ -99,11 +105,14 @@ function achievementAlignment(achievement) {
       <strong>Resolución</strong><strong>Logros</strong>
     </div>
     <div class="assessment-matrix-scroll">
+      <div v-if="feedbackEditable" class="assessment-matrix-general-feedback">
+        <v-textarea :model-value="feedback?.general || ''" label="Comentario general del examen" placeholder="Escribe aquí tus observaciones para el alumno" variant="outlined" density="compact" rows="2" auto-grow maxlength="4000" hide-details @update:model-value="value => emit('update-feedback', { text: value })" />
+      </div>
       <article v-for="exercise in exercises" :key="exercise.key || `${exercise.exerciseId}:${exercise.version}`" class="assessment-matrix-exercise">
         <header>{{ exercise.label }}</header>
-        <div v-for="row in exercise.rows" :key="row.key" class="assessment-matrix-grid assessment-matrix-row">
+        <div v-for="(row, rowIndex) in exercise.rows" :key="row.key" class="assessment-matrix-grid assessment-matrix-row">
           <section class="assessment-matrix-pdf">
-            <small class="assessment-matrix-row-label">{{ row.label }}</small>
+            <small class="assessment-matrix-row-label"><span>{{ exercise.label }}</span><span aria-hidden="true">|</span><span>{{ row.label }}</span></small>
             <ExercisePdfPreview v-if="row.pdf" :src="row.pdf" :title="`${exercise.label}, ${row.label}`" thumbnail />
             <span v-else class="assessment-matrix-empty">Sin PDF disponible</span>
           </section>
@@ -177,6 +186,7 @@ function achievementAlignment(achievement) {
                 </div>
               </template>
               <span v-if="!row.achievements.length" class="assessment-matrix-empty">No hay logros definidos.</span>
+              <v-textarea v-if="feedbackEditable" :model-value="sectionFeedback(row.feedbackKey)" :label="`Comentario · ${exercise.label} | ${row.label}`" placeholder="Observaciones para el alumno" variant="outlined" density="compact" rows="1" auto-grow maxlength="4000" hide-details class="assessment-matrix-feedback" @update:model-value="value => emit('update-feedback', { key: row.feedbackKey, exerciseLabel: exercise.label, sectionLabel: row.label, exerciseOrder: exercise.order, sectionOrder: rowIndex, text: value })" />
             </template>
           </section>
         </div>
@@ -199,6 +209,8 @@ function achievementAlignment(achievement) {
 .assessment-matrix-columns > strong { padding: 8px 12px; border-left: 1px solid #d3deeb; font-size: .66rem; letter-spacing: .045em; text-align: center; text-transform: uppercase; }
 .assessment-matrix-columns > strong:first-child { border-left: 0; }
 .assessment-matrix-scroll { min-height: 0; overflow: auto; }
+.assessment-matrix-general-feedback { min-width: 720px; padding: 12px; background: #fff; border-bottom: 5px solid #dce5ef; }
+.assessment-matrix-feedback { margin-top: 4px; }
 .assessment-matrix-exercise { min-width: 720px; border-bottom: 5px solid #dce5ef; background: #fff; }
 .assessment-matrix-exercise > header { position: sticky; z-index: 1; top: 0; padding: 6px 12px; border-bottom: 1px solid #dce5ef; background: #f8fafc; color: #385d86; font-size: .69rem; font-weight: 800; }
 .assessment-matrix-row { border-bottom: 1px solid #dce5ef; }
@@ -206,7 +218,8 @@ function achievementAlignment(achievement) {
 .assessment-matrix-row > section { min-width: 0; padding: 8px; border-left: 1px solid #dce5ef; }
 .assessment-matrix-row > section:first-child { border-left: 0; }
 .assessment-matrix-pdf { display: grid; align-content: start; gap: 6px; background: #eef2f7; }
-.assessment-matrix-row-label { color: #607c9b; font-size: .57rem; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
+.assessment-matrix-row-label { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; color: #607c9b; font-size: .57rem; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
+.assessment-matrix-row-label > span:first-child { font-weight: 400; }
 .assessment-matrix-pdf :deep(.exercise-pdf-preview) { min-height: 110px; border-radius: 5px; background: #fff; }
 .assessment-matrix-achievements { display: grid; align-content: start; gap: 6px; background: #fff; }
 .assessment-matrix-achievements:not(.blank) { padding-top: calc(8px + .7rem + 6px); }

@@ -33,6 +33,7 @@ import { codeForCompiler as variationCompilerCode } from '../../functions/exerci
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import { syncDocumentAssessment } from '../services/documentAssessmentRepository'
 import { assessmentExerciseModel } from '../utils/documentAssessmentMatrix'
+import { documentAssessmentLabels } from '../../functions/documentAssessmentLabels'
 import { normalizedAssessmentSections, isValidAssessmentSection } from '../utils/documentAssessmentEditor'
 import {
   DOCUMENT_CONTENT_SOURCE_TYPES,
@@ -2092,8 +2093,9 @@ function queueExercisePdf(item) {
   return activeVersion(exercise, item.version)?.pdf?.enunciado || ''
 }
 
-const assessmentPreviewExercises = computed(() => selectedExercises.value
-  .map((item, index) => {
+const assessmentPreviewExercises = computed(() => {
+  const labels = documentAssessmentLabels({ plantillas: selectedTemplates.value, content: documentContent.value }, selectedExercises.value)
+  return selectedExercises.value.map((item, index) => {
     const exercise = exerciseForQueue(item)
     const active = activeVersion(exercise, item.version)
     const structure = versionStructure(exercise, item.version)
@@ -2109,8 +2111,10 @@ const assessmentPreviewExercises = computed(() => selectedExercises.value
       assessment: item.snapshot?.assessment || {},
       metrics: item.metrics,
       order: index,
+      ...labels[index],
     })
-  }))
+  })
+})
 
 function emptyAchievementFromCriterion(criterion) {
   return {
@@ -3122,6 +3126,7 @@ async function assessmentModelsForDocument(documentData) {
   const references = (Array.isArray(documentData?.ejercicios) ? documentData.ejercicios : [])
     .slice()
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
+  const labels = documentAssessmentLabels(documentData, references)
   return Promise.all(references.map(async (reference, order) => {
     let exercise = reference.snapshot || props.exercises.find((candidate) => candidate.id === reference.exerciseId)
     if (!exercise) {
@@ -3134,6 +3139,7 @@ async function assessmentModelsForDocument(documentData) {
     const structure = versionStructure(exercise, version)
     return assessmentExerciseModel({
       exerciseId: reference.exerciseId,
+      sourceBlockId: reference.blockId || '',
       version,
       structure: {
         ...structure,
@@ -3143,6 +3149,7 @@ async function assessmentModelsForDocument(documentData) {
       assessment: reference.snapshot?.assessment || reference.assessment || {},
       metrics: reference.metrics,
       order,
+      ...labels[order],
     })
   })).then((models) => models.filter(Boolean))
 }

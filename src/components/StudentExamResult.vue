@@ -13,6 +13,8 @@ const props = defineProps({ groupId: { type: String, required: true }, itemId: {
 const emit = defineEmits(['toggle'])
 const pdfUrl = ref('')
 const matrix = ref(null)
+const feedback = ref(null)
+const manualScore = ref(false)
 const loading = ref(false)
 const unavailable = ref(false)
 const loadError = ref(false)
@@ -26,13 +28,15 @@ const exercises = computed(() => (matrix.value?.exercises || []).map((entry) => 
   const structure = Number(source.schemaVersion) >= 3 && source.statement
     ? aggregateExerciseStructure(exerciseStructureFromDocument(source))
     : mergeExerciseStructure(parseExerciseLatex(source.codigo || ''), source.structure || source)
-  return assessmentExerciseModel({ exerciseId: entry.exerciseId, version: entry.version, order: entry.order, structure, assessment: entry.assessment, metrics: entry.metrics })
+  return assessmentExerciseModel({ exerciseId: entry.exerciseId, sourceBlockId: entry.sourceBlockId, version: entry.version, order: entry.order, structure, assessment: entry.assessment, metrics: entry.metrics, label: entry.label, selectivityQuestionThree: entry.selectivityQuestionThree })
 }))
 const hasMatrix = computed(() => exercises.value.some((exercise) => exercise.achievements.length > 0))
+const hasFeedback = computed(() => Boolean(feedback.value?.general || feedback.value?.sections?.length))
+const feedbackFor = (key) => (feedback.value?.sections || []).find((entry) => entry.key === key)?.text || ''
 function clearPdf() { if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value); pdfUrl.value = '' }
 async function load() {
   const request = ++requestSequence
-  clearPdf(); matrix.value = null; unavailable.value = false; loadError.value = false; loading.value = true
+  clearPdf(); matrix.value = null; feedback.value = null; manualScore.value = false; unavailable.value = false; loadError.value = false; loading.value = true
   try {
     const response = (await httpsCallable(functions, 'getStudentExam', { timeout: 130000 })({ groupId: props.groupId, itemId: props.itemId })).data
     if (request !== requestSequence) return
@@ -41,12 +45,14 @@ async function load() {
       pdfUrl.value = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
     }
     matrix.value = response.matrix
-    unavailable.value = !pdfUrl.value && !matrix.value
+    feedback.value = response.feedback || null
+    manualScore.value = response.manualScore === true
+    unavailable.value = !pdfUrl.value && !matrix.value && !hasFeedback.value
   } catch { if (request === requestSequence) { unavailable.value = true; loadError.value = true } }
   finally { if (request === requestSequence) loading.value = false }
 }
 watch(() => [props.groupId, props.itemId, props.result], () => { if (props.expanded) void load() }, { deep: true })
-watch(() => props.expanded, (open) => { if (open) void load(); else { requestSequence += 1; clearPdf(); matrix.value = null; matrixOpen.value = false } }, { immediate: true })
+watch(() => props.expanded, (open) => { if (open) void load(); else { requestSequence += 1; clearPdf(); matrix.value = null; feedback.value = null; matrixOpen.value = false } }, { immediate: true })
 onBeforeUnmount(() => { requestSequence += 1; clearPdf() })
 </script>
 
@@ -57,17 +63,25 @@ onBeforeUnmount(() => { requestSequence += 1; clearPdf() })
     </button>
     <template v-if="expanded">
         <v-layout class="student-exam-layout">
-          <v-navigation-drawer v-if="matrix && hasMatrix" v-model="matrixOpen" location="right" temporary absolute :scrim="false" :width="drawerWidth" disable-resize-watcher aria-label="Matriz de evaluación" class="student-exam-drawer">
-            <div class="student-exam-drawer-content"><header><h2>Matriz de evaluación</h2><v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar matriz de evaluación" @click="matrixOpen = false" /></header><div class="student-exam-matrix"><article v-for="exercise in exercises" :key="exercise.key"><h3>{{ exercise.label }}</h3><section v-for="row in exercise.rows.filter(item => item.achievements.length)" :key="row.key"><h4>{{ row.label }}</h4><div v-for="achievement in row.achievements" :key="achievement.key" class="student-exam-achievement" :class="{ achieved: selected.has(achievement.key) }"><v-icon :icon="selected.has(achievement.key) ? 'mdi-check-circle' : 'mdi-circle-outline'" size="18" :aria-label="selected.has(achievement.key) ? 'Conseguido' : 'No conseguido'" /><MathText :text="achievement.description" /><strong>{{ achievement.points }} pt</strong></div></section></article></div></div>
+          <v-navigation-drawer v-if="!manualScore && ((matrix && hasMatrix) || hasFeedback)" v-model="matrixOpen" location="right" temporary absolute :scrim="false" :width="drawerWidth" disable-resize-watcher aria-label="Corrección y comentarios" class="student-exam-drawer">
+            <div class="student-exam-drawer-content"><header><h2>{{ matrix && hasMatrix ? 'Matriz y comentarios' : 'Comentarios del profesor' }}</h2><v-btn icon="mdi-close" variant="text" size="small" aria-label="Cerrar corrección" @click="matrixOpen = false" /></header><div class="student-exam-matrix">
+              <section v-if="feedback?.general" class="student-exam-feedback"><h4>Comentario general</h4><MathText :text="feedback.general" /></section>
+              <template v-if="matrix && hasMatrix"><article v-for="exercise in exercises" :key="exercise.key"><h3>{{ exercise.label }}</h3><section v-for="row in exercise.rows.filter(item => item.achievements.length || feedbackFor(item.feedbackKey))" :key="row.key"><h4 class="student-exam-section-label"><span>{{ exercise.label }}</span><span aria-hidden="true">|</span><span>{{ row.label }}</span></h4><div v-for="achievement in row.achievements" :key="achievement.key" class="student-exam-achievement" :class="{ achieved: selected.has(achievement.key) }"><v-icon :icon="selected.has(achievement.key) ? 'mdi-check-circle' : 'mdi-circle-outline'" size="18" :aria-label="selected.has(achievement.key) ? 'Conseguido' : 'No conseguido'" /><MathText :text="achievement.description" /><strong>{{ achievement.points }} pt</strong></div><div v-if="feedbackFor(row.feedbackKey)" class="student-exam-feedback"><MathText :text="feedbackFor(row.feedbackKey)" /></div></section></article></template>
+              <template v-else><section v-for="entry in feedback?.sections || []" :key="entry.key" class="student-exam-feedback"><h4 class="student-exam-section-label"><span>{{ entry.exerciseLabel }}</span><span aria-hidden="true">|</span><span>{{ entry.sectionLabel }}</span></h4><MathText :text="entry.text" /></section></template>
+            </div></div>
           </v-navigation-drawer>
-          <v-main class="student-exam-main"><DocumentPdfPreview v-if="pdfUrl" :src="pdfUrl" :title="title" interactive-zoom class="student-exam-pdf" /><p v-else class="student-exam-empty">{{ loading ? 'Cargando…' : loadError ? 'No se ha podido cargar el resultado.' : 'El PDF no está disponible.' }} <v-btn v-if="loadError" size="small" variant="text" @click="load">Reintentar</v-btn></p></v-main>
+          <v-main class="student-exam-main"><DocumentPdfPreview v-if="pdfUrl" :src="pdfUrl" :title="title" interactive-zoom class="student-exam-pdf" /><div v-else-if="manualScore" class="student-exam-manual-feedback"><p>Nota introducida manualmente.</p><section v-if="feedback?.general" class="student-exam-feedback"><h4>Comentario general</h4><MathText :text="feedback.general" /></section><section v-for="entry in feedback?.sections || []" :key="entry.key" class="student-exam-feedback"><h4 class="student-exam-section-label"><span>{{ entry.exerciseLabel }}</span><span aria-hidden="true">|</span><span>{{ entry.sectionLabel }}</span></h4><MathText :text="entry.text" /></section><p v-if="!hasFeedback">Sin comentarios.</p></div><p v-else class="student-exam-empty">{{ loading ? 'Cargando…' : loadError ? 'No se ha podido cargar el resultado.' : 'El PDF no está disponible.' }} <v-btn v-if="loadError" size="small" variant="text" @click="load">Reintentar</v-btn></p></v-main>
         </v-layout>
-        <div class="student-exam-actions"><v-btn v-if="matrix && hasMatrix" icon="mdi-format-list-checks" size="small" variant="text" :color="matrixOpen ? 'primary' : undefined" :aria-label="matrixOpen ? 'Cerrar matriz de evaluación' : 'Abrir matriz de evaluación'" :aria-pressed="matrixOpen" title="Matriz de evaluación" @click="matrixOpen = !matrixOpen" /><v-btn icon="mdi-close" size="small" variant="text" aria-label="Cerrar resultado" title="Cerrar resultado" @click="emit('toggle')" /></div>
+        <div class="student-exam-actions"><v-btn v-if="!manualScore && ((matrix && hasMatrix) || hasFeedback)" icon="mdi-format-list-checks" size="small" variant="text" :color="matrixOpen ? 'primary' : undefined" :aria-label="matrixOpen ? 'Cerrar corrección y comentarios' : 'Abrir corrección y comentarios'" :aria-pressed="matrixOpen" title="Corrección y comentarios" @click="matrixOpen = !matrixOpen" /><v-btn icon="mdi-close" size="small" variant="text" aria-label="Cerrar resultado" title="Cerrar resultado" @click="emit('toggle')" /></div>
     </template>
   </v-card>
 </template>
 
 <style scoped>
+.student-exam-feedback { margin: 8px 0; padding: 10px; border-radius: 4px; background: #eef4fb; color: #345777; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .82rem; }
+.student-exam-section-label { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; }
+.student-exam-section-label > span:first-child { font-weight: 400; }
+.student-exam-manual-feedback { height: 100%; padding: 14px; overflow: auto; color: #61758b; font-size: .85rem; }
 .student-exam-divider { border-color: #d6e0eb; opacity: 1; }
 .student-exam-date { padding: 7px 14px; background: #f7f9fc; color: #71839a; font-size: .75rem; }
 .student-exam-card { width: 100%; overflow: hidden; border: 0; border-radius: 2px !important; background: #fff; box-shadow: 0 2px 8px rgba(29, 55, 84, .1) !important; }.student-exam-open { display: grid; width: 100%; padding: 0; text-align: left; color: #315f94; }.student-exam-open:disabled { cursor: default; }.student-exam-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 14px; }.student-exam-heading-text { display: grid; gap: 2px; min-width: 0; }.student-exam-heading-text span { color: #71839a; font-size: .75rem; }.student-exam-heading-text strong { overflow-wrap: anywhere; font-size: .86rem; }.student-exam-grade { flex: 0 0 auto; font-size: 1.5rem; line-height: 1.2; }.student-exam-thumbnail { width: 100%; height: 130px; overflow: hidden; background: #eef2f7; }.student-exam-thumbnail > span { display: grid; height: 100%; padding: 5px; place-items: center; color: #71839a; font-size: .75rem; text-align: center; }.student-exam-dialog { height: 100%; display: flex; flex-direction: column; }.student-exam-dialog-title { display: flex; align-items: center; gap: 8px; }.student-exam-dialog-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }.student-exam-dialog-grade { display: grid; flex: 0 0 auto; justify-items: center; color: #315f94; line-height: 1.15; }.student-exam-dialog-grade small { font-size: .6rem; color: #71839a; }.student-exam-dialog-grade strong { font-size: 1.1rem; }.student-exam-layout { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }.student-exam-main { min-width: 0; min-height: 0; height: 100%; }.student-exam-pdf { height: 100%; }.student-exam-empty { padding: 20px; }.student-exam-drawer :deep(.v-navigation-drawer__content) { overflow: hidden; }.student-exam-drawer-content { display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }.student-exam-drawer-content > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #d6e0eb; }.student-exam-drawer-content h2 { font-size: 1rem; color: #315f94; }.student-exam-matrix { min-width: 0; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 12px; }.student-exam-matrix h3 { margin-top: 12px; font-size: .9rem; }.student-exam-matrix h4 { margin: 6px 0; color: #71839a; font-size: .8rem; }.student-exam-achievement { display: flex; align-items: start; gap: 8px; margin: 5px 0; padding: 8px; border: 1px solid #d6e0eb; border-radius: 6px; }.student-exam-achievement.achieved { background: #e4f2e8; border-color: #78b98d; }.student-exam-achievement strong { margin-left: auto; white-space: nowrap; }

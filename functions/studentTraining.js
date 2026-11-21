@@ -1,7 +1,8 @@
 import { HttpsError } from 'firebase-functions/v2/https'
 import { createHash } from 'node:crypto'
 import { conceptProgress, pdfStoragePath, selectTrainingCandidate, terminalConceptsForSelection, trainingReadiness, trainingSegments, trainingVersionPublished } from './studentTrainingLogic.js'
-import { examPdfCandidates, examResultItem, safeExamAssessment, safeExamExercise } from './studentExam.js'
+import { examPdfCandidates, examResultItem, safeExamAssessment, safeExamExercise, safeExamFeedback } from './studentExam.js'
+import { documentAssessmentLabels } from './documentAssessmentLabels.js'
 
 const validId = (value) => typeof value === 'string' && value.length > 0 && value.length <= 500 && value !== '.' && value !== '..' && !value.includes('/')
 const unique = (values) => [...new Set(Array.isArray(values) ? values.filter(validId) : [])]
@@ -464,15 +465,17 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     const snapshot = await db.doc(`documentos/${documentId}`).get()
     if (!snapshot.exists) return { pdf: null, matrix: null }
     const document = snapshot.data() || {}
+    const result = results[itemId]
+    const manualScore = Number.isFinite(result?.manualTotal)
     let pdf = null
-    for (const candidate of examPdfCandidates(document, documentId, bucket.name)) {
+    for (const candidate of examPdfCandidates(document, documentId, bucket.name, { manualScore })) {
       try {
         const [bytes] = await bucket.file(candidate.path).download()
         if (bytes.length <= 7_000_000) { pdf = { data: bytes.toString('base64'), kind: candidate.solved ? 'solved' : 'statement' }; break }
       } catch (error) { if (Number(error?.code) !== 404) throw error }
     }
-    const result = results[itemId]
-    if (!result || typeof result !== 'object' || Number.isFinite(result.manualTotal) || !Array.isArray(result.selectedAchievementIds)) return { pdf, matrix: null }
+    const feedback = safeExamFeedback(result?.feedback)
+    if (!result || typeof result !== 'object' || manualScore || !Array.isArray(result.selectedAchievementIds)) return { pdf, matrix: null, feedback, manualScore }
     const stored = (Array.isArray(document.ejercicios) ? document.ejercicios : []).map((reference, order) => ({ ...reference, order: reference.order ?? order }))
     const requested = item.documentAssessment.exercises?.length ? item.documentAssessment.exercises : stored
     const references = requested.map((reference, order) => {
@@ -482,15 +485,16 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
         || stored.find((candidate) => candidate.exerciseId === reference.exerciseId && (Number(candidate.version) || 0) === version)
       return { ...embedded, ...reference, order: reference.order ?? embedded?.order ?? order, snapshot: reference.snapshot || embedded?.snapshot || null, metrics: embedded?.metrics ?? reference.metrics ?? null }
     }).sort((a, b) => a.order - b.order)
+    const labels = documentAssessmentLabels(document, references)
     const exercises = (await Promise.all(references.map(async (reference, order) => {
       if (!validId(reference.exerciseId)) return null
       let source = reference.snapshot
       if (!source) { const exercise = await db.doc(`ejercicios/${reference.exerciseId}`).get(); if (!exercise.exists) return null; source = exercise.data() }
       const version = Number(reference.version) || 0
       const active = version ? source.variaciones?.[version - 1] || source : source
-      return { exerciseId: reference.exerciseId, version, order, source: safeExamExercise(active), assessment: safeExamAssessment(reference.snapshot?.assessment || reference.assessment || {}), metrics: reference.metrics }
+      return { exerciseId: reference.exerciseId, sourceBlockId: reference.blockId || '', version, order, ...labels[order], source: safeExamExercise(active), assessment: safeExamAssessment(reference.snapshot?.assessment || reference.assessment || {}), metrics: reference.metrics }
     }))).filter(Boolean)
-    return { pdf, matrix: exercises.length ? { exercises, selectedAchievementIds: result.selectedAchievementIds.filter((id) => typeof id === 'string') } : null }
+    return { pdf, feedback, matrix: exercises.length ? { exercises, selectedAchievementIds: result.selectedAchievementIds.filter((id) => typeof id === 'string') } : null }
   }
   async function readiness(request) {
     const groupId = request.data?.groupId

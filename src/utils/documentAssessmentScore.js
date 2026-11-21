@@ -12,6 +12,18 @@ export function newDocumentAssessment(previous) {
   return result
 }
 
+export function setDocumentFeedback(result, update) {
+  const previous = result.feedback || {}
+  const feedback = { general: previous.general || '', sections: Array.isArray(previous.sections) ? [...previous.sections] : [] }
+  const text = String(update.text || '').slice(0, 4000)
+  if (!update.key) feedback.general = text
+  else {
+    feedback.sections = feedback.sections.filter((entry) => entry.key !== update.key)
+    if (text) feedback.sections.push({ key: update.key, exerciseLabel: update.exerciseLabel, sectionLabel: update.sectionLabel, exerciseOrder: update.exerciseOrder, sectionOrder: update.sectionOrder, text })
+  }
+  result.feedback = feedback
+}
+
 export function toggleDocumentAchievement(result, achievement, exercises) {
   const selected = new Set(result.selectedAchievementIds || [])
   if (selected.has(achievement.key)) selected.delete(achievement.key)

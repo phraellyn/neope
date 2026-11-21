@@ -1,4 +1,5 @@
-export function examPdfCandidates(document, documentId, bucketName) {
+export function examPdfCandidates(document, documentId, bucketName, { manualScore = false } = {}) {
+  if (manualScore) return []
   const templates = Array.isArray(document.plantillas) && document.plantillas.length ? document.plantillas : [document.plantilla || {}]
   const pdfs = Array.isArray(document.pdfs) && document.pdfs.length ? document.pdfs : (document.pdf ? [document.pdf] : [])
   return pdfs.map((entry, index) => {
@@ -38,4 +39,16 @@ export function safeExamExercise(source = {}) {
 
 export function safeExamAssessment(value = {}) {
   return { segments: Object.fromEntries(Object.entries(value.segments || {}).map(([key, entries]) => [key, criteria(entries)])) }
+}
+
+export function safeExamFeedback(value = {}) {
+  const clean = (input, limit) => typeof input === 'string' ? input.trim().slice(0, limit) : ''
+  return {
+    general: clean(value?.general, 4000),
+    sections: (Array.isArray(value?.sections) ? value.sections : []).slice(0, 200).map((entry) => ({
+      key: clean(entry?.key, 1000), exerciseLabel: clean(entry?.exerciseLabel, 100), sectionLabel: clean(entry?.sectionLabel, 100), text: clean(entry?.text, 4000),
+      exerciseOrder: Number.isFinite(entry?.exerciseOrder) ? entry.exerciseOrder : 0,
+      sectionOrder: Number.isFinite(entry?.sectionOrder) ? entry.sectionOrder : 0,
+    })).filter((entry) => entry.key && entry.text).sort((a, b) => a.exerciseOrder - b.exerciseOrder || a.sectionOrder - b.sectionOrder),
+  }
 }

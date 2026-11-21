@@ -1,6 +1,6 @@
 <script setup>
 import DocumentScoreEditor from './DocumentScoreEditor.vue'
-import { newDocumentAssessment, resetDocumentScore, setManualDocumentScore, toggleDocumentAchievement } from '../utils/documentAssessmentScore'
+import { newDocumentAssessment, resetDocumentScore, setManualDocumentScore, toggleDocumentAchievement, setDocumentFeedback } from '../utils/documentAssessmentScore'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../services/firebase'
@@ -920,6 +920,13 @@ function chooseDocumentAchievement(achievement) {
   markDocumentAssessmentChanged(result)
 }
 
+function updateDocumentFeedback(update) {
+  const result = activeDocumentAssessmentResult.value
+  if (!result) return
+  setDocumentFeedback(result, update)
+  markDocumentAssessmentChanged(result)
+}
+
 function markDocumentAssessmentChanged(result) {
   result.updatedAt = new Date().toISOString()
   result.evaluatedAt = result.updatedAt
@@ -1790,9 +1797,12 @@ defineExpose({
           <DocumentAssessmentMatrix
             :exercises="documentAssessmentExercises"
             :selected-achievement-ids="activeDocumentAchievementIds"
+            :feedback="activeDocumentAssessmentResult?.feedback || {}"
             :title="''"
             selectable
+            feedback-editable
             @toggle-achievement="chooseDocumentAchievement"
+            @update-feedback="updateDocumentFeedback"
           />
         </v-card-text>
         <v-divider />

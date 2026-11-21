@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict'
-import { examPdfCandidates, examResultItem, safeExamAssessment, safeExamExercise } from '../functions/studentExam.js'
+import { examPdfCandidates, examResultItem, safeExamAssessment, safeExamExercise, safeExamFeedback } from '../functions/studentExam.js'
 import { aggregateExerciseStructure, exerciseStructureFromDocument } from '../src/utils/exerciseStructure.js'
 import { assessmentExerciseModel } from '../src/utils/documentAssessmentMatrix.js'
 
 const doc = { plantillas: [{ key: 'statement', nombre: 'Examen - Enunciado' }, { key: 'solved', nombre: 'Examen - Resuelto' }], pdfs: [{ templateKey: 'statement', path: 'documentos/doc/statement.pdf' }, { templateKey: 'solved', path: 'documentos/doc/solved.pdf' }] }
 assert.deepEqual(examPdfCandidates(doc, 'doc', 'bucket').map((item) => item.path), ['documentos/doc/solved.pdf', 'documentos/doc/statement.pdf'])
+assert.deepEqual(examPdfCandidates(doc, 'doc', 'bucket', { manualScore: true }), [])
+assert.deepEqual(safeExamFeedback({ general: ' Bien ', secret: 'private', sections: [
+  { key: 'b', text: 'Segundo', exerciseOrder: 1, sectionOrder: 0, secret: 'private' },
+  { key: 'a', text: 'Primero', exerciseOrder: 0, sectionOrder: 0 },
+] }), { general: 'Bien', sections: [
+  { key: 'a', exerciseLabel: '', sectionLabel: '', text: 'Primero', exerciseOrder: 0, sectionOrder: 0 },
+  { key: 'b', exerciseLabel: '', sectionLabel: '', text: 'Segundo', exerciseOrder: 1, sectionOrder: 0 },
+] })
 assert.deepEqual(examPdfCandidates({ pdf: { path: 'documentos/other/file.pdf' } }, 'doc', 'bucket'), [])
 const group = { evaluation: { structure: [{ type: 'group', children: [{ type: 'item', id: 'exam', documentAssessment: { documentId: 'doc' } }] }] } }
 assert.equal(examResultItem(group, 'exam').documentAssessment.documentId, 'doc')

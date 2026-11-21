@@ -47,9 +47,10 @@ function documentPoints(achievements, metric) {
   return achievements.map((item, index) => ({ ...item, points: rounded[index] / 4 }))
 }
 
-export function assessmentExerciseModel({ exerciseId, sourceBlockId = '', version = 0, structure = {}, assessment = {}, metrics = null, order = 0 }) {
+export function assessmentExerciseModel({ exerciseId, sourceBlockId = '', version = 0, structure = {}, assessment = {}, metrics = null, order = 0, label: exerciseLabel = '', selectivityQuestionThree = false }) {
   const parts = Array.isArray(structure.apartados) ? structure.apartados : []
-  const label = `Ejercicio ${order + 1}`
+  const label = exerciseLabel || `Ejercicio ${order + 1}`
+  const feedbackKey = (section) => JSON.stringify([sourceBlockId || `${exerciseId}:${version}:${order}`, section])
 
   if (!parts.length) {
     const achievements = achievementRows(
@@ -68,6 +69,7 @@ export function assessmentExerciseModel({ exerciseId, sourceBlockId = '', versio
       label,
       rows: [{
         key: 'general',
+        feedbackKey: feedbackKey('general'),
         kind: 'exercise',
         label: 'Ejercicio resuelto',
         pdf: text(structure.pdfsolucioncompleto || structure.pdfsolucion),
@@ -79,9 +81,10 @@ export function assessmentExerciseModel({ exerciseId, sourceBlockId = '', versio
 
   const partRows = parts.map((part, index) => {
     const partKey = part.id || `part-${index}`
-    const partLabel = `Apartado ${String.fromCharCode(97 + index)}`
+    const partLabel = `Apartado ${selectivityQuestionThree && parts.length === 3 ? ['a', 'b1', 'b2'][index] : String.fromCharCode(97 + index)}`
     return {
       key: partKey,
+      feedbackKey: feedbackKey(partKey),
       kind: 'part',
       label: partLabel,
       pdf: text(part.pdfsolucion),

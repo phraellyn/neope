@@ -8,15 +8,16 @@ import {
 } from '../utils/exerciseStructure'
 import { assessmentExerciseModel as createAssessmentExerciseModel } from '../utils/documentAssessmentMatrix'
 import { resolveDocumentAssessmentReferences } from '../utils/documentAssessmentReferences'
+import { documentAssessmentLabels } from '../../functions/documentAssessmentLabels'
 
 function exerciseSourceStructure(source = {}) {
   if (Number(source.schemaVersion) >= 3 && source.statement) return aggregateExerciseStructure(exerciseStructureFromDocument(source))
   return mergeExerciseStructure(parseExerciseLatex(source.codigo || source.latex || source.enunciado || ''), source.structure || source)
 }
 
-function assessmentExerciseModel(exerciseId, version, source, order, assessment = {}, metrics = null) {
+function assessmentExerciseModel(exerciseId, version, source, order, assessment = {}, metrics = null, sourceBlockId = '', labels = {}) {
   const structure = exerciseSourceStructure(source)
-  return createAssessmentExerciseModel({ exerciseId, version, structure, assessment, metrics, order })
+  return createAssessmentExerciseModel({ exerciseId, sourceBlockId, version, structure, assessment, metrics, order, ...labels })
 }
 
 export async function loadDocumentAssessmentExercises(item) {
@@ -29,10 +30,11 @@ export async function loadDocumentAssessmentExercises(item) {
     item.documentAssessment.exercises,
     documentData.ejercicios,
   )
-  return Promise.all(references
+  const ordered = references
     .slice()
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
-    .map(async (reference, order) => {
+  const labels = documentAssessmentLabels(documentData, ordered)
+  return Promise.all(ordered.map(async (reference, order) => {
       let exercise = reference.snapshot || null
       if (!exercise) {
         const snapshot = await getDoc(doc(db, 'ejercicios', reference.exerciseId))
@@ -41,7 +43,7 @@ export async function loadDocumentAssessmentExercises(item) {
       }
       const version = Number(reference.version) || 0
       const source = version === 0 ? exercise : exercise.variaciones?.[version - 1] || exercise
-      return assessmentExerciseModel(reference.exerciseId, version, source, order, reference.snapshot?.assessment || reference.assessment || {}, reference.metrics)
+      return assessmentExerciseModel(reference.exerciseId, version, source, order, reference.snapshot?.assessment || reference.assessment || {}, reference.metrics, reference.blockId || '', labels[order])
     }))
     .then((items) => items.filter(Boolean))
 }
