@@ -33,6 +33,7 @@ import { codeForCompiler as variationCompilerCode } from '../../functions/exerci
 import { showAppErrorToast } from '../composables/useAppErrorToast'
 import { syncDocumentAssessment } from '../services/documentAssessmentRepository'
 import { assessmentExerciseModel } from '../utils/documentAssessmentMatrix'
+import { normalizedAssessmentSections, isValidAssessmentSection } from '../utils/documentAssessmentEditor'
 import {
   DOCUMENT_CONTENT_SOURCE_TYPES,
   createDocumentContent,
@@ -2197,6 +2198,11 @@ function applyAssessmentEdits(sections) {
   assessmentEditorDialog.value = false
 }
 
+async function saveAssessmentEdits(sections) {
+  applyAssessmentEdits(sections)
+  await saveDocument()
+}
+
 const isAssessmentPreviewSelected = computed(() => selectedPreviewTemplateKey.value === ASSESSMENT_PREVIEW_KEY)
 
 function normalizeQueueSections() {
@@ -3832,9 +3838,14 @@ function documentAssessmentItem(documentId) {
 async function saveDocument() {
   if (currentStep.value !== lastStep.value || isSaving.value || assessmentEditorAiBusy.value) return
   if (assessmentEditorDialog.value) {
-    showAppErrorToast('Aplica o cancela los cambios de la matriz antes de guardar el documento.')
-    selectAssessmentPreview()
-    return
+    const sections = normalizedAssessmentSections(assessmentEditorSections.value)
+    if (!sections) {
+      const invalid = assessmentEditorSections.value.find((section) => !isValidAssessmentSection(section))
+      showAppErrorToast(invalid ? `Revisa los logros y puntuaciones de ${invalid.exerciseLabel}, ${invalid.label}. Deben sumar ${invalid.maximum} puntos y avanzar de 0,25 en 0,25.` : 'La matriz necesita al menos un apartado válido antes de guardar.')
+      selectAssessmentPreview()
+      return
+    }
+    applyAssessmentEdits(sections)
   }
   const pendingHeader = Object.keys(recycledHeadersToReview).find((key) => finalCodes[key] === recycledHeadersToReview[key])
   if (pendingHeader) {
@@ -4746,8 +4757,8 @@ defineExpose({
           </div>
         </div>
 
-        <div v-else-if="currentStep === 3" class="document-preview-step">
-          <div class="document-preview-display-toolbar">
+        <div v-else-if="currentStep === 3" class="document-preview-step" :class="{ 'matrix-selected': isAssessmentPreviewSelected }">
+          <div v-if="!isAssessmentPreviewSelected" class="document-preview-display-toolbar">
             <v-spacer />
             <v-btn
               prepend-icon="mdi-refresh"
@@ -4838,7 +4849,7 @@ defineExpose({
                 @update:model="documentAiModel = $event"
                 @update:sections="assessmentEditorSections = $event"
                 @busy-change="assessmentEditorAiBusy = $event; emit('busy-change', $event)"
-                @apply="applyAssessmentEdits"
+                @save="saveAssessmentEdits"
                 @cancel="assessmentEditorDialog = false"
               />
               <DocumentAssessmentMatrix
@@ -5225,6 +5236,7 @@ defineExpose({
 .document-tool-card span { color: #74879e; font-size: .6rem; line-height: 1.3; }
 
 .document-preview-step { position: relative; display: grid; width: 100%; height: 100%; min-height: 0; grid-template-rows: 43px minmax(0, 1fr); overflow: hidden; }
+.document-preview-step.matrix-selected { grid-template-rows: minmax(0, 1fr); }
 .document-preview-display-toolbar { display: flex; align-items: center; justify-content: flex-end; padding: 5px 10px; border-bottom: 1px solid #d7e1ed; background: #fff; }
 .document-preview-layout { display: grid; min-width: 0; min-height: 0; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); overflow: hidden; }
 .document-preview-selector { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 8px; padding: 12px; border-right: 1px solid #d8e2ed; background: #f4f7fb; overflow: auto; }

@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict'
 import { assessmentExerciseModel } from '../src/utils/documentAssessmentMatrix.js'
 import { resolveDocumentAssessmentReferences } from '../src/utils/documentAssessmentReferences.js'
+import { normalizedAssessmentSections } from '../src/utils/documentAssessmentEditor.js'
+
+const editedSections = [{ maximum: 1, achievements: [{ id: 'a', description: ' Primer logro ', points: '0,25' }, { id: 'b', description: 'Segundo logro', points: 0.75 }] }]
+assert.deepEqual(normalizedAssessmentSections(editedSections)[0].achievements.map(({ id, description, points }) => ({ id, description, points })), [
+  { id: 'a', description: 'Primer logro', points: 0.25 }, { id: 'b', description: 'Segundo logro', points: 0.75 },
+])
+assert.equal(normalizedAssessmentSections([{ maximum: 1, achievements: [{ description: 'Logro', points: 0.3 }] }]), null)
+assert.equal(normalizedAssessmentSections([{ maximum: 1, achievements: [{ description: 'Logro', points: 0.5 }] }]), null)
+assert.equal(normalizedAssessmentSections([]), null)
 
 const simple = assessmentExerciseModel({
   exerciseId: 'simple',

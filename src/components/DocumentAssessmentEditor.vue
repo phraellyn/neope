@@ -4,23 +4,17 @@ import { httpsCallable } from 'firebase/functions'
 import { functions } from '../services/firebase'
 import lomloeMathLaw from '../data/lomloeMathLaw.json'
 import { criterionStrength, criterionDescriptorIds } from '../utils/criterionEvidence'
+import { assessmentPoints as points, assessmentSectionTotal as total, isValidAssessmentSection as validSection, normalizedAssessmentSections } from '../utils/documentAssessmentEditor'
 
 const props = defineProps({ sections: { type: Array, required: true }, subjectId: { type: String, default: '' }, course: { type: String, default: '' }, model: { type: String, default: '' }, models: { type: Array, default: () => [] } })
-const emit = defineEmits(['apply', 'cancel', 'update:model', 'update:sections', 'busy-change'])
+const emit = defineEmits(['save', 'cancel', 'update:model', 'update:sections', 'busy-change'])
 const sections = reactive(JSON.parse(JSON.stringify(props.sections)))
-watch(sections, () => emit('update:sections', JSON.parse(JSON.stringify(sections))), { deep: true })
+watch(sections, () => emit('update:sections', JSON.parse(JSON.stringify(sections))), { deep: true, flush: 'sync' })
 const law = computed(() => lomloeMathLaw.subjects?.[props.subjectId] || {})
 const competencies = computed(() => law.value.specificCompetencies || [])
 const criteria = computed(() => [...new Map([...(law.value.evaluationCriteria || []), ...competencies.value.flatMap((competency) => (competency.criteria || []).map((criterion) => ({ ...criterion, competenceId: criterion.competenceId || competency.id })))].map((criterion) => [criterion.id, criterion])).values()])
 const descriptors = computed(() => (lomloeMathLaw.global?.operationalDescriptors || []).filter((descriptor) => !descriptor.stage || descriptor.stage === (String(law.value.stage || '').toLowerCase().includes('bach') ? 'Bachillerato' : 'ESO')))
 const criterionOptions = computed(() => criteria.value.map((criterion) => ({ value: criterion.id, title: `${criterion.code} · ${criterion.description}` })))
-const points = (value) => Number(String(value ?? '').replace(',', '.'))
-const total = (section) => section.achievements.reduce((sum, item) => sum + (Number.isFinite(points(item.points)) ? points(item.points) : 0), 0)
-const validSection = (section) => section.achievements.every((item) => {
-  const value = points(item.points)
-  return String(item.description || '').trim() && String(item.points ?? '').trim() !== ''
-    && Number.isFinite(value) && value >= 0 && Math.abs(value * 4 - Math.round(value * 4)) < 1e-8
-}) && Math.abs(total(section) - section.maximum) < 1e-8
 const valid = computed(() => sections.every(validSection))
 const aiRunning = ref(false)
 watch(aiRunning, (value) => emit('busy-change', value), { flush: 'sync' })
@@ -85,15 +79,16 @@ async function suggestMany(targets) {
   finally { aiRunning.value = false; busyKey.value = ''; aiProgress.value = '' }
 }
 function suggestAll() { return suggestMany(sections.flatMap((section) => section.achievements.map((achievement) => ({ section, achievement })))) }
-function apply() {
-  if (!valid.value || aiRunning.value) return
-  emit('apply', sections.map((section) => ({ ...section, achievements: section.achievements.map((item) => ({ ...item, description: item.description.trim(), points: points(item.points) })) })))
+function save() {
+  if (aiRunning.value) return
+  const normalized = normalizedAssessmentSections(sections)
+  if (normalized) emit('save', normalized)
 }
 </script>
 
 <template>
   <div class="matrix-editor">
-    <header class="matrix-editor-toolbar"><strong><v-icon icon="mdi-pencil-outline" size="18" /> Editar matriz de evaluación</strong><v-spacer /><v-btn icon="mdi-close" size="small" variant="text" aria-label="Cerrar editor" :disabled="aiRunning" @click="emit('cancel')" /></header>
+    <header class="matrix-editor-toolbar"><strong><v-icon icon="mdi-pencil-outline" size="18" /> Editar matriz de evaluación</strong><v-spacer /><v-btn color="primary" variant="flat" size="small" prepend-icon="mdi-content-save-outline" :disabled="!valid || !sections.length || aiRunning" @click="save">Guardar cambios</v-btn><v-btn icon="mdi-close" size="small" variant="text" aria-label="Cerrar editor" :disabled="aiRunning" @click="emit('cancel')" /></header>
     <div class="matrix-editor-body">
       <p class="matrix-editor-hint">Modifica los logros de este documento y vincúlalos a criterios de evaluación. Los puntos van de 0,25 en 0,25 y deben sumar el total del apartado. Las notas guardadas no se recalculan automáticamente.</p>
       <div class="matrix-editor-ai">
@@ -127,13 +122,12 @@ function apply() {
       </div>
       <div v-if="!sections.length" class="matrix-editor-hint">No hay ejercicios en la matriz.</div>
     </div>
-    <footer><v-btn variant="text" :disabled="aiRunning" @click="emit('cancel')">Cancelar</v-btn><v-btn color="primary" variant="flat" :disabled="!valid || !sections.length || aiRunning" @click="apply">Aplicar cambios</v-btn></footer>
   </div>
 </template>
 
 <style scoped>
 .matrix-editor { display: flex; flex-direction: column; height: 100%; min-height: 0; background: #fff; }
-.matrix-editor-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #dce4ed; color: #244b76; }
+.matrix-editor-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #dce4ed; color: #244b76; flex-shrink: 0; }
 .matrix-editor-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
 .matrix-editor-hint { color: #52677d; font-size: .84rem; margin: 0; }
 .matrix-editor-ai { display: flex; gap: 10px; align-items: center; }.matrix-editor-ai .v-select { max-width: 320px; }
@@ -144,6 +138,5 @@ function apply() {
 .matrix-editor-alignment { display: flex; align-items: center; gap: 8px; padding-right: 0; }.matrix-editor-alignment .v-select { min-width: 0; }
 .matrix-editor-evidence { display: flex; align-items: center; gap: 10px; padding: 6px 0 0; color: #315981; font-size: .76rem; }.matrix-editor-evidence > span { min-width: 40px; font-weight: 650; }
 .matrix-editor-error { margin: 4px 0 0; font-size: .75rem; }
-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 16px; border-top: 1px solid #dce4ed; }
 @media (max-width: 500px) { .matrix-editor-row { grid-template-columns: minmax(0, 1fr) 82px 36px; gap: 4px; }.matrix-editor-ai { align-items: stretch; flex-direction: column; }.matrix-editor-ai .v-select { max-width: none; } }
 </style>
