@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { conceptProgress, pdfStoragePath, selectTrainingCandidate, terminalConceptsForSelection, trainingReadiness, trainingSegments, trainingVersionPublished } from './studentTrainingLogic.js'
 import { examPdfCandidates, examResultItem, safeExamAssessment, safeExamExercise, safeExamFeedback } from './studentExam.js'
 import { documentAssessmentLabels } from './documentAssessmentLabels.js'
+import { completedInTrainingDateRange, validTrainingDateRange } from './trainingDateRange.js'
 
 const validId = (value) => typeof value === 'string' && value.length > 0 && value.length <= 500 && value !== '.' && value !== '..' && !value.includes('/')
 const unique = (values) => [...new Set(Array.isArray(values) ? values.filter(validId) : [])]
@@ -415,6 +416,8 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     const selected = data.messageId ? snapshot.docs.find((doc) => doc.id === data.messageId) : null
     const result = { messages: snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt))), entries: selected ? await conversationEntries(db, selected) : [], conversationId: selected?.id || null }
     if (data.includeTrainingCounts === true && group.data()?.subjectId) {
+      const dateRange = data.trainingDateRange || {}
+      if (!validTrainingDateRange(dateRange)) throw new HttpsError('invalid-argument', 'El intervalo de fechas no es válido.')
       const roster = await db.collection(`grupos/${data.groupId}/alumnos`).get()
       const counts = await Promise.allSettled(roster.docs.filter((student) => validId(student.id)).map(async (student) => {
         const [attempts, access] = await Promise.all([
@@ -429,7 +432,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
         } else if (code.active === true && code.authUid) {
           entered = null
         }
-        return [student.id, attempts.docs.filter((attempt) => attempt.data().status === 'completed').length, entered]
+        return [student.id, attempts.docs.filter((attempt) => completedInTrainingDateRange(attempt.data(), dateRange)).length, entered]
       }))
       const available = counts.filter((item) => item.status === 'fulfilled').map((item) => item.value)
       result.trainingCounts = Object.fromEntries(available.map(([id, count]) => [id, count]))

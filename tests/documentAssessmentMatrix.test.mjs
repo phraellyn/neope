@@ -4,6 +4,7 @@ import { resolveDocumentAssessmentReferences } from '../src/utils/documentAssess
 import { normalizedAssessmentSections } from '../src/utils/documentAssessmentEditor.js'
 import { documentAssessmentLabels } from '../functions/documentAssessmentLabels.js'
 import { setDocumentFeedback } from '../src/utils/documentAssessmentScore.js'
+import { documentAssessmentNavigation } from '../src/utils/documentAssessmentNavigation.js'
 
 const corrected = { total: 7.5, manualTotal: 7.5, selectedAchievementIds: ['one'] }
 setDocumentFeedback(corrected, { text: 'Cuida la notación' })
@@ -26,6 +27,8 @@ const selectionLabels = documentAssessmentLabels({ plantillas: [{ archivo: 'sele
 assert.deepEqual(selectionLabels.map((item) => item.label), ['Pregunta 1', 'Pregunta 2', 'Pregunta 3', 'Pregunta 4.1', 'Pregunta 4.2', 'Pregunta 5.1', 'Pregunta 5.2'])
 const third = assessmentExerciseModel({ exerciseId: '3', structure: { apartados: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }, ...selectionLabels[2] })
 assert.deepEqual(third.rows.slice(1).map((row) => row.label), ['Apartado a', 'Apartado b1', 'Apartado b2'])
+assert.deepEqual(documentAssessmentNavigation([third]).map((item) => [item.label, item.exerciseIndex, item.rowKey]), [['3', 0, null], ['3A', 0, 'a'], ['3B1', 0, 'b'], ['3B2', 0, 'c']])
+assert.deepEqual(documentAssessmentNavigation([{ label: 'Pregunta 4.1', rows: [{ kind: 'part', key: 'p', label: 'Apartado a' }] }]).map((item) => item.label), ['4.1', '4.1A'])
 const repeatedA = assessmentExerciseModel({ exerciseId: 'same', sourceBlockId: 'first', structure: { apartados: [{ id: 'a' }] } })
 const repeatedB = assessmentExerciseModel({ exerciseId: 'same', sourceBlockId: 'second', structure: { apartados: [{ id: 'a' }] } })
 assert.notEqual(repeatedA.rows[1].feedbackKey, repeatedB.rows[1].feedbackKey)

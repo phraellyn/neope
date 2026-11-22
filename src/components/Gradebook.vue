@@ -1,5 +1,7 @@
 <script setup>
 import DocumentScoreEditor from './DocumentScoreEditor.vue'
+import GradebookMeanDisplay from './GradebookMeanDisplay.vue'
+import { normalizeMeanDisplay } from '../utils/gradebookMeanDisplay'
 import { newDocumentAssessment, resetDocumentScore, setManualDocumentScore, toggleDocumentAchievement, setDocumentFeedback } from '../utils/documentAssessmentScore'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { httpsCallable } from 'firebase/functions'
@@ -18,6 +20,8 @@ import RubricAlignmentBadges from './RubricAlignmentBadges.vue'
 import TeacherStudentMessages from './TeacherStudentMessages.vue'
 import { loadStudentPublications, setStudentPublication } from '../services/studentPublicationRepository'
 import { loadDocumentAssessmentExercises } from '../services/documentAssessmentLoader'
+import { documentAssessmentNavigation } from '../utils/documentAssessmentNavigation'
+import { madridDay, validTrainingDate } from '../../functions/trainingDateRange'
 import {
   createRubricAssessment,
   rubricAssessmentTotal,
@@ -73,6 +77,7 @@ function normalizeNode(node) {
       nombre: node.nombre || 'Grupo',
       nombreCorto: node.nombreCorto || node.nombre || 'Grupo',
       colapsado: Boolean(node.colapsado),
+      meanDisplay: normalizeMeanDisplay(node.meanDisplay),
       children: (node.children || []).map(normalizeNode).filter(Boolean),
     }
   }
@@ -112,6 +117,7 @@ function normalizeGroup(group) {
       estructura: sourceStructure.map(normalizeNode).filter(Boolean),
       resultados: results,
       pesos: weights,
+      trainingStartDate: String(group.evaluaciones?.trainingStartDate || group.evaluaciones?.trainingDateRange?.from || ''),
     },
   }
 }
@@ -134,17 +140,44 @@ const selectedMessageStudent = ref(null)
 const messagesDialog = ref(false)
 let messagesTimer
 let trainingCountsRefreshedAt = 0
-async function refreshStudentMessages() {
+let trainingCountsRequest = 0
+let messagesRequest = 0
+const trainingDateDialog = ref(false)
+const trainingDateDraft = ref('')
+const trainingStartDate = computed(() => localGroup.value.evaluaciones.trainingStartDate || '')
+const trainingDateRangeValid = computed(() => validTrainingDate(trainingDateDraft.value || '') && (!trainingDateDraft.value || trainingDateDraft.value <= madridDay()))
+const trainingDateRangeLabel = computed(() => {
+  const from = trainingStartDate.value
+  return from ? `Desde ${from.split('-').reverse().join('/')} hasta hoy` : 'Todas las fechas'
+})
+async function refreshStudentMessages({ forceTrainingCounts = false } = {}) {
   if (!props.group.id || !props.teacherId) return
-  const includeTrainingCounts = Date.now() - trainingCountsRefreshedAt >= 5 * 60 * 1000
+  const includeTrainingCounts = forceTrainingCounts || Date.now() - trainingCountsRefreshedAt >= 5 * 60 * 1000
+  const from = trainingStartDate.value
+  const range = from ? { from, to: madridDay() } : { from: '', to: '' }
+  const requestId = includeTrainingCounts ? ++trainingCountsRequest : trainingCountsRequest
+  const messagesRequestId = ++messagesRequest
   if (includeTrainingCounts) studentTrainingCountsLoading.value = true
   try {
-    const result = (await httpsCallable(functions, 'manageTeacherStudentMessages')({ groupId: props.group.id, includeTrainingCounts })).data
-    studentMessages.value = result.messages
-    if (result.trainingCounts) { studentTrainingCounts.value = result.trainingCounts; studentTrainingAccess.value = result.trainingAccess || {}; trainingCountsRefreshedAt = Date.now() }
+    const result = (await httpsCallable(functions, 'manageTeacherStudentMessages')({ groupId: props.group.id, includeTrainingCounts, ...(includeTrainingCounts ? { trainingDateRange: range } : {}) })).data
+    if (messagesRequestId === messagesRequest) studentMessages.value = result.messages
+    if (result.trainingCounts && requestId === trainingCountsRequest && from === trainingStartDate.value) { studentTrainingCounts.value = result.trainingCounts; studentTrainingAccess.value = result.trainingAccess || {}; trainingCountsRefreshedAt = Date.now() }
   }
-  catch (error) { console.error('No se han podido cargar los mensajes del alumnado:', error) }
-  finally { if (includeTrainingCounts) studentTrainingCountsLoading.value = false }
+  catch (error) { console.error('No se han podido cargar los mensajes del alumnado:', error); if (forceTrainingCounts && requestId === trainingCountsRequest) showAppErrorToast('No se ha podido actualizar el número de ejercicios para las fechas seleccionadas.') }
+  finally { if (includeTrainingCounts && requestId === trainingCountsRequest) studentTrainingCountsLoading.value = false }
+}
+function openTrainingDateDialog() { trainingDateDraft.value = trainingStartDate.value; trainingDateDialog.value = true }
+function saveTrainingDateRange() {
+  if (!trainingDateRangeValid.value) return
+  const previous = trainingStartDate.value
+  const next = trainingDateDraft.value || ''
+  trainingDateDialog.value = false
+  if (previous === next) return
+  localGroup.value.evaluaciones.trainingStartDate = next
+  studentTrainingCounts.value = {}
+  trainingCountsRefreshedAt = 0
+  markDirty()
+  void refreshStudentMessages({ forceTrainingCounts: true })
 }
 function pendingStudentMessages(studentId) {
   return studentMessages.value.filter((message) => message.studentCode === studentId).length
@@ -155,7 +188,7 @@ function studentTrainingCountLabel(studentId) {
   const countLabel = count === undefined ? (studentTrainingCountsLoading.value ? 'Cargando ejercicios autoevaluados' : 'Número de ejercicios no disponible') : `${count} ejercicios autoevaluados`
   const conversations = pendingStudentMessages(studentId)
   const unread = unreadStudentMessages(studentId)
-  return `${countLabel}${access === false ? ' · Cuenta sin activar o sin acceso' : access === true ? '' : ' · Estado de acceso no disponible'}${conversations ? ` · ${conversations} conversaciones${unread ? `, ${unread} sin leer` : ''}` : ''} · Abrir actividad y conversaciones`
+  return `${countLabel} · ${trainingDateRangeLabel.value}${access === false ? ' · Cuenta sin activar o sin acceso' : access === true ? '' : ' · Estado de acceso no disponible'}${conversations ? ` · ${conversations} conversaciones${unread ? `, ${unread} sin leer` : ''}` : ''} · Abrir actividad y conversaciones`
 }
 function unreadStudentMessages(studentId) {
   return studentMessages.value.filter((message) => message.studentCode === studentId && (message.studentLastAt || message.createdAt || '') > (message.teacherSeenAt || message.replyAt || (message.status !== 'pending' ? message.updatedAt : '') || '')).length
@@ -177,6 +210,8 @@ const documentAssessmentDialog = ref(false)
 const documentAssessmentStudent = ref(null)
 const documentAssessmentItem = ref(null)
 const documentAssessmentExercises = ref([])
+const documentAssessmentMatrix = ref(null)
+const documentAssessmentNavigationItems = computed(() => documentAssessmentNavigation(documentAssessmentExercises.value))
 const documentAssessmentLoading = ref(false)
 const documentAssessmentChanged = ref(false)
 const fusionDialog = ref(false)
@@ -203,6 +238,7 @@ const weightDialogTitle = ref('')
 const weightDialogParentId = ref(null)
 const weightDialogNodes = ref([])
 const weightDialogWeights = ref({})
+const weightDialogMeanSettings = ref(null)
 const suppressTitleClick = ref(false)
 let revision = 0
 let localIdentitySaveTimer = null
@@ -637,7 +673,7 @@ function itemCell(node, rowspan = 1) {
 }
 
 function meanCell(node, rowspan = 1) {
-  return { key: `mean-${node.id}`, kind: 'mean', node, label: node.nombreCorto, title: `Media de ${node.nombre}`, colspan: 1, rowspan }
+  return { key: `mean-${node.id}`, kind: 'mean', node, isFinal: !findNode(node.id)?.parent, label: node.nombreCorto, title: `Media de ${node.nombre}`, colspan: 1, rowspan }
 }
 
 function blankCell(key, colspan = 1) {
@@ -966,11 +1002,6 @@ watch(() => props.teacherId, () => {
   rubricsLoadedForTeacher.value = ''
 })
 
-function groupMean(studentId, group) {
-  const value = weightedNodeMean(studentId, group)
-  return value === null ? '' : new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(value)
-}
-
 function weightedNodeMean(studentId, node) {
   if (!node) return null
   // Los méritos son un saldo de convivencia, no una calificación: deben
@@ -1005,6 +1036,7 @@ function openWeightDialog(node) {
   weightDialogParentId.value = parentId
   weightDialogNodes.value = nodes
   weightDialogWeights.value = Object.fromEntries(nodes.map((child) => [child.id, savedWeights[child.id] === undefined ? 100 : Math.max(0, Number(savedWeights[child.id]) || 0)]))
+  weightDialogMeanSettings.value = node.type === 'group' ? normalizeMeanDisplay(node.meanDisplay) : null
   weightDialog.value = true
 }
 
@@ -1014,6 +1046,10 @@ function saveWeightDialog() {
   localGroup.value.evaluaciones.pesos[weightDialogParentId.value] = Object.fromEntries(
     weightDialogNodes.value.map((node) => [node.id, Math.max(0, Number(weightDialogWeights.value[node.id]) || 0)]),
   )
+  if (weightDialogMeanSettings.value) {
+    const node = findNode(weightDialogParentId.value)?.node
+    if (node?.type === 'group') node.meanDisplay = normalizeMeanDisplay(weightDialogMeanSettings.value)
+  }
   weightDialog.value = false
   markDirty()
   if (!props.configurationMode) emit('autosave-request', { includeIdentities: false })
@@ -1429,7 +1465,7 @@ defineExpose({
                 <div class="gradebook-student-heading-count">Alumnos <small>{{ students.length }}</small></div>
               </div>
             </th>
-            <th v-if="rowIndex === 0" :rowspan="headerLayout.depth" class="gradebook-training-heading" title="Ejercicios autoevaluados" aria-label="Ejercicios autoevaluados"></th>
+            <th v-if="rowIndex === 0" :rowspan="headerLayout.depth" class="gradebook-training-heading" :title="`Ejercicios autoevaluados · ${trainingDateRangeLabel}`" :aria-label="`Ejercicios autoevaluados · ${trainingDateRangeLabel}`"><v-btn v-if="configurationMode" icon="mdi-calendar-range" size="x-small" variant="text" :color="trainingStartDate ? 'white' : undefined" aria-label="Configurar fecha inicial del recuento de ejercicios" title="Configurar fecha inicial del recuento" @click.stop="openTrainingDateDialog" /></th>
             <template v-if="visibleStructure.length">
               <th
                 v-for="cell in row"
@@ -1535,7 +1571,7 @@ defineExpose({
                 {{ studentTrainingCounts[student.id] ?? '–' }}<span v-if="pendingStudentMessages(student.id)" class="gradebook-message-light" :class="{ 'gradebook-message-light-unread': unreadStudentMessages(student.id) }" aria-hidden="true"></span>
               </button>
             </td>
-            <td v-for="column in resultColumns" :key="column.key" :class="{ 'gradebook-mean-cell': column.kind === 'mean', 'gradebook-rubric-cell': column.kind === 'item' && (column.node.rubric || column.node.merits), 'gradebook-document-cell': column.kind === 'item' && column.node.documentAssessment }">
+            <td v-for="column in resultColumns" :key="column.key" :class="{ 'gradebook-mean-cell': column.kind === 'mean', 'gradebook-mean-final': column.kind === 'mean' && column.isFinal, 'gradebook-mean-intermediate': column.kind === 'mean' && !column.isFinal, 'gradebook-rubric-cell': column.kind === 'item' && (column.node.rubric || column.node.merits), 'gradebook-document-cell': column.kind === 'item' && column.node.documentAssessment }">
               <button
                 v-if="column.kind === 'item' && column.node.documentAssessment"
                 type="button"
@@ -1562,7 +1598,7 @@ defineExpose({
                 @input="updateResult(student.id, column.node.id, $event.target.value)"
                 @blur="emit('autosave-request', { includeIdentities: false })"
               >
-              <output v-else :aria-label="`${column.title}: ${student.nombre || student.id}`">{{ groupMean(student.id, column.node) }}</output>
+              <GradebookMeanDisplay v-else :value="weightedNodeMean(student.id, column.node)" :options="column.node.meanDisplay || {}" :label="`${column.title}: ${student.nombre || student.id}`" />
             </td>
             <td v-if="visibleStructure.length" class="gradebook-filler-cell" aria-hidden="true"></td>
           </tr>
@@ -1688,13 +1724,29 @@ defineExpose({
       </v-card>
     </v-dialog>
 
+    <v-dialog v-model="trainingDateDialog" max-width="440">
+      <v-card>
+        <v-card-title>Fecha de ejercicios autoevaluados</v-card-title>
+        <v-card-text class="gradebook-training-date-form">
+          <p>Se contarán los ejercicios completados desde la fecha elegida hasta hoy, incluyendo ambos días.</p>
+          <v-text-field v-model="trainingDateDraft" type="date" label="Fecha inicial" :max="madridDay()" variant="outlined" density="compact" hide-details />
+          <p v-if="!trainingDateRangeValid" class="gradebook-training-date-error">La fecha debe ser válida y no puede ser posterior a hoy.</p>
+        </v-card-text>
+        <v-card-actions><v-btn variant="text" @click="trainingDateDraft = ''">Todas las fechas</v-btn><v-spacer /><v-btn variant="text" @click="trainingDateDialog = false">Cancelar</v-btn><v-btn color="primary" variant="flat" :disabled="!trainingDateRangeValid" @click="saveTrainingDateRange">Aplicar</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
     <v-dialog v-model="weightDialog" max-width="560">
       <v-card>
         <v-card-title class="px-6 pt-5">{{ weightDialogTitle }}</v-card-title>
         <v-card-text class="gradebook-weight-form px-6 pb-2">
           <div v-for="node in weightDialogNodes" :key="node.id" class="gradebook-weight-row">
             <div class="gradebook-weight-label" :title="node.nombre">{{ node.nombreCorto || node.nombre }}</div>
-            <v-slider v-model="weightDialogWeights[node.id]" min="0" max="100" step="5" color="primary" hide-details thumb-label="always" />
+            <v-slider v-model="weightDialogWeights[node.id]" min="0" max="100" step="1" color="primary" hide-details thumb-label="always" />
+          </div>
+          <div v-if="weightDialogMeanSettings" class="gradebook-mean-settings">
+            <v-select v-model="weightDialogMeanSettings.mode" :items="[{ title: 'Media con dos decimales', value: 'decimal' }, { title: 'Redondeo matemático', value: 'nearest' }, { title: 'Truncamiento', value: 'truncate' }, { title: 'Redondeo al alza', value: 'up' }]" label="Mostrar la media" variant="outlined" density="compact" hide-details />
+            <v-checkbox v-if="weightDialogMeanSettings.mode !== 'decimal'" v-model="weightDialogMeanSettings.showBoth" label="Mostrar también la media con dos decimales" color="primary" density="compact" hide-details />
+            <small>La opción cambia la presentación; las medias se calculan con los valores originales.</small>
           </div>
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
@@ -1781,12 +1833,13 @@ defineExpose({
     <v-dialog v-model="documentAssessmentDialog" max-width="1500" width="calc(100% - 24px)" height="calc(100dvh - 28px)">
       <v-card class="gradebook-document-assessment">
         <v-card-title class="gradebook-document-assessment-title">
-          <div>
-            <small>{{ documentAssessmentItem?.nombre }}</small>
-            <strong>{{ documentAssessmentStudent?.nombre || documentAssessmentStudent?.id }}</strong>
+          <div class="gradebook-document-student">
+            <img v-if="documentAssessmentStudent?.foto" class="gradebook-document-student-photo" :src="documentAssessmentStudent.foto" alt="" />
+            <span v-else class="gradebook-document-student-photo gradebook-document-student-photo-empty" aria-hidden="true"><v-icon icon="mdi-account" size="20" /></span>
+            <span class="gradebook-document-student-name"><small>{{ documentAssessmentItem?.nombre }}</small><strong>{{ documentAssessmentStudent?.nombre || documentAssessmentStudent?.id }}</strong></span>
           </div>
-          <DocumentScoreEditor :total="Number(activeDocumentAssessmentResult?.total) || 0" :maximum="Number(documentAssessmentItem?.documentAssessment?.maxPoints) || 0" :manual="Number.isFinite(activeDocumentAssessmentResult?.manualTotal)" :disabled="documentAssessmentLoading || !activeDocumentAssessmentResult" @manual-score="changeDocumentScore" @reset-score="restoreDocumentScore" />
-          <v-btn icon="mdi-close" rounded="circle" variant="text" aria-label="Cerrar corrección" @click="documentAssessmentDialog = false" />
+          <nav class="gradebook-document-navigation" aria-label="Navegar por el examen"><div><button v-for="target in documentAssessmentNavigationItems" :key="target.key" type="button" :title="target.title" :aria-label="`Ir a ${target.title}`" @click="documentAssessmentMatrix?.scrollToExercise(target.exerciseIndex, target.rowKey)">{{ target.label }}</button></div></nav>
+          <div class="gradebook-document-header-actions"><DocumentScoreEditor :total="Number(activeDocumentAssessmentResult?.total) || 0" :maximum="Number(documentAssessmentItem?.documentAssessment?.maxPoints) || 0" :manual="Number.isFinite(activeDocumentAssessmentResult?.manualTotal)" :disabled="documentAssessmentLoading || !activeDocumentAssessmentResult" @manual-score="changeDocumentScore" @reset-score="restoreDocumentScore" /><v-btn icon="mdi-close" rounded="circle" variant="text" aria-label="Cerrar corrección" @click="documentAssessmentDialog = false" /></div>
         </v-card-title>
         <v-divider />
         <v-card-text v-if="documentAssessmentLoading" class="gradebook-document-loading">
@@ -1795,6 +1848,7 @@ defineExpose({
         </v-card-text>
         <v-card-text v-else class="gradebook-document-grid-wrap">
           <DocumentAssessmentMatrix
+            ref="documentAssessmentMatrix"
             :exercises="documentAssessmentExercises"
             :selected-achievement-ids="activeDocumentAchievementIds"
             :feedback="activeDocumentAssessmentResult?.feedback || {}"

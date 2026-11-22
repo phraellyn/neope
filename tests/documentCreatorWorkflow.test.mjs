@@ -219,10 +219,17 @@ try {
   const [fourth, fifth] = variantSelectivity.exerciseQueue.value
   fourth.children.push(variantSelectivity.createExerciseDocumentBlock('structured'))
   fifth.children.push(variantSelectivity.createExerciseDocumentBlock('structured'))
+  assert.equal(variantSelectivity.queueIsSegmented(fourth.children[0]), false, 'La vista inicial muestra el enunciado completo')
+  variantSelectivity.toggleQueueView(fourth.children[0])
+  assert.equal(variantSelectivity.queueIsSegmented(fourth.children[0]), true, 'Se puede cambiar a la vista segmentada')
+  assert.equal(variantSelectivity.queueIsSegmented(fifth.children[0]), false, 'Cada bloque conserva su propio modo de visualización')
+  variantSelectivity.toggleQueueView(fourth.children[0])
+  assert.equal(variantSelectivity.queueIsSegmented(fourth.children[0]), false)
   variantSelectivity.setQueueBlockVersion(fourth.children[0], 1)
   assert.equal(fourth.children[0].version, 1, 'La variante seleccionada se guarda dentro del bloque optativo')
   assert.equal(fifth.children[0].version, 0, 'Cambiar una opción no modifica otro bloque del mismo ejercicio')
   assert.equal(variantSelectivity.queueExercisePdf(fourth.children[0]), 'variante.pdf', 'La vista previa utiliza la variante seleccionada')
+  assert.equal(variantSelectivity.queueExercisePdf(fifth.children[0]), '', 'Una variante no modifica el PDF de otro bloque del mismo ejercicio')
   assert.match(variantSelectivity.generatedCodeForTemplate(variantSelectivity.selectedTemplates.value[0]), /Apartado de la variante\./, 'El documento usa el contenido de la variante')
   const firstOptional = selectivity.exerciseQueue.value[0]
   const nestedExercise = firstOptional.children[0]

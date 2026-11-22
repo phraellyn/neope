@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import ExercisePdfPreview from './ExercisePdfPreview.vue'
+import ExerciseFullPdfPreview from './ExerciseFullPdfPreview.vue'
 import ExerciseVariantSelector from './ExerciseVariantSelector.vue'
 
 defineOptions({ name: 'DocumentQueueChildren' })
@@ -10,13 +11,15 @@ const props = defineProps({
   tools: { type: Array, default: () => [] },
   exercises: { type: Array, default: () => [] },
   mainPdf: { type: Function, required: true },
+  fullPdf: { type: Function, required: true },
+  segmented: { type: Function, required: true },
   apartados: { type: Function, required: true },
   apartadoPdf: { type: Function, required: true },
   metrics: { type: Function, required: true },
   containerId: { type: String, required: true },
 })
 
-const emit = defineEmits(['drag-start', 'drop-block', 'remove', 'argument-change', 'metric-change', 'version-change'])
+const emit = defineEmits(['drag-start', 'drop-block', 'remove', 'argument-change', 'metric-change', 'version-change', 'toggle-view'])
 const toolsById = computed(() => new Map(props.tools.map((tool) => [tool.id, tool])))
 const exercisesById = computed(() => new Map(props.exercises.map((exercise) => [exercise.id, exercise])))
 
@@ -56,6 +59,7 @@ function exerciseFor(block) {
         <v-icon :icon="block.type === 'tool' ? (toolFor(block)?.icon || 'mdi-tools') : 'mdi-file-document-outline'" size="15" />
         <strong>{{ block.type === 'tool' ? (toolFor(block)?.label || 'Herramienta') : exerciseTitle(block) }}</strong>
         <v-spacer />
+        <v-btn v-if="block.type !== 'tool'" :icon="segmented(block) ? 'mdi-file-document-outline' : 'mdi-view-split-horizontal'" size="x-small" density="compact" variant="text" :aria-label="segmented(block) ? 'Mostrar enunciado completo' : 'Mostrar apartados y puntuaciones'" :title="segmented(block) ? 'Mostrar enunciado completo' : 'Mostrar apartados y puntuaciones'" :aria-pressed="segmented(block)" @click.stop="emit('toggle-view', block)" />
         <v-btn icon="mdi-close" size="x-small" density="compact" rounded="circle" variant="text" color="error" aria-label="Quitar bloque" @click.stop="emit('remove', block)" />
       </header>
       <div v-if="block.type === 'tool' && (toolFor(block)?.arguments || []).length" class="document-tool-child-arguments">
@@ -74,7 +78,8 @@ function exerciseFor(block) {
         />
       </div>
       <div v-if="block.type !== 'tool'" class="document-tool-child-exercise">
-        <section v-for="(part, partIndex) in [null, ...apartados(block)]" :key="part?.id || partIndex" class="document-tool-child-part">
+        <template v-if="!segmented(block)"><ExerciseFullPdfPreview v-if="fullPdf(block)" :src="fullPdf(block)" title="Enunciado completo del ejercicio" /><div v-else class="document-tool-child-no-pdf">PDF completo no disponible</div></template>
+        <section v-for="(part, partIndex) in segmented(block) ? [null, ...apartados(block)] : []" :key="part?.id || partIndex" class="document-tool-child-part">
           <div class="document-tool-child-metrics">
             <strong>{{ partIndex ? `${String.fromCharCode(96 + partIndex)}.` : (apartados(block).length ? 'Total' : 'Ejercicio') }}</strong>
             <label>Puntos<input :value="partIndex ? (metrics(block).apartados?.[partIndex - 1]?.puntuacion || 0) : metrics(block).puntuacion" type="number" min="0" step="0.25" :disabled="!partIndex && apartados(block).length > 0" @change="emit('metric-change', block, 'puntuacion', $event.target.value, partIndex ? partIndex - 1 : null)" /></label>
@@ -90,6 +95,8 @@ function exerciseFor(block) {
         :tools="tools"
         :exercises="exercises"
         :main-pdf="mainPdf"
+        :full-pdf="fullPdf"
+        :segmented="segmented"
         :apartados="apartados"
         :apartado-pdf="apartadoPdf"
         :metrics="metrics"
@@ -100,6 +107,7 @@ function exerciseFor(block) {
         @argument-change="(item, key, value) => emit('argument-change', item, key, value)"
         @metric-change="(item, field, value, index) => emit('metric-change', item, field, value, index)"
         @version-change="(item, version) => emit('version-change', item, version)"
+        @toggle-view="(item) => emit('toggle-view', item)"
       />
     </article>
   </div>

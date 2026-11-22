@@ -41,6 +41,22 @@ try {
   assert.deepEqual(vm.getStudentChanges(), { identities: false, roster: false })
   state.moveItemIntoGroup('item', 'target')
   assert.equal(state.localGroup.evaluaciones.estructura[0].children[0].id, 'item')
+  assert.equal(state.meanCell(state.localGroup.evaluaciones.estructura[0]).isFinal, true, 'Una categoría raíz debe usar el estilo de media final, también si es de nivel 2')
+  const nested = { id: 'nested', type: 'group', nivel: 2, nombre: 'Intermedia', children: [] }
+  state.localGroup.evaluaciones.estructura.push({ id: 'outer', type: 'group', nivel: 1, nombre: 'Final', children: [nested] })
+  assert.equal(state.meanCell(state.localGroup.evaluaciones.estructura[1].children[0]).isFinal, false, 'Una categoría anidada debe usar el estilo de media intermedia')
+  state.localGroup.evaluaciones.estructura.pop()
+  state.openWeightDialog(state.localGroup.evaluaciones.estructura[0])
+  state.weightDialogMeanSettings.mode = 'truncate'
+  state.weightDialogMeanSettings.showBoth = true
+  state.saveWeightDialog()
+  assert.deepEqual(vm.getGroup().evaluaciones.estructura[0].meanDisplay, { mode: 'truncate', showBoth: true }, 'Las opciones de media deben conservarse en el grupo guardado')
+  state.localGroup.evaluaciones.resultados.student = { item: '6,75' }
+  assert.equal(state.weightedNodeMean('student', state.localGroup.evaluaciones.estructura[0]), 6.75, 'La presentación no debe redondear los datos empleados para calcular medias')
+  state.openTrainingDateDialog()
+  state.trainingDateDraft = '2026-09-01'
+  state.saveTrainingDateRange()
+  assert.equal(vm.getGroup().evaluaciones.trainingStartDate, '2026-09-01', 'La fecha inicial debe acompañar a la configuración del grupo')
   assert.deepEqual(vm.getStudentChanges(), { identities: false, roster: false }, 'Moving columns must not require saving student identities')
   vm.addStudent()
   assert.deepEqual(vm.getStudentChanges(), { identities: true, roster: true }, 'Adding a student must still validate and save their identity')

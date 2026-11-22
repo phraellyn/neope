@@ -1,6 +1,6 @@
 <script setup>
 import MathText from './MathText.vue'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import ExercisePdfPreview from './ExercisePdfPreview.vue'
 import lomloeMathLaw from '../data/lomloeMathLaw.json'
 import { criterionStrength } from '../utils/criterionEvidence'
@@ -17,6 +17,21 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['toggle-achievement', 'update-feedback'])
+const scrollContainer = ref(null)
+
+function scrollToExercise(exerciseIndex, rowKey = null) {
+  const container = scrollContainer.value
+  const exercise = container?.querySelector(`[data-matrix-exercise="${Number(exerciseIndex)}"]`)
+  if (!container || !exercise) return
+  const row = rowKey === null ? null : [...exercise.querySelectorAll('[data-matrix-row]')].find((element) => element.dataset.matrixRow === String(rowKey))
+  if (rowKey !== null && !row) return
+  const target = row || exercise
+  const stickyHeight = row ? exercise.querySelector('header')?.offsetHeight || 0 : 0
+  const top = container.scrollTop + target.getBoundingClientRect().top - container.getBoundingClientRect().top - stickyHeight
+  container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+}
+
+defineExpose({ scrollToExercise })
 
 function sectionFeedback(key) {
   return (props.feedback?.sections || []).find((entry) => entry.key === key)?.text || ''
@@ -104,13 +119,13 @@ function achievementAlignment(achievement) {
     <div class="assessment-matrix-grid assessment-matrix-columns">
       <strong>Resolución</strong><strong>Logros</strong>
     </div>
-    <div class="assessment-matrix-scroll">
+    <div ref="scrollContainer" class="assessment-matrix-scroll">
       <div v-if="feedbackEditable" class="assessment-matrix-general-feedback">
         <v-textarea :model-value="feedback?.general || ''" label="Comentario general del examen" placeholder="Escribe aquí tus observaciones para el alumno" variant="outlined" density="compact" rows="2" auto-grow maxlength="4000" hide-details @update:model-value="value => emit('update-feedback', { text: value })" />
       </div>
-      <article v-for="exercise in exercises" :key="exercise.key || `${exercise.exerciseId}:${exercise.version}`" class="assessment-matrix-exercise">
+      <article v-for="(exercise, exerciseIndex) in exercises" :key="`${exerciseIndex}:${exercise.key || exercise.exerciseId}`" :data-matrix-exercise="exerciseIndex" class="assessment-matrix-exercise">
         <header>{{ exercise.label }}</header>
-        <div v-for="(row, rowIndex) in exercise.rows" :key="row.key" class="assessment-matrix-grid assessment-matrix-row">
+        <div v-for="(row, rowIndex) in exercise.rows" :key="row.key" :data-matrix-row="row.key" class="assessment-matrix-grid assessment-matrix-row">
           <section class="assessment-matrix-pdf">
             <small class="assessment-matrix-row-label"><span>{{ exercise.label }}</span><span aria-hidden="true">|</span><span>{{ row.label }}</span></small>
             <ExercisePdfPreview v-if="row.pdf" :src="row.pdf" :title="`${exercise.label}, ${row.label}`" thumbnail />

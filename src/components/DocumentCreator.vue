@@ -8,6 +8,7 @@ import { auth, db, functions, storage } from '../services/firebase'
 import { mathSubjects } from '../data/mathCurriculum'
 import ExerciseCurriculumPicker from './ExerciseCurriculumPicker.vue'
 import ExercisePdfPreview from './ExercisePdfPreview.vue'
+import ExerciseFullPdfPreview from './ExerciseFullPdfPreview.vue'
 import ExerciseVariantSelector from './ExerciseVariantSelector.vue'
 import ExerciseStatusFilters from './ExerciseStatusFilters.vue'
 import DocumentPdfPreview from './DocumentPdfPreview.vue'
@@ -17,7 +18,7 @@ import DocumentAssessmentMatrix from './DocumentAssessmentMatrix.vue'
 import DocumentAssessmentEditor from './DocumentAssessmentEditor.vue'
 import DocumentQueueChildren from './DocumentQueueChildren.vue'
 import MasonryGrid from './MasonryGrid.vue'
-import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, exerciseStructureFromDocument, mergeExerciseStructure, normalizeCriteriaUnicode, parseExerciseLatex } from '../utils/exerciseStructure'
+import { aggregateExerciseStructure, buildExerciseLatex, buildExercisePartLatex, exerciseStructureFromDocument, mergeExerciseStructure, normalizeCriteriaUnicode, parseExerciseLatex, pdfReferenceUrl } from '../utils/exerciseStructure'
 import { compactExerciseConceptLabel, exerciseSolutionOrigin, exerciseStatementText, exerciseVersionAuthors } from '../utils/exerciseCardMetadata'
 import { hasPublishedExerciseVersion, matchesExerciseStatusFilters } from '../utils/exerciseSearchFilters'
 import { trainingReadiness } from '../../functions/studentTrainingLogic'
@@ -132,6 +133,7 @@ let filterApplyFrame = 0
 let filterApplyTimer = 0
 const documentFilterCount = computed(() => Number(Boolean(documentCurriculum.value.course)) + Number(Boolean(documentCurriculum.value.subjectId)) + (documentCurriculum.value.conceptIds || []).length + Number(Boolean(documentCurriculum.value.competencial)) + Number(exerciseCompleteness.value !== 'all') + Number(exercisePublication.value !== 'all') + Number(exerciseSolution.value !== 'all'))
 const selectedVersions = reactive({})
+const segmentedQueueBlocks = reactive({})
 const documentContent = ref(createDocumentContent())
 const curriculumDialog = ref(false)
 const sourceFileInput = ref(null)
@@ -2090,8 +2092,12 @@ function queueExerciseCode(item, template = selectedTemplate.value) {
 
 function queueExercisePdf(item) {
   const exercise = exerciseForQueue(item)
-  return activeVersion(exercise, item.version)?.pdf?.enunciado || ''
+  const active = activeVersion(exercise, item.version)
+  return pdfReferenceUrl(active?.pdf?.statement) || pdfReferenceUrl(active?.pdf?.enunciado) || queueStructure(item).pdfenunciadocompleto || ''
 }
+
+function queueIsSegmented(item) { return segmentedQueueBlocks[item.blockId] === true }
+function toggleQueueView(item) { segmentedQueueBlocks[item.blockId] = !queueIsSegmented(item) }
 
 const assessmentPreviewExercises = computed(() => {
   const labels = documentAssessmentLabels({ plantillas: selectedTemplates.value, content: documentContent.value }, selectedExercises.value)
@@ -2888,6 +2894,7 @@ function selectTemplate(template) {
   if (!supportsAssessment.value) documentAssessment.evaluable = false
   optionalRequiredCount.value = 1
   Object.keys(selectedVersions).forEach((key) => delete selectedVersions[key])
+  Object.keys(segmentedQueueBlocks).forEach((key) => delete segmentedQueueBlocks[key])
   invalidatePreview()
 }
 
@@ -3043,6 +3050,7 @@ function resetDocumentAssessment() {
 
 function resetWorkflow() {
   clearTimeout(draftTimer)
+  Object.keys(segmentedQueueBlocks).forEach((key) => delete segmentedQueueBlocks[key])
   assessmentEditorDialog.value = false
   assessmentEditorSections.value = []
   activeDraftId.value = null
@@ -4651,6 +4659,7 @@ defineExpose({
                       <span class="document-queue-order">{{ exerciseOrder(index) }}</span>
                       <strong>{{ subjectLabel(exerciseForQueue(item)) }}</strong>
                       <v-spacer />
+                      <v-btn :icon="queueIsSegmented(item) ? 'mdi-file-document-outline' : 'mdi-view-split-horizontal'" size="x-small" variant="text" :aria-label="queueIsSegmented(item) ? 'Mostrar enunciado completo' : 'Mostrar apartados y puntuaciones'" :title="queueIsSegmented(item) ? 'Mostrar enunciado completo' : 'Mostrar apartados y puntuaciones'" :aria-pressed="queueIsSegmented(item)" @click.stop="toggleQueueView(item)" />
                       <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Quitar ejercicio" @click="removeQueuedBlock(item)" />
                     </header>
                     <div v-if="isTool(item) && toolForQueue(item)?.behavior === 'optional-section'" class="document-tool-queue-body">
@@ -4687,6 +4696,8 @@ defineExpose({
                       :tools="documentTools"
                       :exercises="exercises"
                       :main-pdf="queueMainPdf"
+                      :full-pdf="queueExercisePdf"
+                      :segmented="queueIsSegmented"
                       :apartados="queueApartados"
                       :apartado-pdf="queueApartadoPdf"
                       :metrics="queueMetrics"
@@ -4697,15 +4708,20 @@ defineExpose({
                       @argument-change="(block, key, value) => setToolArgument(block, key, value)"
                       @metric-change="updateQueueMetric"
                       @version-change="setQueueBlockVersion"
+                      @toggle-view="toggleQueueView"
                     />
                     <ExerciseVariantSelector
                       v-if="!isTool(item)"
                       :model-value="item.version"
                       :variations="exerciseForQueue(item)?.variaciones || []"
                       compact
-                      @update:model-value="setSelectedVersion(exerciseForQueue(item), $event)"
+                      @update:model-value="setQueueBlockVersion(item, $event)"
                     />
-                    <div v-if="!isTool(item)" class="document-queue-sections">
+                    <div v-if="!isTool(item) && !queueIsSegmented(item)" class="document-queue-card-pdf">
+                      <ExerciseFullPdfPreview v-if="queueExercisePdf(item)" :src="queueExercisePdf(item)" :title="`Enunciado completo del ejercicio ${index + 1}`" />
+                      <div v-else class="document-exercise-no-pdf compact"><v-icon icon="mdi-file-pdf-box" size="24" /><span>PDF completo no disponible</span></div>
+                    </div>
+                    <div v-if="!isTool(item) && queueIsSegmented(item)" class="document-queue-sections">
                       <section class="document-queue-section">
                         <div class="document-queue-metric-row document-queue-metric-main">
                           <strong>{{ queueApartados(item).length ? 'Total' : 'Ejercicio' }}</strong>
@@ -4729,7 +4745,6 @@ defineExpose({
                         </div>
                       </section>
                     </div>
-                    <footer v-if="!isTool(item)">{{ conceptLabel(exerciseForQueue(item)) }}</footer>
                   </article>
                 </div>
                 <div v-else class="document-queue-empty compact"><v-icon icon="mdi-tray-arrow-down" size="36" /><span>Suelta aquí ejercicios y herramientas.</span></div>

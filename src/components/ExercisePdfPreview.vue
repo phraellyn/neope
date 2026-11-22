@@ -78,8 +78,8 @@ async function cachedPdfBytes(source) {
   return promise
 }
 
-function previewCacheKey(source, width, pixelRatio, cropBottom) {
-  return `${source}\u0000${Math.round(width)}\u0000${pixelRatio}\u0000${cropBottom ? 1 : 0}`
+function previewCacheKey(source, width, pixelRatio, cropBottom, pageNumber) {
+  return `${source}\u0000${Math.round(width)}\u0000${pixelRatio}\u0000${cropBottom ? 1 : 0}\u0000${pageNumber}`
 }
 
 function cachedPreview(key) {
@@ -114,8 +114,9 @@ const props = defineProps({
   aspectRatio: { type: Number, default: 0 },
   thumbnail: { type: Boolean, default: false },
   generateThumbnail: { type: Boolean, default: false },
+  pageNumber: { type: Number, default: 1 },
 })
-const emit = defineEmits(['page-metrics', 'thumbnail-ready'])
+const emit = defineEmits(['page-metrics', 'thumbnail-ready', 'page-count'])
 
 const container = ref(null)
 const canvas = ref(null)
@@ -285,9 +286,10 @@ async function renderPreview() {
     if (!isVisible || version !== renderVersion || !container.value || !canvas.value) return
     const availableWidth = Math.max(container.value.clientWidth, 1)
     const pixelRatio = Math.min(window.devicePixelRatio || 1, isAppleTouchDevice ? (props.thumbnail ? 1 : 1.25) : 2)
-    const cacheKey = previewCacheKey(pdfSource.value, availableWidth, pixelRatio, props.cropBottom)
+    const cacheKey = previewCacheKey(pdfSource.value, availableWidth, pixelRatio, props.cropBottom, props.pageNumber)
     const preview = cachedPreview(cacheKey)
     if (preview) {
+      if (preview.metrics?.pageCount) emit('page-count', preview.metrics.pageCount)
       const context = canvas.value.getContext('2d', { alpha: false })
       canvas.value.width = preview.canvas.width
       canvas.value.height = preview.canvas.height
@@ -316,7 +318,10 @@ async function renderPreview() {
       }
       pdfDocument = loadedDocument
     }
-    const page = await pdfDocument.getPage(1)
+    const pageCount = pdfDocument.numPages
+    emit('page-count', pageCount)
+    if (props.pageNumber > pageCount) return
+    const page = await pdfDocument.getPage(props.pageNumber)
     if (version !== renderVersion) return
     const initialViewport = page.getViewport({ scale: 1 })
     const pageAspectRatio = initialViewport.width / initialViewport.height
@@ -354,6 +359,7 @@ async function renderPreview() {
         width: initialViewport.width,
         height: initialViewport.height,
         aspectRatio: pageAspectRatio,
+        pageCount,
       })
       emitThumbnail({
         width: initialViewport.width,

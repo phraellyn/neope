@@ -82,6 +82,7 @@ function normalizeEvaluation(group = {}) {
   return {
     structure: stripAttendanceItems(structure),
     weights,
+    trainingStartDate: String(source.trainingStartDate || source.trainingDateRange?.from || ''),
   }
 }
 
@@ -202,6 +203,7 @@ function groupView(id, data, students = null) {
       resultados: results,
       pesos: Object.fromEntries(Object.entries(clone(data.evaluation?.weights, {}) || {})
         .filter(([itemId]) => !legacyAttendanceIds.has(itemId))),
+      trainingStartDate: String(data.evaluation?.trainingStartDate || data.evaluation?.trainingDateRange?.from || ''),
     },
     attendance,
     alumnos: loadedStudents.map((student) => ({
