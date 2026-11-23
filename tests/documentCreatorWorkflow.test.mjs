@@ -10,7 +10,7 @@ import { nextTick } from 'vue'
 const componentPath = resolve('src/components/DocumentCreator.vue')
 let source = compileScript(parse(readFileSync(componentPath, 'utf8')).descriptor, { id: 'workflow-test' }).content
 source = source.replace(/import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2/g, (statement, bindings, quote, target) => {
-  if (target.endsWith('/templates/ejercicios.tex?raw')) return `const ${bindings.trim()} = ${JSON.stringify(readFileSync(resolve('templates/ejercicios.tex'), 'utf8'))};`
+  if (target.includes('/templates/') && target.endsWith('.tex?raw')) return `const ${bindings.trim()} = ${JSON.stringify(readFileSync(resolve('templates', target.split('/').at(-1).replace('?raw', '')), 'utf8'))};`
   if (!target.startsWith('.')) return statement
   if (target.endsWith('.vue')) return `const ${bindings.trim()} = {};`
   if (target.endsWith('/composables/useExerciseImages')) return 'const exerciseVisualReferences = async () => [];'
@@ -50,6 +50,40 @@ try {
 %%% final: \end{document}` })
   const props = { templates: [makeTemplate('a', 'Asignatura'), makeTemplate('b', 'Materia'), { id: 'internal', archivo: 'ejercicio.tex', codigo: '\\documentclass{article}' }], exercises: [], conceptNodes: [], subjectSelections: {}, exerciseCounts: {}, teacherProfile: { centros: [] }, groups: [], compilerBaseUrl: '/compiler-api/v1', aiModel: 'test', aiModelOptions: [], libraryQuery: '', hasMoreExercises: false, loadingMoreExercises: false }
   const state = component.setup(props, { expose() {}, emit() {} })
+  const sheetTemplate = { id: 'sheet', archivo: 'hoja-examen-blanco.tex', nombre: 'Hoja de examen - Blanca', codigo: readFileSync(resolve('templates/hoja-examen-blanco.tex'), 'utf8') }
+  const sheet = component.setup({ ...props, templates: [sheetTemplate], teacherProfile: { centros: [{ centro: 'IES África', curso: '2026-2027' }] } }, { expose() {}, emit() {} })
+  const utilityEntry = await sheet.utilityPdf(sheet.utilitySheets[2])
+  assert.equal(utilityEntry.name, 'Hoja de examen - Reverso cuadriculado')
+  assert.match(requests.at(-1).body.code, /\\cabecerahoja\{IES África\}[\s\S]*\\hojaexamen[\s\S]*\\reversocuadriculado/, 'La utilidad utiliza el centro activo y genera ambas caras')
+  await sheet.utilityPdf(sheet.utilitySheets[1])
+  const gridBody = requests.at(-1).body.code
+  assert.match(gridBody, /\\hojaexamen[\s\S]*\\newpage[\s\S]*\\reversocuadriculado/, 'La hoja cuadriculada usa un reverso sin cabecera')
+  assert.equal((gridBody.match(/\\hojaexamen/g) || []).length, 1, 'La cabecera se imprime solo en el anverso')
+  await sheet.useUtilitySheet(sheet.utilitySheets[2], 'view')
+  assert.equal(sheet.mode.value, 'viewer', 'La utilidad se abre en el visor de documentos')
+  assert.equal(sheet.previewDocuments.value[0].utility, true, 'El visor reconoce que la utilidad no se edita')
+  assert.ok(sheet.previewUrl.value.startsWith('blob:'), 'La vista usa el PDF generado')
+  sheet.newDocument()
+  sheet.selectTemplate(sheet.documentTemplates.value[0])
+  sheet.currentStep.value = 2
+  assert.equal(sheet.canContinue.value, true, 'La hoja de examen se puede crear sin escribir contenido')
+  assert.match(sheet.generatedCodeForTemplate(sheet.selectedTemplates.value[0]), /\\cabecerahoja\{IES África\}/, 'La cabecera usa el centro actual')
+  await sheet.compileCurrentSourceLatex()
+  assert.match(requests.at(-1).body.code, /\\cabecerahoja\{IES África\}[\s\S]*\\hojaexamen/, 'Se puede previsualizar la hoja vacía con su centro')
+  const freeTemplate = { id: 'free', archivo: 'documento-latex-libre.tex', nombre: 'Documento LaTeX libre', codigo: readFileSync(resolve('templates/documento-latex-libre.tex'), 'utf8') }
+  const free = component.setup({ ...props, templates: [freeTemplate] }, { expose() {}, emit() {} })
+  free.newDocument()
+  free.selectTemplate(free.documentTemplates.value[0])
+  const freeCode = String.raw`\documentclass{article}
+\newcommand{\mimarca}{Mi preámbulo}
+\begin{document}
+\mimarca
+\end{document}`
+  free.updateSourceLatex(freeCode)
+  assert.equal(free.generatedCodeForTemplate(free.selectedTemplates.value[0]), freeCode, 'El documento libre conserva el preámbulo y el contenido')
+  assert.equal(free.editablePartsForTemplate(freeCode, free.selectedTemplates.value[0]).content, freeCode, 'El editor final permite editar también el preámbulo')
+  await free.compileCurrentSourceLatex()
+  assert.ok(requests.some((request) => request.url.endsWith('/preambles') && request.body.content?.includes('\\newcommand{\\mimarca}')), 'El preámbulo personalizado llega al compilador')
   const card = { campos: { level: '2º ESO', course: '2º ESO B', title: 'Funciones', date: '2026-11-04' }, plantillas: [{ nombre: 'Examen' }, { nombre: 'Resuelto' }], pdfs: [{ url: 'document.pdf' }] }
   assert.equal(state.documentCardGroup(card), '2º ESO B')
   assert.equal(state.documentCardTitle(card), 'Funciones')

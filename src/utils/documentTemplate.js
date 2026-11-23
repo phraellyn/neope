@@ -233,12 +233,13 @@ export function ensureShortAnswerTikzCompatibility(source) {
 `
   return `${code.slice(0, begin.index)}${fix}${code.slice(begin.index)}`
 }
-export function splitFinalDocumentCode(code, fallbackPreamble = '') {
+export function splitFinalDocumentCode(code, fallbackPreamble = '', { preservePreambleInputs = false } = {}) {
   const activeMatch = (match) => !/^\s*%/.test(code.slice(code.lastIndexOf('\n', match.index) + 1, match.index))
   const begin = [...code.matchAll(/\\begin\s*\{document\}/g)].find(activeMatch)
   const end = [...code.matchAll(/\\end\s*\{document\}/g)].filter(activeMatch).at(-1)
   if (!begin || !end || end.index < begin.index) throw new Error('El código final debe contener \\begin{document} y \\end{document}.')
-  const preamble = code.slice(0, begin.index).replace(/^\s*\\input\s*\{[^}]+\}\s*$/gm, '').trim()
-  const usesExternalPreamble = /^\s*\\input\s*\{[^}]+\}/m.test(code.slice(0, begin.index))
+  const originalPreamble = code.slice(0, begin.index)
+  const preamble = (preservePreambleInputs ? originalPreamble : originalPreamble.replace(/^\s*\\input\s*\{[^}]+\}\s*$/gm, '')).trim()
+  const usesExternalPreamble = !preservePreambleInputs && /^\s*\\input\s*\{[^}]+\}/m.test(originalPreamble)
   return { preamble: usesExternalPreamble ? `${fallbackPreamble}\n${preamble}` : preamble, body: code.slice(begin.index + begin[0].length, end.index).trim() }
 }

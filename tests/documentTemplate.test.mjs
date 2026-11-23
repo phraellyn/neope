@@ -110,6 +110,7 @@ Texto
 \end{document}`
 assert.match(splitFinalDocumentCode(oldCode, '\\documentclass{article}').preamble, /\\documentclass\{article\}/)
 assert.equal(splitFinalDocumentCode(oldCode, 'preamble').body, 'Texto')
+assert.match(splitFinalDocumentCode('\\documentclass{article}\n\\input{ajustes.tex}\n\\begin{document}Hola\\end{document}', '', { preservePreambleInputs: true }).preamble, /\\input\{ajustes\.tex\}/)
 assert.throws(() => splitFinalDocumentCode('Texto incompleto'), /begin/)
 assert.throws(() => readDocumentTemplate('% neope:document {"content":"otro"}'), /content/)
 

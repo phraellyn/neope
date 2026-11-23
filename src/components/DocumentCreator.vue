@@ -3,6 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import standardExerciseTemplate from '../../templates/ejercicios.tex?raw'
+import blankExamSheet from '../../templates/hoja-examen-blanco.tex?raw'
+import gridExamSheet from '../../templates/hoja-examen-cuadriculada.tex?raw'
+import reverseGridExamSheet from '../../templates/hoja-examen-reverso-cuadriculado.tex?raw'
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { auth, db, functions, storage } from '../services/firebase'
 import { mathSubjects } from '../data/mathCurriculum'
@@ -708,6 +711,8 @@ const selectedTemplates = computed(() => selectedTemplateKeys.value
   .map((key) => documentTemplates.value.find((template) => template.key === key))
   .filter(Boolean))
 const requiresExercises = computed(() => selectedTemplates.value.some((template) => template.metadata.content === 'exercises'))
+const isReadyMadeResource = computed(() => selectedTemplates.value.length > 0 && selectedTemplates.value.every((template) => template.metadata.allowEmptyContent === true))
+const isDirectLatexResource = computed(() => isReadyMadeResource.value || (selectedTemplates.value.length === 1 && selectedTemplates.value[0].metadata.fullDocument === true))
 const supportsAssessment = computed(() => selectedTemplates.value.some((template) => template.metadata.assessment))
 const levelOptions = [...new Set(mathSubjects.map((subject) => subject.course))]
 
@@ -847,6 +852,96 @@ const selectedCenter = computed(() => fieldValues.center
   ? (props.teacherProfile?.centros || []).find((center) => center.centro === fieldValues.center) || null
   : currentCenter.value)
 const currentCenterLogo = computed(() => selectedCenter.value?.imagenes?.find((image) => image?.url)?.url || '')
+const utilitySheets = Object.freeze([
+  { key: 'blanca', name: 'Hoja de examen - Blanca', description: 'Anverso en blanco', code: blankExamSheet },
+  { key: 'cuadriculada', name: 'Hoja de examen - Cuadriculada', description: 'Cuadrícula en ambas caras', code: gridExamSheet },
+  { key: 'reverso', name: 'Hoja de examen - Reverso cuadriculado', description: 'Anverso blanco · reverso cuadriculado', code: reverseGridExamSheet },
+])
+const utilityPdfs = reactive({})
+const utilityBusy = reactive({})
+const utilityPreviewFailed = reactive({})
+const utilityError = ref('')
+const utilityPending = new Map()
+let utilityDisposed = false
+const utilityCenterSignature = computed(() => JSON.stringify([
+  currentCenter.value?.centro || '',
+  currentCenter.value?.imagenes?.find((image) => image?.url)?.url || '',
+]))
+
+async function utilityPdf(sheet) {
+  const signature = utilityCenterSignature.value
+  const cached = utilityPdfs[sheet.key]
+  if (cached?.signature === signature) return cached
+  const pendingKey = sheet.key + ':' + signature
+  if (utilityPending.has(pendingKey)) return utilityPending.get(pendingKey)
+  const job = (async () => {
+    const center = currentCenter.value
+    if (!center?.centro) throw new Error('Configura primero el centro actual en tu perfil.')
+    const metadata = readDocumentTemplate(sheet.code)
+    const latexText = (value) => String(value).replace(/[\\{}%$&#_^~]/g, (character) => ({
+      '\\': '\\textbackslash{}', '{': '\\{', '}': '\\}', '%': '\\%', '$': '\\$',
+      '&': '\\&', '#': '\\#', '_': '\\_', '^': '\\textasciicircum{}', '~': '\\textasciitilde{}',
+    })[character])
+    const valueFor = (field) => field.type === 'center' ? latexText(center.centro) : ''
+    const code = [sheet.code, renderTemplateWrapper(metadata.before, metadata, valueFor), renderTemplateWrapper(metadata.after, metadata, valueFor)].join('\n')
+    const { preamble, body } = splitFinalDocumentCode(code)
+    const assets = {}
+    const logo = center?.imagenes?.find((image) => image?.url)?.url
+    if (logo) assets['logo.png'] = await grayscaleLogoAsset(logo)
+    const preambleName = 'utility-' + sheet.key + '-' + crypto.randomUUID() + '.tex'
+    await compilerRequest('/preambles', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: preambleName, content: preamble }),
+    })
+    const response = await compilerRequest('/compile', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: body, preamble_name: preambleName, assets }),
+    })
+    const blob = await response.blob()
+    const entry = { name: sheet.name, blob, signature }
+    if (!utilityDisposed && signature === utilityCenterSignature.value) {
+      if (utilityPdfs[sheet.key]?.url) URL.revokeObjectURL(utilityPdfs[sheet.key].url)
+      entry.url = URL.createObjectURL(blob)
+      utilityPdfs[sheet.key] = entry
+      utilityPreviewFailed[sheet.key] = ''
+    }
+    return entry
+  })()
+  utilityPending.set(pendingKey, job)
+  try { return await job } finally { utilityPending.delete(pendingKey) }
+}
+
+async function useUtilitySheet(sheet, action) {
+  utilityBusy[sheet.key] = true
+  utilityError.value = ''
+  try {
+    const entry = await utilityPdf(sheet)
+    if (action === 'view') {
+      resetWorkflow()
+      const previewEntry = { ...entry, templateKey: 'utility-' + sheet.key, utility: true, url: URL.createObjectURL(entry.blob) }
+      viewedDocument.value = { campos: { title: sheet.name } }
+      previewDocuments.value = [previewEntry]
+      selectedPreviewTemplateKey.value = previewEntry.templateKey
+      previewUrl.value = previewEntry.url
+      mode.value = 'viewer'
+    } else await downloadGeneratedDocument(entry)
+  } catch (error) {
+    utilityError.value = 'No se ha podido preparar ' + sheet.name + ': ' + (error.message || 'error de compilación')
+  } finally {
+    utilityBusy[sheet.key] = false
+  }
+}
+
+async function prepareUtilitySheets(signature = utilityCenterSignature.value, currentMode = mode.value) {
+  if (currentMode !== 'library' || !currentCenter.value || !auth.currentUser) return
+  for (const sheet of utilitySheets) {
+    if (utilityDisposed || signature !== utilityCenterSignature.value || mode.value !== 'library') break
+    try { await utilityPdf(sheet) } catch { utilityPreviewFailed[sheet.key] = signature }
+  }
+}
+watch([utilityCenterSignature, mode], ([signature, currentMode]) => {
+  void prepareUtilitySheets(signature, currentMode)
+})
 const teacherSignatureImages = computed(() => (Array.isArray(props.teacherProfile?.firmas) ? props.teacherProfile.firmas : [])
   .filter((image) => image?.url))
 const filteredDocuments = computed(() => {
@@ -904,7 +999,7 @@ const canContinue = computed(() => {
   if (currentStep.value === 2) {
     const type = documentContent.value.source.type
     if (type === DOCUMENT_CONTENT_SOURCE_TYPES.EXERCISE_BANK) return selectedExercises.value.length > 0
-    if (type === DOCUMENT_CONTENT_SOURCE_TYPES.LATEX) return Boolean(sourceLatexCode.value.trim())
+    if (type === DOCUMENT_CONTENT_SOURCE_TYPES.LATEX) return Boolean(sourceLatexCode.value.trim()) || selectedTemplates.value.every((template) => template.metadata.allowEmptyContent === true)
     if ([DOCUMENT_CONTENT_SOURCE_TYPES.IMAGE, DOCUMENT_CONTENT_SOURCE_TYPES.PDF].includes(type)) {
       return Boolean(sourceLatexCode.value.trim() || sourceFiles.value.length)
     }
@@ -2565,6 +2660,7 @@ function criteriaCommandFallback() {
 
 function generatedCodeForTemplate(template, options = {}) {
   if (!template) return ''
+  if (template.metadata.fullDocument === true) return String(typeof options.directSourceCode === 'string' ? options.directSourceCode : sourceLatexCode.value)
   const variation = documentContent.value.source.options?.variation
   const layoutSource = options.layoutSource || (variation ? finalCodes[template.key] : '')
   if (variation && layoutSource?.includes('% neope:document-block')) {
@@ -2799,11 +2895,11 @@ async function copyCompileError() {
 }
 
 function activeDocumentCode(template = previewTemplate.value || selectedTemplate.value) {
-  return finalCodes[template?.key] ?? normalizeCriteriaUnicode(generatedCodeForTemplate(template))
+  return finalCodes[template?.key] ?? (template?.metadata.fullDocument ? generatedCodeForTemplate(template) : normalizeCriteriaUnicode(generatedCodeForTemplate(template)))
 }
 
 function editablePartsForTemplate(code, template) {
-  if (!template) return { prefix: '', content: String(code || ''), suffix: '' }
+  if (!template || template.metadata.fullDocument === true) return { prefix: '', content: String(code || ''), suffix: '' }
   const valueFor = (field) => documentFieldValue(field, template)
   try {
     const candidates = [template.metadata]
@@ -3435,12 +3531,12 @@ async function compileDocument(force = false, options = {}) {
         code = codeForTemplate(template)
         if (directSourceCode === null && code !== activeDocumentCode(template)) finalCodes[template.key] = code
         inputSource = directSourceCode ?? (contentWorkspaceMode.value === 'latex' ? sourceLatexCode.value : null)
-        const repairedCode = ensureShortAnswerTikzCompatibility(ensureTikzPaddingCompatibility(normalizeAlignedLineBreaks(repairNestedLegacyDocument(code))))
+        const repairedCode = template.metadata.fullDocument === true ? code : ensureShortAnswerTikzCompatibility(ensureTikzPaddingCompatibility(normalizeAlignedLineBreaks(repairNestedLegacyDocument(code))))
         if (repairedCode !== code) {
           finalCodes[template.key] = repairedCode
           code = repairedCode
         }
-        const split = splitFinalDocumentCode(code, template.codigo)
+        const split = splitFinalDocumentCode(code, template.codigo, { preservePreambleInputs: template.metadata.fullDocument === true })
         compilerPreamble = split.preamble
         compilerBody = split.body
         const compilerName = `document-${codeCompilationId}-${template.key.replace(/[^A-Za-z0-9_-]/g, '-')}.tex`
@@ -3507,7 +3603,7 @@ async function compileDocument(force = false, options = {}) {
 
 async function compileCurrentSourceLatex() {
   const code = String(sourceLatexCode.value || '')
-  if (!code.trim()) {
+  if (!code.trim() && !selectedTemplates.value.every((template) => template.metadata.allowEmptyContent === true)) {
     compileError.value = 'Escribe o genera primero el código LaTeX que quieres compilar.'
     compileErrorVisible.value = true
     return
@@ -4107,10 +4203,13 @@ async function saveDocument() {
 }
 
 onMounted(() => {
+  void prepareUtilitySheets()
   void loadDocuments()
   void loadDrafts()
 })
 onBeforeUnmount(() => {
+  utilityDisposed = true
+  for (const entry of Object.values(utilityPdfs)) if (entry?.url) URL.revokeObjectURL(entry.url)
   void saveDraft()
   cancelAnimationFrame(filterApplyFrame)
   clearTimeout(filterApplyTimer)
@@ -4141,6 +4240,34 @@ defineExpose({
     <DocumentVariationDialog :controller="documentVariation" :models="aiModelOptions" :model="documentAiModel" @update:model="documentAiModel = $event" />
     <section v-if="mode === 'library'" class="document-library">
       <v-alert v-if="draftError" type="error" variant="tonal" density="compact" closable @click:close="draftError = ''">{{ draftError }}</v-alert>
+      <div class="document-utilities">
+        <div class="document-utilities-grid">
+          <v-card v-for="sheet in utilitySheets" :key="sheet.key" class="document-library-card document-utility-card" elevation="1">
+            <header class="document-library-card-header">
+              <div class="document-library-card-meta"><span>Utilidad</span></div>
+              <strong :title="sheet.name">{{ sheet.name }}</strong>
+            </header>
+            <button type="button" class="document-library-thumbnail document-utility-thumbnail" :aria-label="'Visualizar ' + sheet.name" :disabled="utilityBusy[sheet.key]" @click="useUtilitySheet(sheet, 'view')">
+              <span v-if="utilityPdfs[sheet.key]?.signature === utilityCenterSignature && utilityPdfs[sheet.key]?.url" class="document-library-paper">
+                <ExercisePdfPreview :src="utilityPdfs[sheet.key].url" :title="'Primera página de ' + sheet.name" :aspect-ratio="0.707" thumbnail />
+              </span>
+              <span v-else class="document-utility-placeholder"><v-icon icon="mdi-file-document-outline" size="28" /><small>{{ utilityPreviewFailed[sheet.key] === utilityCenterSignature ? 'Vista previa no disponible' : 'Preparando vista previa' }}</small></span>
+            </button>
+            <footer>
+              <div class="document-library-templates"><span :title="sheet.description">{{ sheet.description }}</span></div>
+              <div class="document-library-actions">
+                <v-tooltip text="Descargar PDF" location="top">
+                  <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-download" size="x-small" rounded="circle" variant="text" color="primary" :loading="utilityBusy[sheet.key]" :aria-label="'Descargar ' + sheet.name" @click="useUtilitySheet(sheet, 'download')" /></template>
+                </v-tooltip>
+                <v-tooltip text="Visualizar PDF" location="top">
+                  <template #activator="{ props: tooltipProps }"><v-btn v-bind="tooltipProps" icon="mdi-eye-outline" size="x-small" rounded="circle" variant="text" color="primary" :disabled="utilityBusy[sheet.key]" :aria-label="'Visualizar ' + sheet.name" @click="useUtilitySheet(sheet, 'view')" /></template>
+                </v-tooltip>
+              </div>
+            </footer>
+          </v-card>
+        </div>
+        <v-alert v-if="utilityError" type="error" variant="tonal" density="compact" closable @click:close="utilityError = ''">{{ utilityError }}</v-alert>
+      </div>
       <div v-if="isLoadingDocuments" class="document-library-empty">
         <v-progress-circular indeterminate color="primary" />
         <span>Cargando documentos…</span>
@@ -4238,9 +4365,9 @@ defineExpose({
               <span>{{ entry.name }}</span>
             </button>
             <span class="document-preview-actions">
-              <v-btn icon="mdi-code-tags" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Mostrar código" @click.stop="openFinalCode(entry.templateKey)" />
+              <v-btn v-if="!entry.utility" icon="mdi-code-tags" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Mostrar código" @click.stop="openFinalCode(entry.templateKey)" />
               <v-btn icon="mdi-download" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Descargar documento" :disabled="finalCodes[entry.templateKey] !== undefined && finalCodes[entry.templateKey] !== entry.code" @click.stop="downloadGeneratedDocument(entry)" />
-              <v-btn icon="mdi-printer-outline" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Imprimir documento" :disabled="finalCodes[entry.templateKey] !== undefined && finalCodes[entry.templateKey] !== entry.code" @click.stop="printGeneratedDocument(entry)" />
+              <v-btn v-if="!entry.utility" icon="mdi-printer-outline" size="x-small" density="comfortable" variant="text" rounded="circle" aria-label="Imprimir documento" :disabled="finalCodes[entry.templateKey] !== undefined && finalCodes[entry.templateKey] !== entry.code" @click.stop="printGeneratedDocument(entry)" />
             </span>
           </div>
           <div
@@ -4461,6 +4588,7 @@ defineExpose({
             >Filtros</v-btn>
             <v-spacer />
             <v-select
+              v-if="!isDirectLatexResource"
               v-model="documentAiModel"
               :items="aiModelOptions"
               item-title="title"
@@ -4487,6 +4615,7 @@ defineExpose({
               <v-card class="document-ai-instructions"><v-card-text><v-textarea v-model="generationInstructions" label="Indicaciones para los ejercicios (opcional)" placeholder="Por ejemplo: evita las funciones con radicales." rows="3" auto-grow maxlength="3000" variant="outlined" hide-details /></v-card-text></v-card>
             </v-menu>
             <v-btn
+              v-if="!isDirectLatexResource"
               prepend-icon="mdi-auto-fix"
               size="small"
               rounded="pill"
@@ -4495,6 +4624,7 @@ defineExpose({
               :loading="isGeneratingContent || isCompiling"
               @click="generateOrRegenerateContent"
             >{{ previewDocuments.length ? 'Regenerar' : 'Generar' }}</v-btn>
+            <v-btn v-else prepend-icon="mdi-eye-outline" size="small" variant="tonal" color="primary" :loading="isCompiling" @click="compileCurrentSourceLatex">Previsualizar</v-btn>
           </header>
 
           <div class="document-content-body">
@@ -4547,7 +4677,7 @@ defineExpose({
                   :alt="sourcePreviewFile.name"
                   class="document-source-image-preview"
                 >
-                <div v-else class="document-source-preview-empty"><v-icon icon="mdi-file-eye-outline" size="48" /><span>Genera el contenido para ver la vista previa.</span></div>
+                <div v-else class="document-source-preview-empty"><v-icon icon="mdi-file-eye-outline" size="48" /><span>{{ isDirectLatexResource ? 'Pulsa «Previsualizar» para ver el documento.' : 'Genera el contenido para ver la vista previa.' }}</span></div>
               </section>
             </div>
 
@@ -4964,6 +5094,15 @@ defineExpose({
 @media (max-width: 760px) { .final-code-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); } }
 .document-creator { width: 100%; height: 100%; min-height: 0; overflow: hidden; background: #f4f7fb; }
 .document-library { position: relative; width: 100%; height: 100%; overflow: auto; padding: 10px; }
+.document-utilities { position: sticky; z-index: 2; top: -10px; margin: -10px -10px 12px; padding: 10px; background: #f2f6fb; box-shadow: 0 4px 9px rgba(33, 64, 103, .08); }
+.document-utilities-grid { display: flex; gap: 12px; overflow-x: auto; padding: 1px 1px 4px; }
+.document-utility-card { flex: 0 0 160px; height: 220px; }
+.document-utility-card .document-library-card-header { background: #355d8e; border-bottom-color: #355d8e; }
+.document-utility-card .document-library-card-meta { color: #dbe7f5; }
+.document-utility-card .document-library-card-header strong { color: #fff; }
+.document-utility-thumbnail { cursor: pointer; }
+.document-utility-placeholder { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 3px; width: 100%; height: 100%; color: #8b9bb0; }
+.document-utility-placeholder small { font-size: .55rem; }
 .document-library-error { position: sticky; z-index: 3; top: 0; margin-bottom: 10px; }
 .document-library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 160px)); grid-auto-rows: 220px; align-content: start; gap: 12px; }
 .document-library-card { display: flex; min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid #dce5f0; border-radius: 7px !important; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }

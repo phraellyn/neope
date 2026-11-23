@@ -38,6 +38,7 @@ import ExerciseGradingEditor from './components/ExerciseGradingEditor.vue'
 import ExerciseVariantSelector from './components/ExerciseVariantSelector.vue'
 import MathConceptMap from './components/MathConceptMap.vue'
 import DocumentCreator from './components/DocumentCreator.vue'
+import freeLatexDocument from '../templates/documento-latex-libre.tex?raw'
 import Gradebook from './components/Gradebook.vue'
 import Classroom from './components/Classroom.vue'
 import StudentEvaluations from './components/StudentEvaluations.vue'
@@ -275,6 +276,13 @@ const exercisesError = ref('')
 const latexEditorHost = ref(null)
 let latexCodeEditor
 const templates = ref([])
+const documentCreatorTemplates = computed(() => {
+  const builtins = [
+    { id: 'builtin-documento-latex-libre', archivo: 'documento-latex-libre.tex', nombre: 'Documento LaTeX libre', codigo: freeLatexDocument },
+  ]
+  const stored = new Set(templates.value.map((template) => String(template.archivo || '').toLowerCase()))
+  return [...templates.value, ...builtins.filter((template) => !stored.has(template.archivo))]
+})
 const selectedTemplateId = ref(null)
 const templateEditor = ref(emptyTemplate())
 const isEditingTemplate = ref(false)
@@ -6165,7 +6173,7 @@ onBeforeUnmount(() => {
         <section v-else-if="active === 'Documentos' && documentsTab === 'documents'" class="documents-page">
           <DocumentCreator
             ref="documentCreatorRef"
-            :templates="templates"
+            :templates="documentCreatorTemplates"
             :exercises="exercises"
             :concept-nodes="mathConceptNodes"
             :subject-selections="mathConceptSubjectSelections"
