@@ -137,13 +137,14 @@ export function trainingVersionPublished(exercise, variationId = null) {
   if (!variationId) return exercise?.studentTrainingPublished === true
   const variant = (exercise?.variaciones || []).find((item) => item?.id === variationId)
   if (!variant) return false
-  return typeof variant.studentTrainingPublished === 'boolean' ? variant.studentTrainingPublished : exercise.studentTrainingPublished === true
+  return variant.studentTrainingPublished === true
 }
 
-export function selectTrainingCandidate(exercises, selected, nodes, completed = [], { repeat = false, active = [], deferred = [] } = {}) {
+export function selectTrainingCandidate(exercises, selected, nodes, completed = [], { repeat = false, active = [], deferred = [], previousConceptId = '' } = {}) {
   const used = new Set(completed)
   const reserved = new Set(active)
-  const selectedLeaves = new Set(terminalConceptsForSelection(selected, nodes))
+  const orderedLeaves = terminalConceptsForSelection(selected, nodes)
+  const selectedLeaves = new Set(orderedLeaves)
   const original = []
   const variants = []
   for (const exercise of exercises || []) {
@@ -162,14 +163,22 @@ export function selectTrainingCandidate(exercises, selected, nodes, completed = 
       const key = `${exercise.id}:${index ? version.id : 'original'}`
       if (reserved.has(key) || (!repeat && used.has(key))) return
       const assessedSegments = segments.map((segment, segmentIndex) => ({ ...segment, conceptIds: segmentConcepts[segmentIndex] }))
-      ;(index ? variants : original).push({ exerciseId: exercise.id, variationId: index ? version.id : null, key, exact, segments: assessedSegments })
+      const conceptIds = [...new Set(segmentConcepts.flat())].filter((id) => selectedLeaves.has(id))
+      ;(index ? variants : original).push({ exerciseId: exercise.id, variationId: index ? version.id : null, key, exact, segments: assessedSegments, conceptIds })
     })
   }
   const candidates = [...original, ...variants]
   const postponed = new Map(unique(deferred).map((key, index) => [key, index]))
-  return candidates.find((candidate) => candidate.exact && !postponed.has(candidate.key))
-    || candidates.find((candidate) => !postponed.has(candidate.key))
-    || candidates.reduce((best, candidate) => (!best || postponed.get(candidate.key) < postponed.get(best.key) ? candidate : best), null)
+  const lastIndex = orderedLeaves.indexOf(previousConceptId)
+  const start = lastIndex < 0 ? 0 : (lastIndex + 1) % orderedLeaves.length
+  const cycle = [...orderedLeaves.slice(start), ...orderedLeaves.slice(0, start)]
+  for (const conceptId of cycle) {
+    const available = candidates.filter((candidate) => candidate.conceptIds.includes(conceptId) && !postponed.has(candidate.key))
+    const candidate = available.find((item) => item.exact) || available[0]
+    if (candidate) return { ...candidate, targetConceptId: conceptId }
+  }
+  const fallback = candidates.reduce((best, candidate) => (!best || postponed.get(candidate.key) < postponed.get(best.key) ? candidate : best), null)
+  return fallback ? { ...fallback, targetConceptId: cycle.find((id) => fallback.conceptIds.includes(id)) } : null
 }
 
 export function conceptProgress(attempts, nodes) {

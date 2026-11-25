@@ -52,7 +52,7 @@ assert.deepEqual(trainingSegments({ parts: [{ ...exercise.parts[0], contentIds: 
 assert.deepEqual(trainingSegments({ parts: [{ ...exercise.parts[0], workedSolution: null }] }), [])
 assert.deepEqual(trainingSegments({ parts: [exercise.parts[0], exercise.parts[0]] }), [])
 assert.equal(trainingSegments({ contenidosGenerales: [], contenidos: ['a1'], gradingCriteria: [{ id: 'c', description: 'Paso', points: 1 }], workedSolution: { latex: 'Solución' } })[0].conceptIds[0], 'a1')
-const bank = [{ id: 'x', ...exercise, studentTrainingPublished: true, pdf: { statement: 'statement.pdf', solved: 'solved.pdf' }, variaciones: [{ ...exercise, id: 'v1', pdf: { statement: 's.pdf', solved: 'r.pdf' } }] }]
+const bank = [{ id: 'x', ...exercise, studentTrainingPublished: true, pdf: { statement: 'statement.pdf', solved: 'solved.pdf' }, variaciones: [{ ...exercise, id: 'v1', studentTrainingPublished: true, pdf: { statement: 's.pdf', solved: 'r.pdf' } }] }]
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes).key, 'x:original')
 const bankWithAncestors = [{ ...bank[0], parts: [{ ...exercise.parts[0], contentIds: ['root', 'a', 'a1'] }] }]
 assert.deepEqual(selectTrainingCandidate(bankWithAncestors, ['a1'], nodes).segments[0].conceptIds, ['a1'], 'Solo se puntúan los conceptos finales concretos')
@@ -75,11 +75,34 @@ assert.equal(selectTrainingCandidate(bank, ['a'], nodes, [], { deferred: ['x:ori
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:v1'], { deferred: ['x:original'] }).key, 'x:original', 'El único ejercicio disponible sigue pudiendo proponerse')
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:original', 'x:v1']), null)
 assert.equal(selectTrainingCandidate(bank, ['a'], nodes, ['x:original'], { repeat: true }).key, 'x:original')
-assert.equal(selectTrainingCandidate([{ ...bank[0], studentTrainingPublished: false }], ['a'], nodes), null)
-assert.equal(selectTrainingCandidate([{ ...bank[0], studentTrainingPublished: undefined }], ['a'], nodes), null, 'Los ejercicios existentes no se publican por defecto')
+assert.equal(selectTrainingCandidate([{ ...bank[0], studentTrainingPublished: false, variaciones: [] }], ['a'], nodes), null)
+assert.equal(selectTrainingCandidate([{ ...bank[0], studentTrainingPublished: undefined, variaciones: [] }], ['a'], nodes), null, 'Los ejercicios existentes no se publican por defecto')
 const separate = { ...bank[0], studentTrainingPublished: false, variaciones: [{ ...bank[0].variaciones[0], studentTrainingPublished: true }] }
 assert.equal(selectTrainingCandidate([separate], ['a'], nodes).key, 'x:v1', 'Una variante publicada funciona aunque el original esté oculto')
 assert.equal(selectTrainingCandidate([{ ...separate, studentTrainingPublished: true, variaciones: [{ ...separate.variaciones[0], studentTrainingPublished: false }] }], ['a'], nodes, ['x:original']), null, 'Una variante oculta no se propone aunque el original esté publicado')
+assert.equal(selectTrainingCandidate([{ ...separate, studentTrainingPublished: true, variaciones: [{ ...separate.variaciones[0], studentTrainingPublished: undefined }] }], ['a'], nodes, ['x:original']), null, 'Una variante antigua sin publicación explícita no se propone')
+const cycleBank = ['a1', 'a2', 'b'].map((concept, index) => ({
+  id: 'cycle' + index, studentTrainingPublished: false, variaciones: [
+    { ...bank[0].variaciones[0], id: 'published', studentTrainingPublished: true, parts: [{ ...exercise.parts[0], contentIds: [concept] }] },
+    { ...bank[0].variaciones[0], id: 'hidden', studentTrainingPublished: false, parts: [{ ...exercise.parts[0], contentIds: [concept] }] },
+  ],
+}))
+const cycleSelection = ['a1', 'a2', 'b']
+let lastConcept = ''
+const cycleResults = []
+for (let index = 0; index < 6; index++) {
+  const chosen = selectTrainingCandidate(cycleBank, cycleSelection, nodes, [], { previousConceptId: lastConcept, repeat: true })
+  cycleResults.push([chosen.targetConceptId, chosen.key])
+  lastConcept = chosen.targetConceptId
+}
+assert.deepEqual(cycleResults.map(([concept]) => concept), ['b', 'a1', 'a2', 'b', 'a1', 'a2'], 'Se recorren los conceptos en el orden del mapa y se vuelve a empezar')
+assert.ok(cycleResults.every(([, key]) => key.endsWith(':published')), 'Ni originales ni variantes sin publicar participan en el ciclo')
+const withoutA1 = selectTrainingCandidate(cycleBank, cycleSelection, nodes, ['cycle0:published'], { previousConceptId: 'b' })
+assert.equal(withoutA1.targetConceptId, 'a2', 'Se salta el concepto sin ejercicios disponibles')
+const deferredCycle = selectTrainingCandidate(cycleBank, cycleSelection, nodes, [], { previousConceptId: 'b', deferred: ['cycle0:published'] })
+assert.equal(deferredCycle.targetConceptId, 'a2', 'Un ejercicio descartado no desplaza a otro disponible en el ciclo')
+const mixedForCycle = { ...cycleBank[0], id: 'mixed-cycle', variaciones: [{ ...cycleBank[0].variaciones[0], parts: [{ ...exercise.parts[0], contentIds: ['a1', 'b'] }] }] }
+assert.equal(selectTrainingCandidate([mixedForCycle, cycleBank[2]], cycleSelection, nodes, [], { previousConceptId: 'b' }).targetConceptId, 'a1', 'Un ejercicio mixto puede cubrir el siguiente concepto del ciclo')
 const ready = { ...exercise, parts: [{ ...exercise.parts[0], points: 2, statement: { latex: 'Calcula el apartado', pdf: { storagePath: 'ejercicios/x/part-statement.pdf' } } }], statement: { latex: 'Calcula' }, pdf: { statement: { storagePath: 'ejercicios/x/statement.pdf' }, solved: { storagePath: 'ejercicios/x/solved.pdf' } } }
 assert.equal(trainingReadiness(ready, { exerciseId: 'x', bucketName: 'bucket' }).complete, true)
 assert.equal(trainingReadiness({ ...ready, parts: [{ ...ready.parts[0], contentIds: [] }] }, { exerciseId: 'x', bucketName: 'bucket' }).complete, false)

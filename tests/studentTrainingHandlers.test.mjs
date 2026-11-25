@@ -38,7 +38,15 @@ assert.equal((await api.publishedExam(request({ itemId: 'exam' }))).pdf.kind, 's
 missingPaths.delete('documentos/doc/solved.pdf')
 assert.equal((await api.publishedExam(request({ itemId: 'exam' }))).pdf.kind, 'solved')
 store.get('grupos/g1/alumnos/ABC234').results.exam.manualTotal = 7
-assert.equal((await api.publishedExam(request({ itemId: 'exam' }))).matrix, null, 'Manual grades do not expose a matrix')
+store.get('grupos/g1/alumnos/ABC234').results.exam.feedback = { general: 'Cuida la notación' }
+assert.equal((await api.publishedExam(request({ itemId: 'exam' }))).pdf, null, 'Older clients keep their manual feedback view')
+const manualExam = await api.publishedExam(request({ itemId: 'exam', includeManualSolution: true }))
+assert.equal(manualExam.matrix, null, 'Manual grades do not expose a matrix')
+assert.equal(manualExam.pdf.kind, 'solved', 'Manual grades expose the solved PDF')
+assert.equal(manualExam.feedback.general, 'Cuida la notación', 'Teacher feedback remains available')
+missingPaths.add('documentos/doc/solved.pdf')
+assert.equal((await api.publishedExam(request({ itemId: 'exam', includeManualSolution: true }))).pdf, null, 'Manual grades do not expose an unrelated statement when the solution is missing')
+missingPaths.delete('documentos/doc/solved.pdf')
 delete store.get('grupos/g1/alumnos/ABC234').results.exam.manualTotal
 await assert.rejects(() => api.publishedExam({ auth: { uid: 'other', token: { role: 'student', studentCode: 'ABC234' } }, data: { groupId: 'g1', itemId: 'exam' } }), /No tienes acceso/)
 delete store.get('ejercicios/ex1').studentTrainingPublished
@@ -245,4 +253,35 @@ const mixedLoaded = await api.load(request({ groupId: 'g2' }))
 assert.equal(mixedLoaded.history[0].obtained, 4, 'La nota del ejercicio incluye todos los apartados')
 assert.equal(mixedLoaded.progress.a.obtained, 2)
 assert.equal(mixedLoaded.progress.b.obtained, 2, 'Los conceptos adicionales también reciben puntuación')
+store.set('studentAccessCodes/ABC234', { active: true, authUid: 'user', groupIds: ['g1', 'g2', 'g3'] })
+store.set('grupos/g3', { subjectId: 'subject3', teacherId: 'teacher' })
+store.set('grupos/g3/alumnos/ABC234', {})
+const cycleNodes = ['ca', 'cb', 'cc', 'cd'].map((id) => ({ id, title: id }))
+store.set('especialidades/Matemáticas', { nodes: cycleNodes, asignaturas: { subject3: cycleNodes.map((node) => node.id) } })
+for (const { id: concept } of cycleNodes) {
+  const rootId = 'root-' + concept
+  const variant = (id, published) => ({
+    id, studentTrainingPublished: published, statement: { latex: 'Calcula' }, contenidos: [concept],
+    gradingCriteria: [{ id: 'criterion', description: 'Paso', points: 2 }], workedSolution: { latex: 'Solución' },
+    pdf: { statement: { storagePath: 'ejercicios/' + rootId + '/' + id + '-statement.pdf' }, solved: { storagePath: 'ejercicios/' + rootId + '/' + id + '-solved.pdf' } },
+  })
+  store.set('ejercicios/' + rootId, {
+    ...variant('original', false), id: undefined, curriculum: { subjectId: 'subject3' },
+    variaciones: [variant('visible1', true), variant('visible2', true), variant('private', false), variant('legacy', undefined)],
+  })
+}
+const cycleIds = cycleNodes.map((node) => node.id)
+for (const expected of [...cycleIds, 'ca']) {
+  const chosen = await api.start(request({ groupId: 'g3', selectedConceptIds: cycleIds }))
+  assert.equal(chosen.exerciseId, 'root-' + expected, 'El turno se conserva al completar y volver a solicitar')
+  assert.match(chosen.key, /:visible[12]$/, 'Nunca se proponen originales ni variantes sin publicar')
+  await api.update(request({ groupId: 'g3', sessionId: chosen.id, action: 'reveal' }))
+  await api.update(request({ groupId: 'g3', sessionId: chosen.id, action: 'complete', criteriaIds: ['exercise:criterion'] }))
+}
+const discardB = await api.start(request({ groupId: 'g3', selectedConceptIds: cycleIds }))
+assert.equal(discardB.exerciseId, 'root-cb')
+await api.update(request({ groupId: 'g3', sessionId: discardB.id, action: 'abandon' }))
+const afterDiscardB = await api.start(request({ groupId: 'g3', selectedConceptIds: cycleIds }))
+assert.equal(afterDiscardB.exerciseId, 'root-cc', 'Descartar también avanza el turno')
+await api.update(request({ groupId: 'g3', sessionId: afterDiscardB.id, action: 'abandon' }))
 console.log('Entrenamiento: acceso, solución protegida, puntuación y no repetición verificados.')

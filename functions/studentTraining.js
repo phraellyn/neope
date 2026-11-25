@@ -102,11 +102,12 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     const active = sessions.docs.map((doc) => doc.data()).filter((item) => ['active', 'review'].includes(item.status)).map((item) => item.key)
     const previousSession = sessions.docs.find((doc) => doc.id === data.groupId)?.data()
     const deferredKeys = unique(previousSession?.deferredKeys).slice(-1000)
+    const previousConceptId = previousSession?.targetConceptId || (previousSession?.segments || []).flatMap((segment) => segment.conceptIds || []).find((id) => selected.includes(id)) || ''
     if (sessions.docs.some((doc) => doc.id === data.groupId && ['active', 'review'].includes(doc.data().status))) throw new HttpsError('failed-precondition', 'Ya hay un ejercicio en curso.')
     let candidate, version, statement, solution
     const unavailable = Array.isArray(data.excludeKeys) ? data.excludeKeys.filter((key) => typeof key === 'string' && key.length <= 1000).slice(0, 50) : []
     while (true) {
-      candidate = selectTrainingCandidate(exercises, selected, nodes, completed, { repeat: data.repeat === true, active: [...active, ...unavailable], deferred: deferredKeys })
+      candidate = selectTrainingCandidate(exercises, selected, nodes, completed, { repeat: data.repeat === true, active: [...active, ...unavailable], deferred: deferredKeys, previousConceptId })
       if (!candidate) throw new HttpsError('not-found', unavailable.length ? 'No quedan ejercicios disponibles. Algunos necesitan volver a compilarse.' : 'No quedan ejercicios disponibles para estos contenidos.')
       const root = exercises.find((exercise) => exercise.id === candidate.exerciseId)
       version = candidate.variationId ? root.variaciones.find((item) => item.id === candidate.variationId) : root
@@ -132,7 +133,7 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     }
     const rawDuration = Number(version.durationMinutes || version.structure?.tiempo)
     const durationMinutes = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 15
-    const session = { id, groupId: data.groupId, subjectId: context.group.subjectId, status: 'active', key: candidate.key, exerciseId: candidate.exerciseId, variationId: candidate.variationId, selectedConceptIds: selected, deferredKeys,
+    const session = { id, groupId: data.groupId, subjectId: context.group.subjectId, status: 'active', key: candidate.key, exerciseId: candidate.exerciseId, variationId: candidate.variationId, selectedConceptIds: selected, targetConceptId: candidate.targetConceptId, deferredKeys,
       segments: candidate.segments, statementPath: privateStatement, solutionPath: privateSolution, durationMinutes, timer: { elapsedMs: 0, runningSince: Date.now(), alerted: false } }
     try { await db.runTransaction(async (tx) => {
       const current = await tx.get(context.session)
@@ -471,7 +472,12 @@ export function studentTrainingHandlers({ db, bucket, auth }) {
     const result = results[itemId]
     const manualScore = Number.isFinite(result?.manualTotal)
     let pdf = null
-    for (const candidate of examPdfCandidates(document, documentId, bucket.name, { manualScore })) {
+    // Las versiones anteriores de la aplicación muestran los comentarios
+    // manuales en lugar del PDF; solo la interfaz nueva puede mostrar ambos.
+    const pdfCandidates = manualScore && request.data?.includeManualSolution !== true
+      ? []
+      : examPdfCandidates(document, documentId, bucket.name, { manualScore })
+    for (const candidate of pdfCandidates) {
       try {
         const [bytes] = await bucket.file(candidate.path).download()
         if (bytes.length <= 7_000_000) { pdf = { data: bytes.toString('base64'), kind: candidate.solved ? 'solved' : 'statement' }; break }

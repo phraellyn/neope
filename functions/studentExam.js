@@ -1,5 +1,4 @@
 export function examPdfCandidates(document, documentId, bucketName, { manualScore = false } = {}) {
-  if (manualScore) return []
   const templates = Array.isArray(document.plantillas) && document.plantillas.length ? document.plantillas : [document.plantilla || {}]
   const pdfs = Array.isArray(document.pdfs) && document.pdfs.length ? document.pdfs : (document.pdf ? [document.pdf] : [])
   return pdfs.map((entry, index) => {
@@ -12,7 +11,7 @@ export function examPdfCandidates(document, documentId, bucketName, { manualScor
     }
     if (typeof path !== 'string' || !path.startsWith(`documentos/${documentId}/`) || path.includes('..')) return null
     return { path, solved: /resuelt|solucion|solved|solution/.test(name), statement: /enunciad|statement/.test(name) }
-  }).filter(Boolean).sort((a, b) => Number(b.solved) - Number(a.solved) || Number(b.statement) - Number(a.statement))
+  }).filter((candidate) => candidate && (!manualScore || candidate.solved)).sort((a, b) => Number(b.solved) - Number(a.solved) || Number(b.statement) - Number(a.statement))
 }
 
 export function examResultItem(group, itemId) {

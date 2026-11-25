@@ -1280,7 +1280,7 @@ function searchExerciseVersion(exercise) {
 function searchExercisePublished(exercise) {
   const index = searchExerciseVersionIndex(exercise)
   const version = searchExerciseVersion(exercise)
-  return index ? (typeof version.studentTrainingPublished === 'boolean' ? version.studentTrainingPublished : exercise.studentTrainingPublished === true) : exercise.studentTrainingPublished === true
+  return index ? version.studentTrainingPublished === true : exercise.studentTrainingPublished === true
 }
 
 const trainingPublicationBusy = reactive({})
@@ -1301,7 +1301,7 @@ async function toggleStudentTrainingPublication(exercise, requestedVersion = nul
   const index = requestedVersion === null ? searchExerciseVersionIndex(exercise) : Number(requestedVersion)
   const version = exerciseVersion(exercise, index)
   if (!version) return
-  const previous = index ? (typeof version.studentTrainingPublished === 'boolean' ? version.studentTrainingPublished : exercise.studentTrainingPublished === true) : exercise.studentTrainingPublished === true
+  const previous = index ? version.studentTrainingPublished === true : exercise.studentTrainingPublished === true
   const next = !previous
   trainingPublicationBusy[exercise.id] = true
   version.studentTrainingPublished = next
@@ -1311,7 +1311,7 @@ async function toggleStudentTrainingPublication(exercise, requestedVersion = nul
       const snapshot = await transaction.get(reference)
       if (!snapshot.exists()) throw new Error('El ejercicio ya no existe.')
       const stored = snapshot.data()
-      const variations = (stored.variaciones || []).map((item) => ({ ...item, studentTrainingPublished: typeof item.studentTrainingPublished === 'boolean' ? item.studentTrainingPublished : stored.studentTrainingPublished === true }))
+      const variations = (stored.variaciones || []).map((item) => ({ ...item, studentTrainingPublished: item.studentTrainingPublished === true }))
       if (index) {
         const position = variations.findIndex((item) => item.id === version.id)
         const target = position >= 0 ? position : (variations[index - 1] && !variations[index - 1].id ? index - 1 : -1)
@@ -1322,7 +1322,7 @@ async function toggleStudentTrainingPublication(exercise, requestedVersion = nul
     })
     const current = exercises.value.find((item) => item.id === exercise.id)
     if (current) {
-      current.variaciones.forEach((item) => { if (typeof item.studentTrainingPublished !== 'boolean') item.studentTrainingPublished = index ? exercise.studentTrainingPublished === true : previous })
+      current.variaciones.forEach((item) => { if (typeof item.studentTrainingPublished !== 'boolean') item.studentTrainingPublished = false })
       if (!index) current.studentTrainingPublished = next
       else if (current.variaciones[index - 1]) current.variaciones[index - 1].studentTrainingPublished = next
     }
@@ -3891,7 +3891,7 @@ function structuredVariationForSave(variation, previous = {}, previousExercise =
     visualGeneration: variation.visualGeneration || previous.visualGeneration || null,
     modelo: variation.modelo || previous.modelo || null,
     solucionIA: Boolean(variation.solucionIA),
-    studentTrainingPublished: typeof variation.studentTrainingPublished === 'boolean' ? variation.studentTrainingPublished : (typeof previous.studentTrainingPublished === 'boolean' ? previous.studentTrainingPublished : Object.keys(previous).length > 0 && previousExercise.studentTrainingPublished === true),
+    studentTrainingPublished: typeof variation.studentTrainingPublished === 'boolean' ? variation.studentTrainingPublished : previous.studentTrainingPublished === true,
     compilation: compilationStateAfterSave(previous.compilation, revision, sourceChanged),
   }
   const nextPaths = new Set(exercisePdfStoragePaths(persisted))

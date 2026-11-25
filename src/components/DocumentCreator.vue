@@ -1931,8 +1931,7 @@ function activeVersion(exercise, version = selectedVersionFor(exercise)) {
 
 function versionPublished(exercise) {
   const version = activeVersion(exercise)
-  return selectedVersionFor(exercise) && typeof version?.studentTrainingPublished === 'boolean'
-    ? version.studentTrainingPublished : exercise?.studentTrainingPublished === true
+  return selectedVersionFor(exercise) ? version?.studentTrainingPublished === true : exercise?.studentTrainingPublished === true
 }
 
 function versionStructure(exercise, version = selectedVersionFor(exercise)) {

@@ -17,15 +17,14 @@ const emit = defineEmits(['update:modelValue'])
     :class="{ 'exercise-variant-bar-compact': compact }"
     aria-label="Versión del ejercicio"
   >
-    <span class="exercise-variant-label">Versión</span>
     <button
       v-for="version in variations.length + 1"
       :key="version - 1"
       type="button"
       class="exercise-variant-option"
-      :class="{ 'exercise-variant-option-active': modelValue === version - 1, 'exercise-variant-option-published': showPublication && (version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)), 'exercise-variant-option-unpublished': showPublication && !(version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)), 'exercise-variant-option-publication-selected': showPublication && modelValue === version - 1 }"
-      :title="showPublication ? ((version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)) ? 'Publicada para alumnos' : 'Sin publicar') : undefined"
-      :aria-label="`${version === 1 ? 'Ejercicio original' : `Variación ${version - 1}`}${showPublication ? ((version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished ?? publicationRoot)) ? ', publicada' : ', sin publicar') : ''}`"
+      :class="{ 'exercise-variant-option-active': modelValue === version - 1, 'exercise-variant-option-published': showPublication && (version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished === true)), 'exercise-variant-option-unpublished': showPublication && !(version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished === true)), 'exercise-variant-option-publication-selected': showPublication && modelValue === version - 1 }"
+      :title="showPublication ? ((version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished === true)) ? 'Publicada para alumnos' : 'Sin publicar') : undefined"
+      :aria-label="`${version === 1 ? 'Ejercicio original' : `Variación ${version - 1}`}${showPublication ? ((version === 1 ? publicationRoot : (variations[version - 2].studentTrainingPublished === true)) ? ', publicada' : ', sin publicar') : ''}`"
       :aria-pressed="modelValue === version - 1"
       @click.stop="emit('update:modelValue', version - 1)"
     >{{ version - 1 }}</button>
@@ -35,28 +34,22 @@ const emit = defineEmits(['update:modelValue'])
 <style scoped>
 .exercise-variant-bar {
   display: flex;
+  min-width: 0;
   min-height: 34px;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  overflow-x: auto;
   padding: 5px 9px;
   border-top: 1px solid rgba(48, 82, 124, .12);
   border-bottom: 1px solid rgba(48, 82, 124, .12);
   background: #f3f7fc;
 }
 
-.exercise-variant-label {
-  margin-right: 2px;
-  color: #647994;
-  font-size: .66rem;
-  font-weight: 700;
-  letter-spacing: .055em;
-  text-transform: uppercase;
-}
-
 .exercise-variant-option {
   display: inline-flex;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -113,13 +106,14 @@ const emit = defineEmits(['update:modelValue'])
 
 .exercise-variant-bar-compact {
   min-height: 27px;
-  gap: 4px;
+  gap: 3px;
   padding: 2px 8px;
 }
 
 .exercise-variant-bar-compact .exercise-variant-option {
-  width: 19px;
-  height: 19px;
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
   font-size: .6rem;
 }
 

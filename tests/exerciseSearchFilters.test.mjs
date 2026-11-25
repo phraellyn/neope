@@ -9,7 +9,7 @@ assert.equal(hasPublishedExerciseVersion({}), false)
 assert.equal(hasPublishedExerciseVersion({ studentTrainingPublished: true, variaciones: [{ studentTrainingPublished: false }] }), true)
 assert.equal(hasPublishedExerciseVersion({ studentTrainingPublished: false, variaciones: [{ studentTrainingPublished: false }, { studentTrainingPublished: true }] }), true)
 assert.equal(hasPublishedExerciseVersion({ studentTrainingPublished: false, variaciones: [{}, { studentTrainingPublished: false }] }), false)
-assert.equal(hasPublishedExerciseVersion({ studentTrainingPublished: true, variaciones: [{}] }), true, 'Legacy variants inherit the original publication state')
+assert.equal(hasPublishedExerciseVersion({ studentTrainingPublished: true, variaciones: [{}] }), true, 'El ejercicio coincide porque el original está publicado')
 for (const complete of [false, true]) for (const published of [false, true]) for (const solutionOrigin of ['ai', 'human', 'unsolved']) {
   const item = { complete, published, solutionOrigin }
   assert.equal(matches(item), true)

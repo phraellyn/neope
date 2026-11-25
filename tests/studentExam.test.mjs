@@ -5,7 +5,8 @@ import { assessmentExerciseModel } from '../src/utils/documentAssessmentMatrix.j
 
 const doc = { plantillas: [{ key: 'statement', nombre: 'Examen - Enunciado' }, { key: 'solved', nombre: 'Examen - Resuelto' }], pdfs: [{ templateKey: 'statement', path: 'documentos/doc/statement.pdf' }, { templateKey: 'solved', path: 'documentos/doc/solved.pdf' }] }
 assert.deepEqual(examPdfCandidates(doc, 'doc', 'bucket').map((item) => item.path), ['documentos/doc/solved.pdf', 'documentos/doc/statement.pdf'])
-assert.deepEqual(examPdfCandidates(doc, 'doc', 'bucket', { manualScore: true }), [])
+assert.deepEqual(examPdfCandidates(doc, 'doc', 'bucket', { manualScore: true }).map((item) => item.path), ['documentos/doc/solved.pdf'])
+assert.deepEqual(examPdfCandidates({ plantillas: [doc.plantillas[0]], pdfs: [doc.pdfs[0]] }, 'doc', 'bucket', { manualScore: true }), [], 'Manual grades do not expose the unrelated statement if there is no solved PDF')
 assert.deepEqual(safeExamFeedback({ general: ' Bien ', secret: 'private', sections: [
   { key: 'b', text: 'Segundo', exerciseOrder: 1, sectionOrder: 0, secret: 'private' },
   { key: 'a', text: 'Primero', exerciseOrder: 0, sectionOrder: 0 },
